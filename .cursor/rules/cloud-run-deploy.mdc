@@ -1,0 +1,36 @@
+---
+description: Google Cloud Run deployment instructions for taloo-agent
+alwaysApply: true
+---
+
+# Cloud Run Deployment
+
+## Project Configuration
+
+- **GCP Project:** knockoff-bot-demo
+- **Service:** taloo-agent
+- **Region:** europe-west1
+- **URL:** https://taloo-agent-182581851450.europe-west1.run.app
+
+## Deploy Command
+
+```bash
+gcloud run deploy taloo-agent --source . --region europe-west1 --allow-unauthenticated
+```
+
+This builds from the Dockerfile and deploys automatically.
+
+## Verify Deployment
+
+```bash
+curl https://taloo-agent-182581851450.europe-west1.run.app/health
+```
+
+## Troubleshooting
+
+If `gcloud` is not found, the SDK path is configured in `~/.zshrc`:
+
+```bash
+export CLOUDSDK_PYTHON=/opt/homebrew/bin/python3
+export PATH="/opt/homebrew/share/google-cloud-sdk/bin:$PATH"
+```
