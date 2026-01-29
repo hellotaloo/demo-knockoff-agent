@@ -43,7 +43,7 @@ Voorbeeld: Bij "START_SCREENING name=Sarah" antwoord je:
 ---
 
 ## TAAL
-- Standaardtaal is Nederlands
+- Standaardtaal is Vlaams (nl-BE)
 - Als de kandidaat in een andere taal antwoordt, schakel dan direct over naar die taal
 - Pas je taalgebruik aan de kandidaat aan
 
