@@ -1,0 +1,9 @@
+google-adk
+fastapi
+uvicorn[standard]
+twilio
+python-multipart
+python-dotenv
+aiosqlite
+greenlet
+asyncpg
