@@ -2,9 +2,62 @@
 
 This document describes how to connect the demo-admin frontend to the interview generator backend.
 
+## Environment Setup
+
+### Local Development vs Production
+
+| Environment | Frontend | Backend |
+|-------------|----------|---------|
+| **Local** | `http://localhost:3000` | `http://localhost:8080` |
+| **Production** | `https://demo-admin-indol.vercel.app` | `https://taloo-agent-182581851450.europe-west1.run.app` |
+
+### Frontend Environment Variables
+
+**For local development** - create `.env.local`:
+```env
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8080
+```
+
+**For production on Vercel** - add in Vercel Dashboard → Settings → Environment Variables:
+```env
+NEXT_PUBLIC_BACKEND_URL=https://taloo-agent-182581851450.europe-west1.run.app
+```
+
+The `NEXT_PUBLIC_` prefix makes the variable available in browser/client code.
+
+### Running Locally
+
+**Terminal 1 - Backend:**
+```bash
+cd taloo-demo
+source .venv/bin/activate
+uvicorn app:app --reload --port 8080
+```
+
+**Terminal 2 - Frontend:**
+```bash
+cd demo-admin
+npm run dev
+```
+
+Then open `http://localhost:3000` to test.
+
+### API Client Fallback
+
+The API client uses an environment variable with a fallback:
+```typescript
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8080';
+```
+
+This means:
+- If `NEXT_PUBLIC_BACKEND_URL` is set → use that URL
+- If not set → default to `http://localhost:8080` for local dev
+
+---
+
 ## Backend API
 
-**Base URL:** `https://taloo-agent-182581851450.europe-west1.run.app`
+**Base URL:** `https://taloo-agent-182581851450.europe-west1.run.app` (production) or `http://localhost:8080` (local)
 
 ### Endpoints
 
@@ -68,32 +121,116 @@ GET /interview/session/{session_id}
 }
 ```
 
+#### 4. Reorder Questions (Direct Update)
+
+Instantly reorder questions without invoking the agent. Ideal for drag-and-drop UI.
+
+```
+POST /interview/reorder
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "session_id": "uuid-from-generate",
+  "knockout_order": ["ko_1", "ko_3", "ko_2"],
+  "qualification_order": ["qual_2", "qual_1", "qual_3"]
+}
+```
+
+Both `knockout_order` and `qualification_order` are optional. Only provide the ones you want to reorder.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "interview": { ... }
+}
+```
+
+#### 5. Delete Question (Direct Update)
+
+Instantly delete a question without invoking the agent.
+
+```
+POST /interview/delete
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "session_id": "uuid-from-generate",
+  "question_id": "ko_2"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "deleted": "ko_2",
+  "interview": { ... }
+}
+
 ## Interview Data Structure
 
 ```typescript
-interface InterviewQuestion {
-  id: string;      // "ko_1", "ko_2", "qual_1", etc.
+type ChangeStatus = 'new' | 'updated' | 'unchanged';
+
+interface KnockoutQuestion {
+  id: string;           // "ko_1", "ko_2", etc.
   question: string;
+  change_status?: ChangeStatus;  // "new", "updated", or "unchanged"
+}
+
+interface QualificationQuestion {
+  id: string;           // "qual_1", "qual_2", etc.
+  question: string;
+  ideal_answer: string; // What we want to hear - used by AI to score responses
+  change_status?: ChangeStatus;  // "new", "updated", or "unchanged"
 }
 
 interface Interview {
   intro: string;
-  knockout_questions: InterviewQuestion[];
+  knockout_questions: KnockoutQuestion[];
   knockout_failed_action: string;
-  qualification_questions: InterviewQuestion[];
+  qualification_questions: QualificationQuestion[];
   final_action: string;
   approved_ids: string[];  // IDs of questions that are locked
 }
 ```
+
+### The `ideal_answer` Field
+
+Each qualification question includes an `ideal_answer` field that describes what the recruiter wants to hear in a good response. This is used by the downstream AI agent to score candidate answers.
+
+**Example:**
+```json
+{
+  "id": "qual_1",
+  "question": "Heb je ervaring met kassawerk en het afrekenen van klanten?",
+  "ideal_answer": "We zoeken iemand met concrete kassaervaring in retail of horeca. Bonus als ze fouten kunnen afhandelen of snel kunnen werken onder druk.",
+  "is_modified": true
+}
+```
+
+**How recruiters can update it via chat:**
+- "Voor vraag 2 wil ik dat we focussen op teamwerk"
+- "Bij de vraag over ervaring zoeken we eigenlijk iemand met minstens 3 jaar"
+- "Pas de ideal answer aan voor de klantenservice vraag: we willen concrete voorbeelden horen"
 
 ## SSE Event Types
 
 | Type | Description | Fields |
 |------|-------------|--------|
 | `status` | Progress update | `status`: "thinking" \| "tool_call", `message`: string |
-| `thinking` | Agent reasoning (optional) | `content`: string |
+| `thinking` | Agent reasoning (streamed) | `content`: string |
 | `complete` | Final result | `message`: string, `interview`: Interview, `session_id`: string |
 | `error` | Error occurred | `message`: string |
+
+> **Displaying AI Thinking**: See [THINKING_DISPLAY.md](./THINKING_DISPLAY.md) for how to display the AI's reasoning process during generation.
 
 ## Implementation Steps
 
@@ -104,16 +241,26 @@ Create `lib/interview-api.ts`:
 ```typescript
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://taloo-agent-182581851450.europe-west1.run.app';
 
-export interface InterviewQuestion {
+export type ChangeStatus = 'new' | 'updated' | 'unchanged';
+
+export interface KnockoutQuestion {
   id: string;
   question: string;
+  change_status?: ChangeStatus;  // "new", "updated", or "unchanged"
+}
+
+export interface QualificationQuestion {
+  id: string;
+  question: string;
+  ideal_answer: string;  // What we want to hear - used by AI to score responses
+  change_status?: ChangeStatus;  // "new", "updated", or "unchanged"
 }
 
 export interface Interview {
   intro: string;
-  knockout_questions: InterviewQuestion[];
+  knockout_questions: KnockoutQuestion[];
   knockout_failed_action: string;
-  qualification_questions: InterviewQuestion[];
+  qualification_questions: QualificationQuestion[];
   final_action: string;
   approved_ids: string[];
 }
@@ -233,11 +380,71 @@ export async function sendFeedback(
   if (!interview) throw new Error('No interview returned');
   return interview;
 }
+
+/**
+ * Reorder questions instantly (no agent call).
+ * Use this for drag-and-drop UI.
+ */
+export async function reorderQuestions(
+  sessionId: string,
+  knockoutOrder?: string[],
+  qualificationOrder?: string[]
+): Promise<Interview> {
+  const response = await fetch(`${BACKEND_URL}/interview/reorder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      knockout_order: knockoutOrder,
+      qualification_order: qualificationOrder,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to reorder questions');
+  }
+
+  const data = await response.json();
+  return data.interview;
+}
+
+/**
+ * Delete a question instantly (no agent call).
+ */
+export async function deleteQuestion(
+  sessionId: string,
+  questionId: string
+): Promise<Interview> {
+  const response = await fetch(`${BACKEND_URL}/interview/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      question_id: questionId,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || 'Failed to delete question');
+  }
+
+  const data = await response.json();
+  return data.interview;
+}
 ```
 
 ### Step 2: Add Environment Variable
 
-Add to `.env.local`:
+See [Environment Setup](#environment-setup) section above.
+
+**Local** (`.env.local`):
+```
+NEXT_PUBLIC_BACKEND_URL=http://localhost:8080
+```
+
+**Production** (Vercel Environment Variables):
 ```
 NEXT_PUBLIC_BACKEND_URL=https://taloo-agent-182581851450.europe-west1.run.app
 ```
@@ -424,4 +631,4 @@ The backend allows all origins (`*`). If you still see CORS errors, check that t
 Ensure your hosting (Vercel) doesn't buffer SSE responses. The backend sends `X-Accel-Buffering: no` header.
 
 ### Session Not Found
-Sessions are stored in memory. If the backend restarts, sessions are lost. This is fine for demos - just generate new questions.
+Sessions are stored in the database. They persist across backend restarts.

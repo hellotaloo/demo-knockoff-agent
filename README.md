@@ -1,12 +1,20 @@
-# ADK WhatsApp Agent
+# Taloo Agent Demo
 
-A Google ADK-powered WhatsApp agent using Twilio, deployable to Google Cloud Run.
+Google ADK-powered agents for candidate screening and interview generation.
+
+## Agents
+
+| Agent | Purpose | Interface |
+|-------|---------|-----------|
+| `knockout_agent` | WhatsApp/Voice candidate screening | Twilio webhook |
+| `interview_generator` | Generate interview questions from vacancy text | REST API + SSE |
 
 ## Prerequisites
 
 - Python 3.10+
 - Google API Key (for Gemini)
-- Twilio account with WhatsApp Sandbox or Business API
+- Twilio account (for WhatsApp - optional)
+- Supabase PostgreSQL (for session persistence)
 - Google Cloud CLI (for deployment)
 
 ## Local Development
@@ -28,23 +36,45 @@ pip install -r requirements.txt
 # Copy the example env file
 cp .env.example .env
 
-# Edit .env and add your API key
-# Get your key from: https://aistudio.google.com/apikey
+# Edit .env and add your keys:
+# - GOOGLE_API_KEY: https://aistudio.google.com/apikey
+# - DATABASE_URL: Supabase connection string
+# - TWILIO_*: Optional, for WhatsApp
 ```
 
-### 3. Test with ADK Web UI
-
-Use the built-in ADK web interface to test your agent locally:
+### 3. Start the Backend API
 
 ```bash
-adk web knockout_agent
+source .venv/bin/activate
+uvicorn app:app --reload --port 8080
 ```
 
-Open http://localhost:8000 in your browser.
+The API is now available at `http://localhost:8080`.
 
-### 4. Test Webhook Locally
+**Test endpoints:**
 
-To test the Twilio webhook integration:
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Generate interview questions (SSE stream)
+curl -X POST http://localhost:8080/interview/generate \
+  -H "Content-Type: application/json" \
+  -d '{"vacancy_text": "Productieoperator 2 ploegen in regio Diest."}'
+```
+
+### 4. Test with ADK Web UI
+
+For interactive agent testing:
+
+```bash
+source .venv/bin/activate
+adk web --port 8001
+```
+
+Open http://localhost:8001 - select `interview_generator` or `knockout_agent`.
+
+### 5. Test WhatsApp Webhook Locally (Optional)
 
 ```bash
 # Start the FastAPI server
@@ -56,22 +86,53 @@ ngrok http 8080
 
 Then configure the ngrok URL as your Twilio webhook.
 
-## Deploy to Cloud Run
+## Interview Generator API
 
-### 1. Deploy
+### Endpoints
 
-```bash
-gcloud run deploy whatsapp-agent \
-  --source . \
-  --region us-central1 \
-  --set-env-vars GOOGLE_API_KEY=your-api-key \
-  --allow-unauthenticated
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/interview/generate` | Generate questions from vacancy (SSE stream) |
+| POST | `/interview/feedback` | Process feedback on questions (SSE stream) |
+| GET | `/interview/session/{id}` | Get current session state |
+
+### SSE Events
+
+```
+data: {"type": "status", "status": "thinking", "message": "Vacature analyseren..."}
+data: {"type": "status", "status": "tool_call", "message": "Vragen genereren..."}
+data: {"type": "complete", "message": "...", "interview": {...}, "session_id": "uuid"}
+data: [DONE]
 ```
 
-### 2. Configure Twilio
+See [docs/FRONTEND_INTEGRATION.md](docs/FRONTEND_INTEGRATION.md) for full API documentation.
+
+## Deploy to Cloud Run
+
+### 1. Authenticate
+
+```bash
+gcloud auth login
+```
+
+### 2. Deploy
+
+```bash
+gcloud run deploy taloo-agent --source . --region europe-west1 --allow-unauthenticated
+```
+
+**Production URL:** `https://taloo-agent-182581851450.europe-west1.run.app`
+
+### 3. Verify Deployment
+
+```bash
+curl https://taloo-agent-182581851450.europe-west1.run.app/health
+```
+
+### 4. Configure Twilio (Optional)
 
 1. Go to [Twilio Console](https://console.twilio.com/) > Messaging > WhatsApp Sandbox
-2. Set the webhook URL to: `https://your-cloud-run-url/webhook`
+2. Set the webhook URL to: `https://taloo-agent-182581851450.europe-west1.run.app/webhook`
 3. Set HTTP method to POST
 
 ## Project Structure
@@ -80,13 +141,16 @@ gcloud run deploy whatsapp-agent \
 .
 ├── knockout_agent/
 │   ├── __init__.py
-│   └── agent.py          # Agent definition
-├── app.py                # FastAPI webhook server
+│   └── agent.py              # WhatsApp screening agent
+├── interview_generator/
+│   ├── __init__.py
+│   └── agent.py              # Interview question generator agent
+├── docs/
+│   └── FRONTEND_INTEGRATION.md   # Frontend integration guide
+├── app.py                    # FastAPI server (webhooks + API)
 ├── requirements.txt
 ├── Dockerfile
-├── .dockerignore
 ├── .env.example
-├── .gitignore
 └── README.md
 ```
 

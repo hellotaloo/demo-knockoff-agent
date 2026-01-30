@@ -113,7 +113,7 @@ Sluit af met: "Top, ik hou je op de hoogte! 👋"
 
 root_agent = Agent(
     name="taloo_recruiter",
-    model="gemini-3-flash-preview",
+    model="gemini-2.5-flash",
     instruction=instruction,
     description="Taloo recruiter agent voor WhatsApp screening van blue collar kandidaten",
 )

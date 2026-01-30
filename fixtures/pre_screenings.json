@@ -1,0 +1,40 @@
+[
+  {
+    "vacancy_idx": 2,
+    "intro": "Hallo! Bedankt voor je interesse in de functie van Productieoperator. Ik zou je graag enkele korte vragen stellen om te kijken of deze job bij je past. Dit duurt ongeveer 3 minuten. Ben je klaar om te beginnen?",
+    "knockout_failed_action": "Bedankt voor je tijd. Helaas lijkt deze functie niet helemaal bij je profiel te passen. Wil je dat we je op de hoogte houden van andere vacatures die beter aansluiten?",
+    "final_action": "Geweldig! Je profiel lijkt goed te passen bij wat we zoeken. Een recruiter zal binnenkort contact met je opnemen om een gesprek in te plannen.",
+    "status": "active",
+    "knockout_questions": [
+      {
+        "question": "Ben je in het bezit van een geldige Belgische werkvergunning?",
+        "is_approved": true
+      },
+      {
+        "question": "Kan je werken in een 2-ploegensysteem (vroege en late shift)?",
+        "is_approved": true
+      },
+      {
+        "question": "Woon je in de regio Diest of kan je daar vlot geraken?",
+        "is_approved": false
+      }
+    ],
+    "qualification_questions": [
+      {
+        "question": "Heb je ervaring met het bedienen van productiemachines? Zo ja, welke types?",
+        "ideal_answer": "We zoeken minstens 1 jaar ervaring met productiemachines. Bonus als ze specifieke machinetypes kunnen noemen (CNC, verpakkingsmachines, etc.).",
+        "is_approved": false
+      },
+      {
+        "question": "Heb je ervaring met het oplossen van kleine technische storingen?",
+        "ideal_answer": "We willen horen dat ze zelfstandig problemen kunnen analyseren en oplossen. Concrete voorbeelden van storingen die ze hebben opgelost zijn een plus.",
+        "is_approved": false
+      },
+      {
+        "question": "Heb je ervaring met het aansturen van collega's of het werken in teamverband?",
+        "ideal_answer": "Teamspeler is essentieel. We zoeken voorbeelden van samenwerking of, voor senior rollen, ervaring met het coachen van nieuwe collega's.",
+        "is_approved": false
+      }
+    ]
+  }
+]
