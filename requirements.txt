@@ -7,3 +7,4 @@ python-dotenv
 aiosqlite
 greenlet
 asyncpg
+elevenlabs
