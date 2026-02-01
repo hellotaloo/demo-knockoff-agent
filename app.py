@@ -152,6 +152,7 @@ class ApplicationResponse(BaseModel):
     knockout_total: int = 0  # Total knockout questions
     qualification_count: int = 0  # Number of qualification questions answered
     summary: Optional[str] = None  # AI-generated executive summary
+    interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit"
 
 
 class VacancyStatsResponse(BaseModel):
@@ -1733,7 +1734,7 @@ async def list_applications(
     # Get applications
     query = f"""
         SELECT id, vacancy_id, candidate_name, channel, completed, qualified,
-               started_at, completed_at, interaction_seconds, synced, synced_at, summary
+               started_at, completed_at, interaction_seconds, synced, synced_at, summary, interview_slot
         FROM applications
         {where_clause}
         ORDER BY started_at DESC
@@ -1803,7 +1804,8 @@ async def list_applications(
             knockout_passed=knockout_passed,
             knockout_total=knockout_total,
             qualification_count=qualification_count,
-            summary=row["summary"]
+            summary=row["summary"],
+            interview_slot=row["interview_slot"]
         ))
     
     return {
@@ -1827,7 +1829,7 @@ async def get_application(application_id: str):
     
     query = """
         SELECT id, vacancy_id, candidate_name, channel, completed, qualified,
-               started_at, completed_at, interaction_seconds, synced, synced_at, summary
+               started_at, completed_at, interaction_seconds, synced, synced_at, summary, interview_slot
         FROM applications
         WHERE id = $1
     """
@@ -1895,7 +1897,8 @@ async def get_application(application_id: str):
         knockout_passed=knockout_passed,
         knockout_total=knockout_total,
         qualification_count=qualification_count,
-        summary=row["summary"]
+        summary=row["summary"],
+        interview_slot=row["interview_slot"]
     )
 
 
@@ -3547,11 +3550,16 @@ async def elevenlabs_webhook(request: Request):
             qualification_questions.append(q_dict)
             qual_idx += 1
     
+    # Convert event timestamp to ISO date for interview slot calculation
+    from datetime import datetime as dt
+    call_date = dt.fromtimestamp(payload.event_timestamp).strftime("%Y-%m-%d")
+    
     # Process transcript with the agent
     result = await process_transcript(
         transcript=data.transcript,
         knockout_questions=knockout_questions,
         qualification_questions=qualification_questions,
+        call_date=call_date,
     )
     
     # Extract metadata
@@ -3593,13 +3601,14 @@ async def elevenlabs_webhook(request: Request):
                     UPDATE applications 
                     SET completed = true, qualified = $1, interaction_seconds = $2, 
                         completed_at = NOW(), conversation_id = $3, channel = 'voice',
-                        summary = $4
-                    WHERE id = $5
+                        summary = $4, interview_slot = $5
+                    WHERE id = $6
                     """,
                     result.overall_passed,
                     call_duration,
                     data.conversation_id,
                     result.summary,
+                    result.interview_slot,
                     application_id
                 )
                 logger.info(f"Updated existing application {application_id} for phone {candidate_phone}")
@@ -3609,8 +3618,8 @@ async def elevenlabs_webhook(request: Request):
                     """
                     INSERT INTO applications 
                     (vacancy_id, candidate_name, candidate_phone, channel, completed, qualified, 
-                     interaction_seconds, completed_at, conversation_id, summary)
-                    VALUES ($1, $2, $3, 'voice', true, $4, $5, NOW(), $6, $7)
+                     interaction_seconds, completed_at, conversation_id, summary, interview_slot)
+                    VALUES ($1, $2, $3, 'voice', true, $4, $5, NOW(), $6, $7, $8)
                     RETURNING id
                     """,
                     vacancy_id,
@@ -3619,7 +3628,8 @@ async def elevenlabs_webhook(request: Request):
                     result.overall_passed,
                     call_duration,
                     data.conversation_id,
-                    result.summary
+                    result.summary,
+                    result.interview_slot
                 )
                 application_id = app_row["id"]
                 logger.info(f"Created new application {application_id}")
@@ -3677,7 +3687,8 @@ async def elevenlabs_webhook(request: Request):
         "knockout_results": len(result.knockout_results),
         "qualification_results": len(result.qualification_results),
         "notes": result.notes,
-        "summary": result.summary
+        "summary": result.summary,
+        "interview_slot": result.interview_slot
     }
 
 

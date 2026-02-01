@@ -22,8 +22,13 @@ WHERE conversation_id IS NOT NULL;
 ALTER TABLE applications 
 ADD COLUMN IF NOT EXISTS summary TEXT DEFAULT NULL;
 
+-- Add interview_slot column to applications for selected interview date/time
+ALTER TABLE applications 
+ADD COLUMN IF NOT EXISTS interview_slot TEXT DEFAULT NULL;
+
 -- Add comment for documentation
 COMMENT ON COLUMN application_answers.score IS 'Score 0-100 for qualification questions, NULL for knockout questions';
 COMMENT ON COLUMN application_answers.source IS 'Channel source: chat, whatsapp, or voice';
 COMMENT ON COLUMN applications.conversation_id IS 'ElevenLabs conversation ID for voice calls';
 COMMENT ON COLUMN applications.summary IS 'AI-generated one-sentence executive summary of candidate';
+COMMENT ON COLUMN applications.interview_slot IS 'Selected interview date/time from voice call, or none_fit if no option worked';

@@ -75,6 +75,7 @@ class TranscriptProcessorResult:
     overall_passed: bool
     notes: str
     summary: str = ""  # One-sentence executive summary for recruiter
+    interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit" if no option worked
     raw_response: Optional[str] = None
 
 
@@ -124,6 +125,20 @@ RATINGS (van laag naar hoog):
 - "good" (score 61-80): Goed antwoord, dekt meeste belangrijke punten
 - "excellent" (score 81-100): Uitstekend antwoord, voldoet aan of overtreft ideaal
 
+## INTERVIEW SLOT EXTRACTIE
+Zoek in het transcript of er een gesprek is ingepland:
+- De agent biedt meestal meerdere opties aan (bijv. "maandag om 10 uur, maandag om 14 uur, of dinsdag om 11 uur")
+- De kandidaat kiest een optie of geeft aan dat geen enkele optie past
+
+Je krijgt de GESPREKSDATUM mee om relatieve dagen om te zetten naar een echte datum.
+Bijvoorbeeld: als het gesprek op vrijdag 31 januari 2025 was en de kandidaat kiest "dinsdag om 11 uur", 
+dan is dat dinsdag 4 februari 2025 om 11:00.
+
+Mogelijke waarden voor interview_slot:
+- ISO 8601 datetime (bijv. "2025-02-04T11:00:00") als een optie is gekozen
+- "none_fit" als de kandidaat aangeeft dat geen enkele optie past
+- null als er geen gesprek over inplannen in het transcript staat
+
 ## OUTPUT FORMAAT
 Antwoord ALLEEN met een JSON object in dit exacte formaat:
 
@@ -148,7 +163,8 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
   ],
   "overall_passed": true,
   "notes": "Korte samenvatting van de evaluatie",
-  "summary": "Eén zin executive summary voor de recruiter over deze kandidaat"
+  "summary": "Eén zin executive summary voor de recruiter over deze kandidaat",
+  "interview_slot": "2025-02-04T11:00:00"
 }
 ```
 
@@ -159,7 +175,9 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
 4. Wees strikt maar eerlijk in je evaluatie
 5. De notes moeten kort en zakelijk zijn (max 2 zinnen)
 6. De summary is een bondige, professionele zin voor recruiters die de essentie van de kandidaat samenvat (bijv. "Ervaren magazijnmedewerker met rijbewijs en flexibele beschikbaarheid, maar beperkte ervaring met reachtruck.")
-7. Antwoord ALLEEN met JSON, geen andere tekst
+7. interview_slot moet een ISO 8601 datetime zijn (bijv. "2025-02-04T11:00:00"), bereken de echte datum op basis van de gespreksdatum en de gekozen dag/tijd
+8. Als geen optie paste: interview_slot = "none_fit", als niet besproken: interview_slot = null
+9. Antwoord ALLEEN met JSON, geen andere tekst
 """
 
 
@@ -289,6 +307,7 @@ async def process_transcript(
     transcript: list[dict],
     knockout_questions: list[dict],
     qualification_questions: list[dict],
+    call_date: Optional[str] = None,
 ) -> TranscriptProcessorResult:
     """
     Process a voice call transcript and evaluate candidate responses.
@@ -297,11 +316,19 @@ async def process_transcript(
         transcript: ElevenLabs transcript array with role, message, time_in_call_secs
         knockout_questions: List of knockout questions to evaluate
         qualification_questions: List of qualification questions to evaluate
+        call_date: ISO date string of when the call happened (for interview slot calculation)
         
     Returns:
         TranscriptProcessorResult with evaluation results
     """
     import uuid
+    from datetime import datetime
+    
+    # Use provided call_date or default to today
+    if call_date:
+        call_date_str = call_date
+    else:
+        call_date_str = datetime.now().strftime("%Y-%m-%d")
     
     # Format the input for the agent
     formatted_transcript = format_transcript_for_analysis(transcript)
@@ -312,6 +339,9 @@ async def process_transcript(
     
     # Build the prompt
     prompt = f"""Analyseer het volgende transcript en evalueer de antwoorden.
+
+## GESPREKSDATUM
+{call_date_str}
 
 ## TRANSCRIPT
 {formatted_transcript}
@@ -404,6 +434,7 @@ Geef je evaluatie als JSON."""
         overall_passed=parsed.get("overall_passed", False),
         notes=parsed.get("notes", ""),
         summary=parsed.get("summary", ""),
+        interview_slot=parsed.get("interview_slot"),
         raw_response=response_text
     )
     
