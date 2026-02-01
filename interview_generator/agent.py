@@ -105,11 +105,13 @@ Dit is een korte beschrijving (1-2 zinnen) van:
 
 ## CHANGE_STATUS VELD
 Elke vraag MOET een `change_status` hebben met één van deze waarden:
-- `"new"` - voor NIEUWE vragen (bij eerste generatie zijn alle vragen nieuw)
-- `"updated"` - voor BEWERKTE vragen (tekst of ideal_answer is aangepast)
-- `"unchanged"` - voor ONGEWIJZIGDE vragen (alleen volgorde veranderd, of niet aangeraakt)
+- `"new"` - ALLEEN voor vragen die je IN DEZE BEURT hebt TOEGEVOEGD (bij eerste generatie zijn alle vragen nieuw)
+- `"updated"` - ALLEEN voor vragen die je IN DEZE BEURT hebt AANGEPAST
+- `"unchanged"` - voor ALLE andere vragen
 
-Dit helpt de frontend om visueel te tonen wat er is veranderd.
+**BELANGRIJK**: De status geldt alleen voor de HUIDIGE wijziging. 
+Een vraag die in een VORIGE beurt was toegevoegd krijgt nu `"unchanged"`.
+Dit helpt de frontend om visueel te tonen wat er NU is veranderd, niet wat eerder veranderde.
 
 ## KNOCKOUT VRAGEN - VERPLICHT EN DETECTIE
 
@@ -166,8 +168,18 @@ editor_instruction = """Je bent een interview editor die bestaande screeningsvra
 ## TAAL
 Antwoord ALTIJD in het Nederlands (Vlaams nl-BE).
 
-## REGEL - TOOL GEBRUIK
-Roep ALTIJD de `update_interview` tool aan om wijzigingen op te slaan.
+## REGEL - TOOL GEBRUIK - KRITISCH
+Roep de `update_interview` tool ALLEEN aan als de gebruiker vraagt om:
+- Een vraag toe te voegen, bewerken, of verwijderen
+- Vragen te herordenen
+- Vragen goed te keuren
+- Een ideal_answer aan te passen
+
+**ROEP DE TOOL NIET AAN** als de gebruiker:
+- Een algemene vraag stelt (bv. "wat bedoel je met knockout?")
+- Om uitleg vraagt
+- Iets anders vraagt dat GEEN wijziging aan de vragen is
+
 Toon NOOIT JSON in je chat response.
 
 ## TOOL FORMAAT
@@ -182,12 +194,15 @@ Toon NOOIT JSON in je chat response.
 
 ## CHANGE_STATUS VELD - KRITISCH
 Dit is ZEER BELANGRIJK voor de frontend. Elke vraag MOET `change_status` hebben:
-- `"new"` - voor vragen die je NET hebt TOEGEVOEGD
-- `"updated"` - voor vragen waarvan je de TEKST of IDEAL_ANSWER hebt AANGEPAST
-- `"unchanged"` - voor vragen die je NIET hebt aangepast
+- `"new"` - ALLEEN voor vragen die je IN DEZE BEURT hebt TOEGEVOEGD
+- `"updated"` - ALLEEN voor vragen die je IN DEZE BEURT hebt AANGEPAST
+- `"unchanged"` - voor ALLE andere vragen
+
+**BELANGRIJK**: Een vraag die in een VORIGE beurt was toegevoegd of aangepast krijgt nu `"unchanged"`.
+De status geldt alleen voor de HUIDIGE wijziging, niet voor eerdere wijzigingen.
 
 **Voorbeeld - gebruiker vraagt "voeg een vraag toe over rijbewijs":**
-- Bestaande vragen: zet `change_status: "unchanged"`
+- Bestaande vragen: zet `change_status: "unchanged"` (ook als ze eerder "new" waren!)
 - Nieuwe vraag over rijbewijs: zet `change_status: "new"`
 
 **Voorbeeld - gebruiker vraagt "maak vraag 2 korter":**
@@ -210,12 +225,12 @@ Dit is ZEER BELANGRIJK voor de frontend. Elke vraag MOET `change_status` hebben:
 Als je een [SYSTEEM:] bericht ziet met de huidige volgorde, respecteer deze EXACT.
 
 ## REGELS
-1. Roep ALTIJD eerst de tool aan
+1. Roep de tool ALLEEN aan bij wijzigingen aan vragen
 2. Geen JSON in chat
 3. Korte response (1 zin)
 4. Verander ALLEEN wat gevraagd wordt
 5. Wijzig NOOIT vragen in approved_ids
-6. Zet change_status="unchanged" voor vragen die je NIET aanpast
+6. Zet change_status="unchanged" voor vragen die je NIET aanpast IN DEZE BEURT
 """
 
 # Consistent outputs with temperature=0
@@ -238,7 +253,7 @@ generator_agent = Agent(
 # Editor agent: Minimal instruction, no thinking, fastest model - optimized for speed
 editor_agent = Agent(
     name="interview_editor",
-    model="gemini-2.5-flash-lite",  # Ultra fast model for simple edits
+    model="gemini-2.5-flash",  # Ultra fast model for simple edits
     instruction=editor_instruction,
     description="Verwerkt eenvoudige aanpassingen aan interview vragen",
     tools=[update_interview],

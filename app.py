@@ -134,6 +134,11 @@ class VacancyResponse(BaseModel):
     has_screening: bool = False  # True if pre-screening exists
     is_online: Optional[bool] = None  # None=draft/unpublished, True=online, False=offline
     channels: ChannelsResponse = ChannelsResponse()  # Voice/WhatsApp channel availability
+    # Application stats
+    candidates_count: int = 0  # Total number of applications (excluding test)
+    completed_count: int = 0  # Applications with status='completed'
+    qualified_count: int = 0  # Applications with qualified=true
+    last_activity_at: Optional[datetime] = None  # Most recent application activity
 
 
 class ApplicationResponse(BaseModel):
@@ -169,6 +174,17 @@ class VacancyStatsResponse(BaseModel):
     channel_breakdown: dict[str, int]
     avg_interaction_seconds: int
     last_application_at: Optional[datetime] = None
+
+
+class DashboardStatsResponse(BaseModel):
+    """Dashboard-level aggregate statistics across all vacancies."""
+    total_prescreenings: int  # Total applications
+    total_prescreenings_this_week: int  # Applications started this week
+    completed_count: int
+    completion_rate: int  # Percentage
+    qualified_count: int
+    qualification_rate: int  # Percentage of completed
+    channel_breakdown: dict[str, int]  # voice, whatsapp, cv
 
 
 class PreScreeningQuestionRequest(BaseModel):
@@ -851,6 +867,41 @@ def get_interview_from_session(session) -> dict:
     return interview if isinstance(interview, dict) else {}
 
 
+def get_questions_snapshot(interview: dict) -> str:
+    """
+    Create a snapshot of questions for comparison.
+    Returns a string representation of questions (ignoring change_status).
+    """
+    if not interview:
+        return ""
+    
+    ko = interview.get("knockout_questions", [])
+    qual = interview.get("qualification_questions", [])
+    
+    # Create snapshot without change_status
+    ko_snap = [(q.get("id"), q.get("question")) for q in ko]
+    qual_snap = [(q.get("id"), q.get("question"), q.get("ideal_answer")) for q in qual]
+    
+    return str((ko_snap, qual_snap))
+
+
+def reset_change_statuses(interview: dict) -> dict:
+    """
+    Reset all change_status values to 'unchanged'.
+    Used when the agent didn't modify the interview in this turn.
+    """
+    if not interview:
+        return interview
+    
+    for q in interview.get("knockout_questions", []):
+        q["change_status"] = "unchanged"
+    
+    for q in interview.get("qualification_questions", []):
+        q["change_status"] = "unchanged"
+    
+    return interview
+
+
 # Keywords that indicate simple edit operations (Dutch)
 SIMPLE_EDIT_KEYWORDS = [
     "verwijder", "delete",  # delete
@@ -938,15 +989,20 @@ class AddQuestionRequest(BaseModel):
 
 
 # Simulated reasoning messages - feel like AI is analyzing
+# ~20 seconds total (13 messages × 1.5s interval)
 SIMULATED_REASONING = [
     "Vacaturetekst ontvangen, begin met analyse...",
     "Kernvereisten identificeren uit de functieomschrijving...",
     "Zoeken naar harde eisen: werkvergunning, locatie, beschikbaarheid...",
     "Ploegensysteem of flexibele uren detecteren...",
     "Fysieke vereisten en werkomstandigheden analyseren...",
+    "Relevante ervaring en competenties in kaart brengen...",
     "Knockout criteria formuleren op basis van must-haves...",
     "Kwalificatievragen opstellen voor ervaring en motivatie...",
+    "Vraagvolgorde bepalen voor optimale gespreksstroom...",
     "Interview structuur optimaliseren voor WhatsApp/voice...",
+    "Vragen afstemmen op best-practices voor screening...",
+    "Toon en woordkeuze verfijnen...",
     "Vragen afronden en valideren...",
 ]
 
@@ -1033,7 +1089,7 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
     
     # Send simulated reasoning while waiting for agent
     reasoning_index = 0
-    reasoning_interval = 0.8  # seconds between messages
+    reasoning_interval = 1.5  # seconds between messages (~20s total for 13 messages)
     last_reasoning_time = time.time()
     
     try:
@@ -1205,6 +1261,10 @@ async def stream_feedback(session_id: str, message: str) -> AsyncGenerator[str, 
         # Include current interview state in the message so agent knows current order
         # This is needed because user may have reordered/deleted via direct endpoints
         current_interview = get_interview_from_session(session)
+        
+        # Snapshot for comparison - to detect if agent made changes
+        interview_snapshot_before = get_questions_snapshot(current_interview)
+        
         if current_interview:
             # Build context with FULL interview structure so model knows actual question texts
             # Format questions for readability (include ideal_answer for qualification questions)
@@ -1301,6 +1361,15 @@ Gebruiker: {message}"""
                         
                         interview = get_interview_from_session(session)
                         print(f"[FINAL] interview retrieved: {interview is not None}")
+                        
+                        # Compare with snapshot to detect if agent made changes
+                        interview_snapshot_after = get_questions_snapshot(interview)
+                        if interview_snapshot_before == interview_snapshot_after:
+                            # No changes made - reset all change_status to "unchanged"
+                            print(f"[FINAL] No changes detected - resetting change_statuses")
+                            interview = reset_change_statuses(interview)
+                        else:
+                            print(f"[FINAL] Changes detected - keeping change_statuses")
                         
                         total_time = time.time() - total_start
                         print(f"[TIMING] === TOTAL REQUEST TIME: {total_time:.2f}s ===")
@@ -1930,7 +1999,7 @@ async def list_vacancies(
     count_query = f"SELECT COUNT(*) FROM vacancies {where_clause}"
     total = await pool.fetchval(count_query, *params)
     
-    # Get vacancies
+    # Get vacancies with application stats
     query = f"""
         SELECT v.id, v.title, v.company, v.location, v.description, v.status, 
                v.created_at, v.archived_at, v.source, v.source_id,
@@ -1941,9 +2010,22 @@ async def list_vacancies(
                END as is_online,
                (ps.voice_enabled AND ps.elevenlabs_agent_id IS NOT NULL) as voice_enabled,
                (ps.whatsapp_enabled AND ps.whatsapp_agent_id IS NOT NULL) as whatsapp_enabled,
-               (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled
+               (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled,
+               COALESCE(app_stats.candidates_count, 0) as candidates_count,
+               COALESCE(app_stats.completed_count, 0) as completed_count,
+               COALESCE(app_stats.qualified_count, 0) as qualified_count,
+               app_stats.last_activity_at
         FROM vacancies v
         LEFT JOIN pre_screenings ps ON ps.vacancy_id = v.id
+        LEFT JOIN LATERAL (
+            SELECT 
+                COUNT(*) as candidates_count,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
+                MAX(COALESCE(completed_at, started_at)) as last_activity_at
+            FROM applications a
+            WHERE a.vacancy_id = v.id
+        ) app_stats ON true
         {where_clause}
         ORDER BY v.created_at DESC
         LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -1979,7 +2061,11 @@ async def list_vacancies(
                 voice=voice_active,
                 whatsapp=whatsapp_active,
                 cv=cv_active
-            )
+            ),
+            candidates_count=row["candidates_count"],
+            completed_count=row["completed_count"],
+            qualified_count=row["qualified_count"],
+            last_activity_at=row["last_activity_at"]
         )
     
     vacancies = [build_vacancy_response(row) for row in rows]
@@ -2013,9 +2099,22 @@ async def get_vacancy(vacancy_id: str):
                END as is_online,
                (ps.voice_enabled AND ps.elevenlabs_agent_id IS NOT NULL) as voice_enabled,
                (ps.whatsapp_enabled AND ps.whatsapp_agent_id IS NOT NULL) as whatsapp_enabled,
-               (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled
+               (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled,
+               COALESCE(app_stats.candidates_count, 0) as candidates_count,
+               COALESCE(app_stats.completed_count, 0) as completed_count,
+               COALESCE(app_stats.qualified_count, 0) as qualified_count,
+               app_stats.last_activity_at
         FROM vacancies v
         LEFT JOIN pre_screenings ps ON ps.vacancy_id = v.id
+        LEFT JOIN LATERAL (
+            SELECT 
+                COUNT(*) as candidates_count,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
+                MAX(COALESCE(completed_at, started_at)) as last_activity_at
+            FROM applications a
+            WHERE a.vacancy_id = v.id
+        ) app_stats ON true
         WHERE v.id = $1
     """
     
@@ -2050,7 +2149,11 @@ async def get_vacancy(vacancy_id: str):
             voice=voice_active,
             whatsapp=whatsapp_active,
             cv=cv_active
-        )
+        ),
+        candidates_count=row["candidates_count"],
+        completed_count=row["completed_count"],
+        qualified_count=row["qualified_count"],
+        last_activity_at=row["last_activity_at"]
     )
 
 
@@ -2127,6 +2230,18 @@ async def list_applications(
     
     rows = await pool.fetch(query, *params)
     
+    # Fetch all pre-screening questions for this vacancy once
+    questions_query = """
+        SELECT psq.id, psq.question_type, psq.position, psq.question_text
+        FROM pre_screening_questions psq
+        JOIN pre_screenings ps ON ps.id = psq.pre_screening_id
+        WHERE ps.vacancy_id = $1
+        ORDER BY 
+            CASE psq.question_type WHEN 'knockout' THEN 0 ELSE 1 END,
+            psq.position
+    """
+    all_questions = await pool.fetch(questions_query, vacancy_uuid)
+    
     # Fetch answers for each application
     applications = []
     for row in rows:
@@ -2138,6 +2253,9 @@ async def list_applications(
         """
         answer_rows = await pool.fetch(answers_query, row["id"])
         
+        # Build a map of existing answers by question_id
+        answer_map = {a["question_id"]: a for a in answer_rows}
+        
         answers = []
         total_score = 0
         score_count = 0
@@ -2145,28 +2263,56 @@ async def list_applications(
         knockout_total = 0
         qualification_count = 0
         
-        for a in answer_rows:
-            answers.append(QuestionAnswerResponse(
-                question_id=a["question_id"],
-                question_text=a["question_text"],
-                answer=a["answer"],
-                passed=a["passed"],
-                score=a["score"],
-                rating=a["rating"],
-                motivation=a["motivation"]
-            ))
+        # Process all questions, merging with answers where available
+        for q in all_questions:
+            q_id = str(q["id"])
+            # Check both UUID format and ko_/qual_ prefix format
+            existing_answer = answer_map.get(q_id)
+            if not existing_answer:
+                # Try legacy format (ko_1, qual_2, etc.)
+                if q["question_type"] == "knockout":
+                    legacy_id = f"ko_{q['position']}"
+                else:
+                    legacy_id = f"qual_{q['position']}"
+                existing_answer = answer_map.get(legacy_id)
             
-            # Calculate stats
-            if a["question_id"].startswith("ko_"):
-                knockout_total += 1
-                if a["passed"]:
-                    knockout_passed += 1
+            if existing_answer:
+                answers.append(QuestionAnswerResponse(
+                    question_id=existing_answer["question_id"],
+                    question_text=existing_answer["question_text"],
+                    answer=existing_answer["answer"],
+                    passed=existing_answer["passed"],
+                    score=existing_answer["score"],
+                    rating=existing_answer["rating"],
+                    motivation=existing_answer["motivation"]
+                ))
+                
+                # Calculate stats
+                if q["question_type"] == "knockout":
+                    knockout_total += 1
+                    if existing_answer["passed"]:
+                        knockout_passed += 1
+                else:
+                    qualification_count += 1
+                
+                if existing_answer["score"] is not None:
+                    total_score += existing_answer["score"]
+                    score_count += 1
             else:
-                qualification_count += 1
-            
-            if a["score"] is not None:
-                total_score += a["score"]
-                score_count += 1
+                # Question exists but no answer yet - include with null values
+                answers.append(QuestionAnswerResponse(
+                    question_id=q_id,
+                    question_text=q["question_text"],
+                    answer=None,
+                    passed=None,
+                    score=None,
+                    rating=None,
+                    motivation=None
+                ))
+                
+                # Count knockout questions even if unanswered
+                if q["question_type"] == "knockout":
+                    knockout_total += 1
         
         # Calculate overall score as average
         overall_score = round(total_score / score_count) if score_count > 0 else None
@@ -2224,7 +2370,7 @@ async def get_application(application_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Application not found")
     
-    # Fetch answers
+    # Fetch answers that exist
     answers_query = """
         SELECT question_id, question_text, answer, passed, score, rating, motivation
         FROM application_answers
@@ -2233,6 +2379,21 @@ async def get_application(application_id: str):
     """
     answer_rows = await pool.fetch(answers_query, row["id"])
     
+    # Build a map of existing answers by question_id
+    answer_map = {a["question_id"]: a for a in answer_rows}
+    
+    # Fetch all pre-screening questions for this vacancy to include unanswered questions
+    questions_query = """
+        SELECT psq.id, psq.question_type, psq.position, psq.question_text
+        FROM pre_screening_questions psq
+        JOIN pre_screenings ps ON ps.id = psq.pre_screening_id
+        WHERE ps.vacancy_id = $1
+        ORDER BY 
+            CASE psq.question_type WHEN 'knockout' THEN 0 ELSE 1 END,
+            psq.position
+    """
+    question_rows = await pool.fetch(questions_query, row["vacancy_id"])
+    
     answers = []
     total_score = 0
     score_count = 0
@@ -2240,28 +2401,56 @@ async def get_application(application_id: str):
     knockout_total = 0
     qualification_count = 0
     
-    for a in answer_rows:
-        answers.append(QuestionAnswerResponse(
-            question_id=a["question_id"],
-            question_text=a["question_text"],
-            answer=a["answer"],
-            passed=a["passed"],
-            score=a["score"],
-            rating=a["rating"],
-            motivation=a["motivation"]
-        ))
+    # Process all questions, merging with answers where available
+    for q in question_rows:
+        q_id = str(q["id"])
+        # Check both UUID format and ko_/qual_ prefix format
+        existing_answer = answer_map.get(q_id)
+        if not existing_answer:
+            # Try legacy format (ko_1, qual_2, etc.)
+            if q["question_type"] == "knockout":
+                legacy_id = f"ko_{q['position']}"
+            else:
+                legacy_id = f"qual_{q['position']}"
+            existing_answer = answer_map.get(legacy_id)
         
-        # Calculate stats
-        if a["question_id"].startswith("ko_"):
-            knockout_total += 1
-            if a["passed"]:
-                knockout_passed += 1
+        if existing_answer:
+            answers.append(QuestionAnswerResponse(
+                question_id=existing_answer["question_id"],
+                question_text=existing_answer["question_text"],
+                answer=existing_answer["answer"],
+                passed=existing_answer["passed"],
+                score=existing_answer["score"],
+                rating=existing_answer["rating"],
+                motivation=existing_answer["motivation"]
+            ))
+            
+            # Calculate stats
+            if q["question_type"] == "knockout":
+                knockout_total += 1
+                if existing_answer["passed"]:
+                    knockout_passed += 1
+            else:
+                qualification_count += 1
+            
+            if existing_answer["score"] is not None:
+                total_score += existing_answer["score"]
+                score_count += 1
         else:
-            qualification_count += 1
-        
-        if a["score"] is not None:
-            total_score += a["score"]
-            score_count += 1
+            # Question exists but no answer yet - include with null values
+            answers.append(QuestionAnswerResponse(
+                question_id=q_id,
+                question_text=q["question_text"],
+                answer=None,
+                passed=None,
+                score=None,
+                rating=None,
+                motivation=None
+            ))
+            
+            # Count knockout questions even if unanswered
+            if q["question_type"] == "knockout":
+                knockout_total += 1
     
     # Calculate overall score as average
     overall_score = round(total_score / score_count) if score_count > 0 else None
@@ -2587,6 +2776,50 @@ async def get_vacancy_stats(vacancy_id: str):
         },
         avg_interaction_seconds=int(row["avg_seconds"]),
         last_application_at=row["last_application"]
+    )
+
+
+@app.get("/stats")
+async def get_dashboard_stats():
+    """Get dashboard-level aggregate statistics across all vacancies."""
+    pool = await get_db_pool()
+    
+    # Get aggregate stats
+    stats_query = """
+        SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE started_at >= NOW() - INTERVAL '7 days') as this_week,
+            COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+            COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
+            COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
+            COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
+            COUNT(*) FILTER (WHERE channel = 'cv') as cv_count
+        FROM applications
+    """
+    
+    row = await pool.fetchrow(stats_query)
+    
+    total = row["total"]
+    this_week = row["this_week"]
+    completed_count = row["completed_count"]
+    qualified_count = row["qualified_count"]
+    
+    # Calculate rates (avoid division by zero)
+    completion_rate = int((completed_count / total * 100) if total > 0 else 0)
+    qualification_rate = int((qualified_count / completed_count * 100) if completed_count > 0 else 0)
+    
+    return DashboardStatsResponse(
+        total_prescreenings=total,
+        total_prescreenings_this_week=this_week,
+        completed_count=completed_count,
+        completion_rate=completion_rate,
+        qualified_count=qualified_count,
+        qualification_rate=qualification_rate,
+        channel_breakdown={
+            "voice": row["voice_count"],
+            "whatsapp": row["whatsapp_count"],
+            "cv": row["cv_count"]
+        }
     )
 
 
@@ -3262,16 +3495,29 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     whatsapp_active = (updated_row["whatsapp_agent_id"] is not None) and updated_row["whatsapp_enabled"]
     cv_active = updated_row["cv_enabled"]
     
-    # Auto-set is_online = FALSE if all channels are disabled
-    all_channels_off = not voice_active and not whatsapp_active and not cv_active
+    # Auto-sync is_online based on channel states
+    any_channel_on = voice_active or whatsapp_active or cv_active
+    all_channels_off = not any_channel_on
     effective_is_online = updated_row["is_online"]
+    auto_status_message = ""
     
-    if all_channels_off and updated_row["is_online"]:
+    # Auto-set is_online = TRUE if any channel is enabled and agent was offline
+    if any_channel_on and not updated_row["is_online"] and ps_row["published_at"]:
+        await pool.execute(
+            "UPDATE pre_screenings SET is_online = TRUE WHERE id = $1",
+            ps_row["id"]
+        )
+        effective_is_online = True
+        auto_status_message = " (auto-online: channel enabled)"
+    
+    # Auto-set is_online = FALSE if all channels are disabled
+    elif all_channels_off and updated_row["is_online"]:
         await pool.execute(
             "UPDATE pre_screenings SET is_online = FALSE WHERE id = $1",
             ps_row["id"]
         )
         effective_is_online = False
+        auto_status_message = " (auto-offline: no channels enabled)"
     
     return {
         "status": "success",
@@ -3281,7 +3527,7 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
             "whatsapp": whatsapp_active,
             "cv": cv_active
         },
-        "message": "Pre-screening status updated" + (" (auto-offline: no channels enabled)" if all_channels_off else "")
+        "message": "Pre-screening status updated" + auto_status_message
     }
 
 
@@ -4515,14 +4761,6 @@ async def elevenlabs_webhook(request: Request):
     from datetime import datetime as dt
     call_date = dt.fromtimestamp(payload.event_timestamp).strftime("%Y-%m-%d")
     
-    # Process transcript with the agent
-    result = await process_transcript(
-        transcript=data.transcript,
-        knockout_questions=knockout_questions,
-        qualification_questions=qualification_questions,
-        call_date=call_date,
-    )
-    
     # Extract metadata
     metadata = data.metadata or {}
     call_duration = metadata.get("call_duration_secs", 0)
@@ -4540,22 +4778,39 @@ async def elevenlabs_webhook(request: Request):
     candidate_phone = screening_conv["candidate_phone"] if screening_conv else None
     candidate_name = screening_conv["candidate_name"] if screening_conv else "Voice Candidate"
     
+    # Find existing application and set status to 'processing' BEFORE AI analysis
+    existing_app = None
+    if candidate_phone:
+        existing_app = await pool.fetchrow(
+            """
+            SELECT id FROM applications 
+            WHERE vacancy_id = $1 AND candidate_phone = $2 AND status != 'completed'
+            """,
+            vacancy_id,
+            candidate_phone
+        )
+    
+    if existing_app:
+        # Set status to 'processing' BEFORE transcript analysis (commits immediately)
+        await pool.execute(
+            "UPDATE applications SET status = 'processing' WHERE id = $1",
+            existing_app["id"]
+        )
+        logger.info(f"🔄 Application {existing_app['id']} status -> processing")
+    
+    # Process transcript with the agent (AI analysis happens here)
+    result = await process_transcript(
+        transcript=data.transcript,
+        knockout_questions=knockout_questions,
+        qualification_questions=qualification_questions,
+        call_date=call_date,
+    )
+    
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Try to find existing application by phone number (registered candidate)
-            existing_app = None
-            if candidate_phone:
-                existing_app = await conn.fetchrow(
-                    """
-                    SELECT id FROM applications 
-                    WHERE vacancy_id = $1 AND candidate_phone = $2 AND status != 'completed'
-                    """,
-                    vacancy_id,
-                    candidate_phone
-                )
-            
+            # Use the existing_app we found earlier (already set to 'processing')
             if existing_app:
-                # Update existing application
+                # Update existing application to completed
                 application_id = existing_app["id"]
                 await conn.execute(
                     """
