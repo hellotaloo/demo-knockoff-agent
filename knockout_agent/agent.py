@@ -1,16 +1,140 @@
 from google.adk.agents.llm_agent import Agent
+from google.adk.tools import FunctionTool
 from google.genai import types
 from datetime import datetime, timedelta
 from typing import Optional
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
-# Generate dynamic timestamp and appointment slots
-now = datetime.now()
-timestamp = now.strftime("%A %d %B %Y, %H:%M")
 
-# Calculate next 2 business days for appointment slots
+# =============================================================================
+# Conversation Completion Detection
+# =============================================================================
+
+# Tool function for agent to signal conversation completion
+def conversation_complete(outcome: str) -> str:
+    """
+    Roep dit aan wanneer het gesprek afgerond is, net voordat je afscheid neemt.
+    
+    Args:
+        outcome: Korte beschrijving van de uitkomst. Voorbeelden:
+                 - "interview ingepland voor maandag 10:00"
+                 - "geen match voor deze vacature"
+                 - "info verzameld voor andere vacatures"
+                 - "kandidaat niet beschikbaar"
+    
+    Returns:
+        str: Bevestiging dat het gesprek is afgerond
+    """
+    logger.info(f"🏁 CONVERSATION COMPLETE: {outcome}")
+    return f"Gesprek afgerond: {outcome}"
+
+
+# Create the tool for the agent
+conversation_complete_tool = FunctionTool(func=conversation_complete)
+
+
+# Fallback: Closing pattern detection
+CLOSING_PATTERNS = [
+    r"bedankt voor (je|uw) (tijd|gesprek|interesse|antwoorden)",
+    r"tot (ziens|snel|gauw|dan)",
+    r"fijne dag",
+    r"prettige dag",
+    r"je hoort (nog )?van ons",
+    r"we nemen contact",
+    r"succes (verder|ermee)",
+    r"veel succes",
+    r"ik wens je",
+    # Interview scheduled patterns
+    r"je staat ingepland",
+    r"je bent ingepland",
+    r"afspraak.*(gepland|bevestigd|ingepland)",
+    r"gesprek.*(gepland|bevestigd|ingepland)",
+]
+
+
+def is_closing_message(message: str) -> bool:
+    """
+    Check if an agent message is a closing/goodbye message.
+    
+    Args:
+        message: The agent's response message
+        
+    Returns:
+        bool: True if the message appears to be a closing message
+    """
+    # TEMPORARILY DISABLED - Testing tool function only
+    return False
+    # message_lower = message.lower()
+    # return any(re.search(pattern, message_lower) for pattern in CLOSING_PATTERNS)
+
+
+def clean_response_text(message: str) -> str:
+    """
+    Remove any accidental tool call text from agent responses.
+    
+    Sometimes the model includes the function call syntax in its response text.
+    This strips that out before sending to the user.
+    
+    Args:
+        message: The agent's response message
+        
+    Returns:
+        str: Cleaned message without tool call syntax
+    """
+    # Remove conversation_complete(...) calls from the text
+    cleaned = re.sub(
+        r'conversation_complete\s*\([^)]*\)\s*',
+        '',
+        message,
+        flags=re.IGNORECASE
+    )
+    # Clean up any resulting double newlines or leading/trailing whitespace
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+# Dutch day and month names for proper Dutch date formatting
+DUTCH_DAYS = {
+    0: "maandag",
+    1: "dinsdag",
+    2: "woensdag",
+    3: "donderdag",
+    4: "vrijdag",
+    5: "zaterdag",
+    6: "zondag"
+}
+
+DUTCH_MONTHS = {
+    1: "januari",
+    2: "februari",
+    3: "maart",
+    4: "april",
+    5: "mei",
+    6: "juni",
+    7: "juli",
+    8: "augustus",
+    9: "september",
+    10: "oktober",
+    11: "november",
+    12: "december"
+}
+
+
+def get_dutch_date(date, include_time=False):
+    """Format a date in Dutch (e.g., 'maandag 2 februari 2026')."""
+    day_name = DUTCH_DAYS[date.weekday()]
+    month_name = DUTCH_MONTHS[date.month]
+    if include_time:
+        return f"{day_name} {date.day} {month_name} {date.year}, {date.strftime('%H:%M')}"
+    return f"{day_name} {date.day} {month_name}"
+
+
 def get_next_business_days(start_date, num_days):
     """Get the next N business days (Mon-Fri) from start_date."""
     business_days = []
@@ -20,148 +144,6 @@ def get_next_business_days(start_date, num_days):
         if current.weekday() < 5:  # Monday = 0, Friday = 4
             business_days.append(current)
     return business_days
-
-next_days = get_next_business_days(now, 2)
-slot1 = next_days[0].strftime("%A %d %B") + " om 10:00"
-slot2 = next_days[0].strftime("%A %d %B") + " om 14:00"
-slot3 = next_days[1].strftime("%A %d %B") + " om 11:00"
-
-instruction = f"""Je bent een vriendelijke recruiter van ITZU die via WhatsApp een screeningsgesprek voert met kandidaten die gesolliciteerd hebben voor een blue collar vacature.
-
-📅 **Huidige datum en tijd:** {timestamp}
-
----
-
-## TRIGGER VOOR NIEUWE SCREENING
-Als je een bericht ontvangt in het formaat "START_SCREENING name=<naam>", dan:
-1. Extraheer de naam van de kandidaat uit het bericht
-2. Stuur DIRECT een vriendelijke, persoonlijke begroeting met die naam
-3. Stel jezelf kort voor als Izzy de digitale recruiter van ITZU
-4. Vraag of ze klaar zijn voor een paar korte vragen
-
-Voorbeeld: Bij "START_SCREENING name=Sarah" antwoord je:
-"Hoi Sarah! 👋 Leuk dat je hebt gesolliciteerd! Ik ben de digitale recruiter van ITZU en help je graag verder. Ik heb een paar korte vragen om te kijken of deze functie bij je past. Ben je klaar?"
-
-**Belangrijk:** Behandel dit NIET als een gespreksbericht van de gebruiker - het is een systeem-trigger om het gesprek te starten.
-
----
-
-## TAAL
-- Standaardtaal is Vlaams (nl-BE)
-- Als de kandidaat in een andere taal antwoordt, schakel dan direct over naar die taal
-- Pas je taalgebruik aan de kandidaat aan
-
-## COMMUNICATIESTIJL
-- Vriendelijk, professioneel maar informeel (WhatsApp-stijl)
-- **HEEL KORT**: Max 2-3 zinnen per bericht! WhatsApp = korte berichten
-- Geen lange uitleg of opsommingen - kom direct to the point
-- Gebruik af en toe een emoji, maar overdrijf niet 👍
-- Wees warm en persoonlijk
-- Gebruik de voornaam van de kandidaat als je die weet
-- Vermijd herhalingen en overbodige woorden
-
-## GESPREKSDOEL
-Korte screening of de kandidaat aan de basisvoorwaarden voldoet.
-
-## OPENING
-Begin kort! Bijvoorbeeld: "Hallo! 👋 Leuk dat je gesolliciteerd hebt. Ik stel je even een paar snelle vragen. Ready?"
-
-## KNOCKOUT VRAGEN
-Stel deze vragen één voor één. Kort en direct - geen lange inleidingen nodig:
-
-1. **Beschikbaarheid**: Kun je binnen 2 weken starten?
-2. **Werkvergunning**: Heb je een werkvergunning voor België?
-3. **Fysieke geschiktheid**: Kun je fysiek zwaar werk aan?
-4. **Vervoer**: Heb je eigen vervoer of rijbewijs?
-
-## ALS DE KANDIDAAT SLAAGT (alle vragen positief beantwoord)
-Plan een kort telefonisch gesprek in. Bied 3 tijdsloten aan:
-- {slot1}
-- {slot2}
-- {slot3}
-
-Bevestig kort: "Top, je staat ingepland voor [tijd]! ✅"
-
-## ALS DE KANDIDAAT GEEN WERKVERGUNNING HEEFT
-Harde eis - hier kunnen we niet van afwijken.
-
-Kort en vriendelijk afwijzen: "Helaas is een werkvergunning verplicht. Zonder kunnen we je niet plaatsen. Veel succes! 🍀"
-
-**Let op:** Bied GEEN alternatieve vacatures aan.
-
-## ALS DE KANDIDAAT NIET SLAAGT OP ANDERE VRAGEN (beschikbaarheid, fysieke geschiktheid of vervoer)
-Blijf positief! Kort aangeven dat deze vacature niet past, maar vraag of je ze mag bewaren voor andere vacatures.
-
-### Als de kandidaat JA zegt op andere vacatures:
-Stel kort een paar profielvragen (één voor één!):
-- Welk soort werk zoek je?
-- Welke regio?
-- Wanneer beschikbaar?
-- Voltijd of deeltijd?
-
-Sluit af met: "Top, ik hou je op de hoogte! 👋"
-
-### Als de kandidaat NEE zegt:
-- Wens de kandidaat veel succes
-- Bedank voor de interesse
-- Sluit vriendelijk af
-
-## BELANGRIJKE REGELS
-- **KORT HOUDEN**: Max 2-3 zinnen per bericht. Dit is WhatsApp, geen e-mail!
-- Stel vragen één voor één, niet allemaal tegelijk
-- Wacht op antwoord voordat je doorgaat
-- Wees begripvol als iemand twijfelt
-- Geef nooit het gevoel dat iemand "afgewezen" wordt
-- Houd het luchtig en positief
-
----
-
-## VRAGEN OVER HET INTERVIEW ZELF (META-VRAGEN)
-
-Als een recruiter of gebruiker vragen stelt over het screeningsproces zelf (niet als kandidaat), geef dan een doordacht antwoord. Herken dit soort vragen aan de context - ze komen vaak van iemand die het proces evalueert, niet van een sollicitant.
-
-**Voorbeelden van meta-vragen:**
-- "Is deze pre-screening niet te lang?"
-- "Wat vind je van de knockout vragen?"
-- "Zijn er te veel vragen?"
-- "Hoe zou je dit interview verbeteren?"
-- "Is de toon juist?"
-
-**Hoe te antwoorden op meta-vragen:**
-
-1. **Analyseer het huidige proces objectief:**
-   - De screening bevat 4 knockout vragen (beschikbaarheid, werkvergunning, fysieke geschiktheid, vervoer)
-   - Duur: ongeveer 2-5 minuten bij vlot verloop
-   - Stijl: informeel, WhatsApp-vriendelijk, kort
-
-2. **Geef eerlijke feedback:**
-   - Wees constructief en specifiek
-   - Benoem sterke punten én mogelijke verbeteringen
-   - Denk na over de kandidaatervaring
-   - Overweeg efficiëntie vs. grondigheid
-
-3. **Mogelijke feedback punten:**
-   - 4 vragen is redelijk compact voor een eerste screening
-   - Alle vragen zijn essentieel voor blue collar functies
-   - De volgorde is logisch (eerst deal-breakers)
-   - WhatsApp-stijl verlaagt de drempel
-   - Eventueel kunnen vragen gecombineerd worden indien gewenst
-
-4. **Stel tegenverbeteringen voor indien relevant:**
-   - Vragen toevoegen/verwijderen
-   - Volgorde aanpassen
-   - Toon/stijl wijzigen
-   - Alternatieve formuleringen
-
-**Belangrijk:** Schakel soepel tussen kandidaat-modus en meta-modus. Als iemand duidelijk over het proces praat (niet als sollicitant), antwoord dan als een collega-recruiter die het proces evalueert.
-"""
-
-root_agent = Agent(
-    name="taloo_recruiter",
-    model="gemini-2.5-flash",
-    instruction=instruction,
-    description="ITZU recruiter agent voor WhatsApp screening van blue collar kandidaten",
-)
 
 
 # =============================================================================
@@ -191,14 +173,14 @@ def build_screening_instruction(config: dict, vacancy_title: str = None, channel
     Returns:
         str: Complete screening instruction in Dutch
     """
-    # Generate dynamic timestamp and appointment slots
+    # Generate dynamic timestamp and appointment slots (in Dutch)
     now = datetime.now()
-    timestamp = now.strftime("%A %d %B %Y, %H:%M")
+    timestamp = get_dutch_date(now, include_time=True)
     
     next_days = get_next_business_days(now, 2)
-    slot1 = next_days[0].strftime("%A %d %B") + " om 10:00"
-    slot2 = next_days[0].strftime("%A %d %B") + " om 14:00"
-    slot3 = next_days[1].strftime("%A %d %B") + " om 11:00"
+    slot1 = get_dutch_date(next_days[0]) + " om 10:00"
+    slot2 = get_dutch_date(next_days[0]) + " om 14:00"
+    slot3 = get_dutch_date(next_days[1]) + " om 11:00"
     
     intro = config.get("intro", "Hallo! Ik zou je graag enkele vragen stellen.")
     knockout_questions = config.get("knockout_questions", [])
@@ -244,18 +226,18 @@ def build_screening_instruction(config: dict, vacancy_title: str = None, channel
     knockout_section = ""
     if has_knockout:
         knockout_section = f"""
-## KNOCKOUT VRAGEN (VERPLICHT)
-Stel deze vragen één voor één. Als een antwoord negatief is, stop direct met de screening:
+## PRAKTISCHE CHECK (VERPLICHT)
+Stel deze korte checkvragen één voor één. Als een antwoord negatief is, stop direct met de screening:
 
 {chr(10).join(knockout_list)}
 
-**Als knockout mislukt:**
+**Als de praktische check niet past:**
 {knockout_failed_action}
 """
     
     qualification_section = ""
     if has_qualification:
-        qual_intro = "Na succesvolle knockout vragen, stel deze vervolgvragen:" if has_knockout else "Stel deze vragen één voor één:"
+        qual_intro = "Na de praktische check, stel deze vervolgvragen:" if has_knockout else "Stel deze vragen één voor één:"
         qualification_section = f"""
 ## KWALIFICATIEVRAGEN
 {qual_intro}
@@ -304,7 +286,7 @@ Korte screening of de kandidaat aan de basisvoorwaarden voldoet.
 
 ## INTERVIEW DUUR
 Dit interview duurt ongeveer {estimated_minutes} {"minuut" if estimated_minutes == 1 else "minuten"}.
-- {num_knockout} korte ja/nee vragen (knockout)
+- {num_knockout} korte praktische checks
 - {num_qualification} kwalificatievragen (korte antwoorden verwacht)
 
 ## OPENING FORMAAT
@@ -342,6 +324,18 @@ Voorbeeld: "Je bent precies wat we zoeken! Laten we een gesprek inplannen met de
 - Geef nooit het gevoel dat iemand "afgewezen" wordt
 - **BELANGRIJK**: Verzin GEEN extra vragen. Stel ALLEEN de vragen die hierboven zijn gedefinieerd
 - Houd het luchtig en positief
+
+## GESPREK AFSLUITEN
+Wanneer het gesprek ten einde is (interview ingepland, geen match, of kandidaat stopt):
+1. Roep EERST de `conversation_complete` functie aan (dit is een achtergrond-actie, NIET zichtbaar voor de kandidaat)
+2. Stuur daarna je normale afscheidsgroet
+
+**BELANGRIJK:** Toon de functie-aanroep NOOIT in je bericht aan de kandidaat. 
+De kandidaat ziet alleen je vriendelijke afscheidsbericht, niet de technische functie.
+
+Voorbeeld van correcte uitvoering:
+- Intern: conversation_complete("interview ingepland voor dinsdag 10:00")
+- Bericht aan kandidaat: "Top! Je staat ingepland voor dinsdag om 10:00. ✅ Tot snel!"
 """
     
     return instruction
@@ -399,6 +393,7 @@ def create_vacancy_whatsapp_agent(vacancy_id: str, config: dict) -> str:
         model="gemini-2.5-flash",
         instruction=instruction,
         description=f"WhatsApp screening agent for vacancy {vacancy_id[:8]}",
+        tools=[conversation_complete_tool],
     )
     
     _vacancy_agents[vacancy_id] = agent

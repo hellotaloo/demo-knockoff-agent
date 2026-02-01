@@ -40,7 +40,9 @@ Content-Type: application/json
   "vacancy_id": "550e8400-e29b-41d4-a716-446655440000",
   "channel": "voice",
   "phone_number": "+31612345678",
-  "candidate_name": "Jan"
+  "first_name": "Jan",
+  "last_name": "Jansen",
+  "is_test": false
 }
 ```
 
@@ -49,7 +51,9 @@ Content-Type: application/json
 | `vacancy_id` | string (UUID) | Yes | The vacancy ID to use for screening |
 | `channel` | string | Yes | Either `"voice"` or `"whatsapp"` |
 | `phone_number` | string | Yes | Phone number in E.164 format (e.g., `+31612345678`) |
-| `candidate_name` | string | No | Candidate's name for personalization |
+| `first_name` | string | Yes | Candidate's first name |
+| `last_name` | string | Yes | Candidate's last name |
+| `is_test` | boolean | No | Mark as test conversation (default: false). Test conversations are filtered out by default in the applications list. |
 
 **Response (Voice - Success):**
 
@@ -119,7 +123,8 @@ curl -X POST https://your-api/screening/outbound \
     "vacancy_id": "550e8400-e29b-41d4-a716-446655440000",
     "channel": "voice",
     "phone_number": "+31612345678",
-    "candidate_name": "Jan"
+    "first_name": "Jan",
+    "last_name": "Jansen"
   }'
 
 # WhatsApp message
@@ -129,7 +134,20 @@ curl -X POST https://your-api/screening/outbound \
     "vacancy_id": "550e8400-e29b-41d4-a716-446655440000",
     "channel": "whatsapp",
     "phone_number": "+31612345678",
-    "candidate_name": "Jan"
+    "first_name": "Jan",
+    "last_name": "Jansen"
+  }'
+
+# Test conversation (marked as is_test)
+curl -X POST https://your-api/screening/outbound \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vacancy_id": "550e8400-e29b-41d4-a716-446655440000",
+    "channel": "whatsapp",
+    "phone_number": "+31612345678",
+    "first_name": "Test",
+    "last_name": "User",
+    "is_test": true
   }'
 ```
 
@@ -152,7 +170,9 @@ response = requests.post(
         "vacancy_id": "550e8400-e29b-41d4-a716-446655440000",
         "channel": "voice",
         "phone_number": "+31612345678",
-        "candidate_name": "Jan"
+        "first_name": "Jan",
+        "last_name": "Jansen",
+        "is_test": False  # Set to True for admin test conversations
     }
 )
 
@@ -166,7 +186,7 @@ else:
 ### JavaScript
 
 ```javascript
-async function initiateScreening(vacancyId, channel, phoneNumber, candidateName) {
+async function initiateScreening(vacancyId, channel, phoneNumber, firstName, lastName, isTest = false) {
   const response = await fetch('/screening/outbound', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -174,7 +194,9 @@ async function initiateScreening(vacancyId, channel, phoneNumber, candidateName)
       vacancy_id: vacancyId,
       channel: channel,  // 'voice' or 'whatsapp'
       phone_number: phoneNumber,
-      candidate_name: candidateName,
+      first_name: firstName,
+      last_name: lastName,
+      is_test: isTest,  // Set to true for admin test conversations
     }),
   });
   
@@ -188,12 +210,23 @@ async function initiateScreening(vacancyId, channel, phoneNumber, candidateName)
   }
 }
 
-// Usage
+// Usage - real screening
 initiateScreening(
   '550e8400-e29b-41d4-a716-446655440000',
   'whatsapp',
   '+31612345678',
-  'Jan'
+  'Jan',
+  'Jansen'
+);
+
+// Usage - test screening (from admin panel)
+initiateScreening(
+  '550e8400-e29b-41d4-a716-446655440000',
+  'voice',
+  '+31612345678',
+  'Test',
+  'User',
+  true  // is_test = true
 );
 ```
 

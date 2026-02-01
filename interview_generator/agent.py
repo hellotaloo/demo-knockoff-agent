@@ -114,7 +114,7 @@ Dit helpt de frontend om visueel te tonen wat er is veranderd.
 ## KNOCKOUT VRAGEN - VERPLICHT EN DETECTIE
 
 ### ALTIJD OPNEMEN (verplicht):
-- "Ben je in het bezit van een geldige Belgische werkvergunning?" (ALTIJD als eerste knockout vraag!)
+- "Mag je wettelijk werken in België (met of zonder werkvergunning)?" (ALTIJD als eerste knockout vraag!)
 
 ### Detecteer uit vacature:
 - **Ploegensysteem**: 2-ploegen, 3-ploegen, nachtwerk → "Kan je werken in een [X]-ploegensysteem?"

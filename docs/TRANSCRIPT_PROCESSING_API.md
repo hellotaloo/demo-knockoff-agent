@@ -88,6 +88,11 @@ Qualification questions are scored 0-100 based on how well the candidate's answe
 - **61-80**: Good answer, covers most important points
 - **81-100**: Excellent answer, meets or exceeds ideal
 
+Each qualification question also includes a **motivation** field that explains:
+- What was good about the answer (positive points)
+- What was less good or missing (negative points)
+- What the candidate should have mentioned for a perfect score of 100%
+
 ## Database Schema
 
 ### New Columns
@@ -102,11 +107,13 @@ ADD COLUMN conversation_id TEXT DEFAULT NULL;
 ```sql
 ALTER TABLE application_answers 
 ADD COLUMN score INTEGER DEFAULT NULL,
-ADD COLUMN source TEXT DEFAULT 'chat';
+ADD COLUMN source TEXT DEFAULT 'chat',
+ADD COLUMN motivation TEXT DEFAULT NULL;
 ```
 
 - `score`: 0-100 for qualification questions, NULL for knockout
 - `source`: 'chat', 'whatsapp', or 'voice'
+- `motivation`: AI-generated explanation of the score (what was good/bad, what's missing for 100%)
 - `conversation_id`: ElevenLabs conversation ID for voice calls
 
 ### Migration

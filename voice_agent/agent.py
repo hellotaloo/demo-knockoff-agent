@@ -52,8 +52,8 @@ def build_voice_prompt(config: dict, vacancy_title: str = None) -> str:
     """
     Build a dynamic Dutch voice interview script from pre-screening configuration.
     
-    This matches the structure and quality of build_screening_instruction from knockout_agent,
-    adapted for voice (outbound phone calls via ElevenLabs).
+    Uses explicit STAP (step) format with flow control to ensure the LLM follows
+    all steps in order, including qualification questions.
     
     Args:
         config: Dictionary containing:
@@ -65,7 +65,7 @@ def build_voice_prompt(config: dict, vacancy_title: str = None) -> str:
         vacancy_title: Optional vacancy title to mention
     
     Returns:
-        str: Complete voice interview script in Dutch
+        str: Complete voice interview script in Dutch with explicit step flow
     """
     from datetime import datetime, timedelta
     
@@ -105,7 +105,6 @@ def build_voice_prompt(config: dict, vacancy_title: str = None) -> str:
     slot3 = get_dutch_day(next_days[1]) + " om 11 uur"
     
     # Extract config values with defaults
-    intro = config.get("intro", "Hallo! Ik zou je graag enkele vragen stellen.")
     knockout_questions = config.get("knockout_questions", [])
     knockout_failed_action = config.get("knockout_failed_action", "Helaas lijkt deze functie niet bij je te passen. Veel succes!")
     qualification_questions = config.get("qualification_questions", [])
@@ -114,8 +113,6 @@ def build_voice_prompt(config: dict, vacancy_title: str = None) -> str:
     # Calculate estimated interview duration
     num_knockout = len(knockout_questions)
     num_qualification = len(qualification_questions)
-    has_knockout = num_knockout > 0
-    has_qualification = num_qualification > 0
     
     # Knockout questions: ~10 sec (quick yes/no)
     # Qualification questions: ~25 sec (short answers expected)
@@ -126,119 +123,137 @@ def build_voice_prompt(config: dict, vacancy_title: str = None) -> str:
     total_seconds = knockout_time + qualification_time + overhead
     estimated_minutes = max(1, round(total_seconds / 60))
     
-    # Build knockout questions list
-    knockout_list = []
-    for i, q in enumerate(knockout_questions, 1):
-        text = q.get("question_text") or q.get("question", "")
-        knockout_list.append(f"{i}. {text}")
-    
-    # Build qualification questions list
-    qual_list = []
-    for i, q in enumerate(qualification_questions, 1):
-        text = q.get("question_text") or q.get("question", "")
-        qual_list.append(f"{i}. {text}")
-    
     # Vacancy title header
     vacancy_header = f"\nVacature: {vacancy_title}" if vacancy_title else ""
     
-    # Build conditional sections
-    knockout_section = ""
-    if has_knockout:
-        knockout_section = f"""
-## KNOCKOUT VRAGEN (VERPLICHT)
-Stel deze vragen één voor één. Als een antwoord negatief is, ga naar de NIET-GESLAAGD sectie:
-
-{chr(10).join(knockout_list)}
-
-**Als knockout mislukt:**
-{knockout_failed_action}
-Sluit het gesprek vriendelijk af.
-"""
+    # Build step-by-step script with explicit flow control
+    # Step numbering:
+    # STAP 1: Opening (wacht op antwoord)
+    # STAP 2 to 2+num_knockout-1: Knockout questions
+    # STAP 2+num_knockout to 2+num_knockout+num_qualification-1: Qualification questions
+    # STAP NIET-GESLAAGD: Failure path
+    # STAP INTERVIEW PLANNEN: Schedule interview
+    # STAP AFSLUITING: Close conversation
     
-    qualification_section = ""
-    if has_qualification:
-        qual_intro = "Na succesvolle knockout vragen, stel deze vervolgvragen:" if has_knockout else "Stel deze vragen één voor één:"
-        qualification_section = f"""
-## KWALIFICATIEVRAGEN
-{qual_intro}
-
-{chr(10).join(qual_list)}
-"""
+    current_step = 1
+    steps = []
     
-    # Determine success condition
-    if has_knockout or has_qualification:
-        success_condition = "alle vragen positief beantwoord"
-    else:
-        success_condition = "het gesprek goed verlopen is"
+    # =========================================================================
+    # STAP 1: Opening
+    # =========================================================================
+    first_question_step = 2 if num_knockout > 0 else (2 if num_qualification > 0 else "INTERVIEW PLANNEN")
     
-    prompt = f"""Je bent Izy, een vriendelijke digitale recruiter van ITZU. Je voert een telefonische screening uit met kandidaten.
+    steps.append(f"""=== STAP {current_step}: WACHT OP ANTWOORD ===
+Dit is een uitgaand gesprek. Wacht tot de kandidaat opneemt en iets zegt zoals "Hallo".
+Stel jezelf dan voor: "Hallo! Met Izy, de digitale assistent van ITZU. Ik bel je over je sollicitatie. Het duurt maar {estimated_minutes} {"minuutje" if estimated_minutes == 1 else "minuutjes"}. Past dat nu?"
+- Als NEE: Vraag wanneer je kunt terugbellen en sluit af.
+- Als JA: Ga naar STAP {first_question_step}.""")
+    
+    current_step += 1
+    
+    # =========================================================================
+    # Knockout question steps
+    # =========================================================================
+    knockout_start_step = current_step
+    
+    for i, q in enumerate(knockout_questions):
+        question_text = q.get("question_text") or q.get("question", "")
+        is_last_knockout = (i == num_knockout - 1)
+        
+        if is_last_knockout:
+            # Last knockout: go to first qualification or interview planning
+            if num_qualification > 0:
+                next_step = current_step + 1
+                next_step_desc = f"STAP {next_step}"
+            else:
+                next_step_desc = "STAP INTERVIEW PLANNEN"
+        else:
+            next_step = current_step + 1
+            next_step_desc = f"STAP {next_step}"
+        
+        steps.append(f"""=== STAP {current_step}: KNOCKOUT VRAAG {i + 1} ===
+Vraag: "{question_text}"
+- Als NEE: Ga naar STAP NIET-GESLAAGD.
+- Als JA: Ga naar {next_step_desc}.""")
+        
+        current_step += 1
+    
+    # =========================================================================
+    # Qualification question steps
+    # =========================================================================
+    qualification_start_step = current_step
+    
+    if num_qualification > 0 and num_knockout > 0:
+        # Add transition to qualification questions
+        steps.append(f"""=== STAP {current_step}: START KWALIFICATIEVRAGEN ===
+Zeg: "Top! Dan ga ik je nu een paar vragen stellen over je ervaring."
+Ga direct naar STAP {current_step + 1}.""")
+        current_step += 1
+    
+    for i, q in enumerate(qualification_questions):
+        question_text = q.get("question_text") or q.get("question", "")
+        is_last_qual = (i == num_qualification - 1)
+        
+        if is_last_qual:
+            next_step_desc = "STAP INTERVIEW PLANNEN"
+        else:
+            next_step = current_step + 1
+            next_step_desc = f"STAP {next_step}"
+        
+        steps.append(f"""=== STAP {current_step}: KWALIFICATIEVRAAG {i + 1} ===
+Vraag: "{question_text}"
+Wacht op antwoord, ga dan naar {next_step_desc}.""")
+        
+        current_step += 1
+    
+    # =========================================================================
+    # STAP NIET-GESLAAGD: Failure path
+    # =========================================================================
+    steps.append(f"""=== STAP NIET-GESLAAGD ===
+Zeg: "Ik begrijp het. {knockout_failed_action}"
+Vraag: "Zou je interesse hebben in andere vacatures die beter bij jouw situatie passen?"
+- Als JA: Zeg "Super! Dan neemt een collega contact op om te kijken wat er mogelijk is. Bedankt voor je tijd!"
+- Als NEE: Zeg "Geen probleem! Bedankt voor je tijd en veel succes!"
+BEËINDIG HET GESPREK.""")
+    
+    # =========================================================================
+    # STAP INTERVIEW PLANNEN: Schedule interview
+    # =========================================================================
+    steps.append(f"""=== STAP INTERVIEW PLANNEN ===
+Zeg: "Dat klinkt allemaal goed. Ik plan graag direct een gesprek in met de recruiter."
+Zeg: "Ik heb drie mogelijkheden: {slot1}, {slot2}, of {slot3}. Welke past het beste?"
+Wacht op keuze. Bevestig: "Perfect, ik heb je ingepland voor [gekozen moment]. Je krijgt een bevestiging per SMS."
+Ga naar STAP AFSLUITING.""")
+    
+    # =========================================================================
+    # STAP AFSLUITING: Close conversation
+    # =========================================================================
+    steps.append("""=== STAP AFSLUITING ===
+Zeg: "Heel fijn! Bedankt voor dit gesprek en tot snel!"
+BEËINDIG HET GESPREK.""")
+    
+    # =========================================================================
+    # Combine all into final prompt
+    # =========================================================================
+    steps_text = "\n\n".join(steps)
+    
+    prompt = f"""Je bent een vriendelijke digitale recruiter van ITZU. Je voert een telefonische screening uit.
 
 Huidige datum en tijd: {timestamp}{vacancy_header}
 
----
+BELANGRIJK: Volg dit script STAP VOOR STAP in exact deze volgorde. Sla GEEN stappen over.
 
-## DIT IS EEN UITGAAND GESPREK
-Dit is een uitgaande oproep naar een kandidaat die gesolliciteerd heeft. De kandidaat weet nog niet wie er belt.
-1. Wacht tot de kandidaat opneemt en iets zegt zoals "Hallo" of "Met [naam]"
-2. Stel jezelf dan voor met de opening hieronder
-3. Wacht op bevestiging voordat je begint met vragen
+{steps_text}
 
-## TAAL
-- Standaardtaal is Vlaams (nl-BE)
+=== STIJLREGELS ===
+- Spreek Vlaams Nederlands (nl-BE)
 - Als de kandidaat in een andere taal antwoordt, schakel dan direct over naar die taal
-- Pas je taalgebruik aan de kandidaat aan
-
-## COMMUNICATIESTIJL (TELEFOON)
-- Vriendelijk, professioneel maar informeel
 - Korte, natuurlijke zinnen - dit is een telefoongesprek
-- Wees warm en persoonlijk
+- Wacht altijd op antwoord voor de volgende vraag
+- Wees warm en professioneel
 - Gebruik NOOIT de naam van de kandidaat (namen worden vaak verkeerd uitgesproken)
 - Spreek duidelijk en niet te snel
-- Geef de kandidaat tijd om te antwoorden
-
-## OPENING
-Zodra de kandidaat opneemt, zeg:
-"Hallo! Je spreekt met Izy, de digitale assistent van ITZU. Ik bel je over je sollicitatie. Dit duurt ongeveer {estimated_minutes} {"minuut" if estimated_minutes == 1 else "minuten"}. Als alles matcht, plannen we direct een gesprek in met de recruiter! Past dat nu?"
-
-- Als NEE of het komt niet uit: "Geen probleem! Wanneer kan ik je het beste terugbellen?" Noteer en sluit af.
-- Als JA: Ga verder met de vragen.
-
-## INTERVIEW DUUR
-Dit interview duurt ongeveer {estimated_minutes} {"minuut" if estimated_minutes == 1 else "minuten"}.
-- {num_knockout} korte ja/nee vragen (knockout)
-- {num_qualification} kwalificatievragen (korte antwoorden verwacht)
-{knockout_section}{qualification_section}
-## ALS DE KANDIDAAT SLAAGT ({success_condition})
-{final_action}
-
-## BIJ SUCCES - GESPREK INPLANNEN MET RECRUITER
-Dit is een VERPLICHTE stap bij succes. Als de kandidaat alle vragen positief beantwoordt:
-
-1. Zeg dat ze een goede match lijken
-2. Bied PRECIES deze 3 tijdsloten aan:
-   - {slot1}
-   - {slot2}
-   - {slot3}
-3. Vraag: "Welk tijdslot past jou het beste?"
-4. Wacht op keuze van de kandidaat
-5. Bevestig: "Perfect, ik heb je ingepland voor [gekozen moment]. Je krijgt een bevestiging per SMS."
-
-Voorbeeld: "Heel goed! Je bent precies wat we zoeken. Ik wil graag een gesprek inplannen met de recruiter. Ik heb drie mogelijkheden: {slot1}, {slot2}, of {slot3}. Welke past jou het beste?"
-
-## AFSLUITING
-Na het inplannen van het gesprek:
-"Heel fijn! Bedankt voor dit gesprek en tot snel!"
-Beëindig het gesprek.
-
-## BELANGRIJKE REGELS
-- Stel vragen één voor één, niet allemaal tegelijk
-- Wacht ALTIJD op antwoord voordat je doorgaat
-- Wees begripvol als iemand twijfelt
-- Geef nooit het gevoel dat iemand "afgewezen" wordt
-- **BELANGRIJK**: Verzin GEEN extra vragen. Stel ALLEEN de vragen die hierboven zijn gedefinieerd
-- Plan ALTIJD een gesprek in bij succes - sla deze stap NIET over
-- Gebruik NOOIT de naam van de kandidaat - zeg gewoon "je" of "jij"
-- Houd het luchtig en positief
+- Verzin GEEN extra vragen - stel ALLEEN de vragen die hierboven staan
 """
     
     return prompt

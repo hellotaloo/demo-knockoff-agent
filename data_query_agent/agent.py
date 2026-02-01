@@ -126,7 +126,7 @@ async def query_applications(
     Args:
         vacancy_id: Filter by specific vacancy ID (UUID)
         qualified: Filter by qualification status (True/False)
-        completed: Filter by completion status (True/False)
+        completed: Filter by completion status (True=status='completed', False=status!='completed')
         channel: Filter by channel (voice, whatsapp)
         limit: Maximum number of results to return (default 20, max 100)
     
@@ -160,9 +160,11 @@ async def query_applications(
         param_idx += 1
     
     if completed is not None:
-        conditions.append(f"a.completed = ${param_idx}")
-        params.append(completed)
-        param_idx += 1
+        # Translate completed boolean to status filter for backwards compatibility
+        if completed:
+            conditions.append(f"a.status = 'completed'")
+        else:
+            conditions.append(f"a.status != 'completed'")
     
     if channel:
         conditions.append(f"a.channel = ${param_idx}")
@@ -178,7 +180,7 @@ async def query_applications(
     # Get applications with vacancy title
     query = f"""
         SELECT a.id, a.vacancy_id, v.title as vacancy_title,
-               a.candidate_name, a.channel, a.completed, a.qualified,
+               a.candidate_name, a.channel, a.status, a.qualified,
                a.started_at, a.completed_at, a.interaction_seconds
         FROM applications a
         LEFT JOIN vacancies v ON a.vacancy_id = v.id
@@ -197,7 +199,7 @@ async def query_applications(
             "vacancy_title": row["vacancy_title"],
             "candidate_name": row["candidate_name"],
             "channel": row["channel"],
-            "completed": row["completed"],
+            "status": row["status"] or "completed",
             "qualified": row["qualified"],
             "started_at": row["started_at"].isoformat() if row["started_at"] else None,
             "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
@@ -250,7 +252,7 @@ async def get_statistics(
         stats = await pool.fetchrow("""
             SELECT 
                 COUNT(*) as total_applications,
-                COUNT(*) FILTER (WHERE completed = true) as completed,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed,
                 COUNT(*) FILTER (WHERE qualified = true) as qualified,
                 COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
                 COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
@@ -299,7 +301,7 @@ async def get_statistics(
         app_stats = await pool.fetchrow("""
             SELECT 
                 COUNT(*) as total_applications,
-                COUNT(*) FILTER (WHERE completed = true) as completed,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed,
                 COUNT(*) FILTER (WHERE qualified = true) as qualified,
                 COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
                 COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
@@ -386,7 +388,7 @@ async def execute_analytics_query(
     
     elif query_type == "recent_applications":
         rows = await pool.fetch("""
-            SELECT a.id, a.candidate_name, a.channel, a.completed, a.qualified,
+            SELECT a.id, a.candidate_name, a.channel, a.status, a.qualified,
                    a.started_at, v.title as vacancy_title
             FROM applications a
             LEFT JOIN vacancies v ON a.vacancy_id = v.id
@@ -402,7 +404,7 @@ async def execute_analytics_query(
                     "candidate_name": row["candidate_name"],
                     "vacancy_title": row["vacancy_title"],
                     "channel": row["channel"],
-                    "completed": row["completed"],
+                    "status": row["status"] or "completed",
                     "qualified": row["qualified"],
                     "started_at": row["started_at"].isoformat() if row["started_at"] else None
                 }
@@ -423,7 +425,7 @@ async def execute_analytics_query(
         rows = await pool.fetch(f"""
             SELECT DATE(started_at) as date,
                    COUNT(*) as total,
-                   COUNT(*) FILTER (WHERE completed = true) as completed,
+                   COUNT(*) FILTER (WHERE status = 'completed') as completed,
                    COUNT(*) FILTER (WHERE qualified = true) as qualified
             FROM applications
             WHERE started_at >= CURRENT_DATE - INTERVAL '{days} days'
@@ -449,7 +451,7 @@ async def execute_analytics_query(
         rows = await pool.fetch("""
             SELECT channel,
                    COUNT(*) as total,
-                   COUNT(*) FILTER (WHERE completed = true) as completed,
+                   COUNT(*) FILTER (WHERE status = 'completed') as completed,
                    COUNT(*) FILTER (WHERE qualified = true) as qualified,
                    COALESCE(AVG(interaction_seconds), 0) as avg_seconds
             FROM applications
@@ -475,12 +477,12 @@ async def execute_analytics_query(
     elif query_type == "qualification_trends":
         rows = await pool.fetch("""
             SELECT DATE(started_at) as date,
-                   COUNT(*) FILTER (WHERE completed = true) as completed,
+                   COUNT(*) FILTER (WHERE status = 'completed') as completed,
                    COUNT(*) FILTER (WHERE qualified = true) as qualified
             FROM applications
             WHERE started_at >= CURRENT_DATE - INTERVAL '30 days'
             GROUP BY DATE(started_at)
-            HAVING COUNT(*) FILTER (WHERE completed = true) > 0
+            HAVING COUNT(*) FILTER (WHERE status = 'completed') > 0
             ORDER BY date DESC
         """)
         
@@ -538,7 +540,7 @@ Je hebt toegang tot de volgende tabellen:
 - vacancy_id: verwijzing naar vacature
 - candidate_name: naam van de kandidaat
 - channel: voice of whatsapp
-- completed: boolean - of het interview is afgerond
+- status: workflow status (active, processing, completed)
 - qualified: boolean - of de kandidaat is gekwalificeerd
 - started_at: starttijd
 - completed_at: eindtijd

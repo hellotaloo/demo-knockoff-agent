@@ -28,6 +28,7 @@ Creates AI agents for the pre-screening with the current configuration.
 interface PublishRequest {
   enable_voice?: boolean;    // Create ElevenLabs agent (default: true)
   enable_whatsapp?: boolean; // Create WhatsApp agent (default: true)
+  enable_cv?: boolean;       // Enable CV analysis channel (default: false)
 }
 ```
 
@@ -47,13 +48,14 @@ interface PublishResponse {
 #### Example
 
 ```javascript
-// Publish with both voice and WhatsApp enabled
+// Publish with voice, WhatsApp, and CV analysis enabled
 const response = await fetch(`/vacancies/${vacancyId}/pre-screening/publish`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     enable_voice: true,
-    enable_whatsapp: true
+    enable_whatsapp: true,
+    enable_cv: true
   })
 });
 

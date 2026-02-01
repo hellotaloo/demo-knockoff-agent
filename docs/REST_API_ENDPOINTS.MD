@@ -167,7 +167,7 @@ Returns all applications (interview results) for a vacancy.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `qualified` | bool | Filter by qualification status |
-| `completed` | bool | Filter by completion status |
+| `completed` | bool | Filter by completion status (translates to `status='completed'`) |
 | `synced` | bool | Filter by sync status |
 | `limit` | int | Max results (default: 50) |
 | `offset` | int | Pagination offset (default: 0) |
@@ -181,7 +181,7 @@ Returns all applications (interview results) for a vacancy.
       "vacancy_id": "vac-123",
       "candidate_name": "Jan Peeters",
       "channel": "voice",
-      "completed": true,
+      "status": "completed",
       "qualified": true,
       "started_at": "2026-01-29T09:15:00Z",
       "completed_at": "2026-01-29T09:18:45Z",
@@ -293,8 +293,8 @@ export interface Application {
   vacancy_id: string;
   candidate_name: string;
   channel: 'voice' | 'whatsapp';
-  completed: boolean;
-  qualified: boolean;
+  status: 'active' | 'processing' | 'completed';  // Workflow state
+  qualified: boolean;  // Outcome: did applicant pass?
   started_at: string;
   completed_at: string | null;
   interaction_seconds: number;
@@ -330,12 +330,13 @@ export async function getVacancy(vacancyId: string): Promise<Vacancy> {
 
 export async function getApplications(
   vacancyId: string,
-  params?: { qualified?: boolean; completed?: boolean }
+  params?: { qualified?: boolean; completed?: boolean }  // completed param translates to status filter
 ): Promise<{ applications: Application[]; total: number }> {
   const searchParams = new URLSearchParams();
   if (params?.qualified !== undefined) {
     searchParams.set('qualified', params.qualified.toString());
   }
+  // Note: completed=true filters by status='completed', completed=false filters by status!='completed'
   if (params?.completed !== undefined) {
     searchParams.set('completed', params.completed.toString());
   }
@@ -431,14 +432,15 @@ CREATE TABLE applications (
     vacancy_id UUID REFERENCES vacancies(id),
     candidate_name TEXT NOT NULL,
     channel TEXT NOT NULL,
-    completed BOOLEAN DEFAULT FALSE,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',  -- Workflow: 'active', 'processing', 'completed'
     qualified BOOLEAN DEFAULT FALSE,
     started_at TIMESTAMPTZ DEFAULT NOW(),
     completed_at TIMESTAMPTZ,
     interaction_seconds INTEGER DEFAULT 0,
     synced BOOLEAN DEFAULT FALSE,
     synced_at TIMESTAMPTZ,
-    conversation_id TEXT DEFAULT NULL  -- ElevenLabs conversation ID for voice calls
+    conversation_id TEXT DEFAULT NULL,  -- ElevenLabs conversation ID for voice calls
+    CONSTRAINT applications_status_check CHECK (status IN ('active', 'processing', 'completed'))
 );
 
 -- Question answers (stored as JSONB or separate table)

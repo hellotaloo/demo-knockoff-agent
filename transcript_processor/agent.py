@@ -41,6 +41,7 @@ class QualificationResult:
     answer: str
     score: int  # 0-100
     rating: str  # weak, below_average, average, good, excellent
+    motivation: str  # Explanation of score: what was good/bad, what's missing for 100%
 
 
 # Rating labels mapped to score ranges
@@ -116,7 +117,7 @@ Voor elke kwalificatie vraag:
 - Zoek in het transcript waar deze vraag gesteld werd
 - Identificeer het antwoord van de kandidaat
 - Vergelijk het antwoord met het IDEAAL ANTWOORD
-- Geef een rating EN score:
+- Geef een rating, score EN motivatie:
 
 RATINGS (van laag naar hoog):
 - "weak" (score 0-20): Geen relevant antwoord of sterk afwijkend
@@ -124,6 +125,12 @@ RATINGS (van laag naar hoog):
 - "average" (score 41-60): Gedeeltelijk relevant, mist enkele punten
 - "good" (score 61-80): Goed antwoord, dekt meeste belangrijke punten
 - "excellent" (score 81-100): Uitstekend antwoord, voldoet aan of overtreft ideaal
+
+MOTIVATIE:
+Schrijf een korte motivatie (2-3 zinnen) die uitlegt:
+- Wat was goed aan het antwoord (positieve punten)
+- Wat was minder goed of ontbrak (negatieve punten)
+- Wat had de kandidaat moeten noemen voor een perfecte score van 100%
 
 ## INTERVIEW SLOT EXTRACTIE
 Zoek in het transcript of er een gesprek is ingepland:
@@ -158,7 +165,8 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
       "question_text": "de originele vraag",
       "answer": "het antwoord van de kandidaat uit het transcript",
       "score": 75,
-      "rating": "good"
+      "rating": "good",
+      "motivation": "Kandidaat toont relevante ervaring met magazijnwerk en noemt concrete voorbeelden. Mist echter specifieke ervaring met inventory management systemen. Voor een perfecte score had de kandidaat ook kunnen noemen: ervaring met WMS software, certificeringen, of voorbeelden van procesverbetering."
     }
   ],
   "overall_passed": true,
@@ -425,7 +433,8 @@ Geef je evaluatie als JSON."""
             question_text=qr.get("question_text", ""),
             answer=qr.get("answer", ""),
             score=score,
-            rating=rating
+            rating=rating,
+            motivation=qr.get("motivation", "")
         ))
     
     result = TranscriptProcessorResult(
