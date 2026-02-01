@@ -24,6 +24,7 @@ from google.genai import types
 import time
 from knockout_agent.agent import build_screening_instruction, is_closing_message, clean_response_text, conversation_complete_tool
 from interview_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
+from candidate_simulator.agent import SimulationPersona, create_simulator_agent, run_simulation
 from data_query_agent.agent import set_db_pool as set_data_query_db_pool
 from recruiter_analyst.agent import root_agent as recruiter_analyst_agent
 from fixtures import load_vacancies, load_applications, load_pre_screenings
@@ -107,6 +108,7 @@ class InterviewChannel(str, Enum):
 class QuestionAnswerResponse(BaseModel):
     question_id: str
     question_text: str
+    question_type: Optional[str] = None  # knockout or qualification
     answer: Optional[str] = None
     passed: Optional[bool] = None
     score: Optional[int] = None  # 0-100
@@ -161,6 +163,7 @@ class ApplicationResponse(BaseModel):
     qualification_count: int = 0  # Number of qualification questions answered
     summary: Optional[str] = None  # AI-generated executive summary
     interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit"
+    meeting_slots: Optional[list[str]] = None  # Available meeting slots for qualified candidates
     is_test: bool = False  # True for internal test conversations
 
 
@@ -254,6 +257,14 @@ class StatusUpdateRequest(BaseModel):
     voice_enabled: Optional[bool] = None
     whatsapp_enabled: Optional[bool] = None
     cv_enabled: Optional[bool] = None
+
+
+class CVApplicationRequest(BaseModel):
+    """Request model for creating an application from a CV."""
+    pdf_base64: str
+    candidate_name: str
+    candidate_phone: Optional[str] = None
+    candidate_email: Optional[str] = None
 
 
 # ============================================================================
@@ -352,6 +363,24 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         
         # Note: completed column will be removed by migration 005
         # For now, keep sync logic for backwards compatibility during transition
+        
+        # Add 'cv' to applications channel check constraint
+        await pool.execute("""
+            DO $$
+            BEGIN
+                -- Drop the existing check constraint if it exists
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'applications_channel_check'
+                ) THEN
+                    ALTER TABLE applications DROP CONSTRAINT applications_channel_check;
+                END IF;
+                
+                -- Add the new check constraint with 'cv' included
+                ALTER TABLE applications 
+                ADD CONSTRAINT applications_channel_check 
+                CHECK (channel IN ('voice', 'whatsapp', 'cv'));
+            END $$;
+        """)
         
         logger.info("Schema migrations completed")
     except Exception as e:
@@ -2157,6 +2186,245 @@ async def get_vacancy(vacancy_id: str):
     )
 
 
+@app.post("/vacancies/{vacancy_id}/cv-application")
+async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
+    """
+    Create an application from a CV PDF.
+    
+    Analyzes the CV against the vacancy's pre-screening questions,
+    creates an application with pre-filled answers from the CV,
+    and identifies which questions still need clarification.
+    """
+    from cv_analyzer import analyze_cv_base64
+    
+    pool = await get_db_pool()
+    
+    # Validate UUID format
+    try:
+        vacancy_uuid = uuid.UUID(vacancy_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+    
+    # Verify vacancy exists
+    vacancy_row = await pool.fetchrow(
+        "SELECT id, title FROM vacancies WHERE id = $1",
+        vacancy_uuid
+    )
+    if not vacancy_row:
+        raise HTTPException(status_code=404, detail="Vacancy not found")
+    
+    # Get pre-screening
+    ps_row = await pool.fetchrow(
+        """
+        SELECT id, intro, knockout_failed_action, final_action
+        FROM pre_screenings
+        WHERE vacancy_id = $1
+        """,
+        vacancy_uuid
+    )
+    
+    if not ps_row:
+        raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy. Configure interview questions first.")
+    
+    pre_screening_id = ps_row["id"]
+    
+    # Get questions
+    question_rows = await pool.fetch(
+        """
+        SELECT id, question_type, position, question_text, ideal_answer
+        FROM pre_screening_questions
+        WHERE pre_screening_id = $1
+        ORDER BY question_type, position
+        """,
+        pre_screening_id
+    )
+    
+    if not question_rows:
+        raise HTTPException(status_code=400, detail="No interview questions configured for this vacancy")
+    
+    # Build question lists for CV analyzer
+    knockout_questions = []
+    qualification_questions = []
+    ko_idx = 1
+    qual_idx = 1
+    
+    for q in question_rows:
+        if q["question_type"] == "knockout":
+            knockout_questions.append({
+                "id": f"ko_{ko_idx}",
+                "question_text": q["question_text"]
+            })
+            ko_idx += 1
+        else:
+            qualification_questions.append({
+                "id": f"qual_{qual_idx}",
+                "question_text": q["question_text"],
+                "ideal_answer": q["ideal_answer"] or ""
+            })
+            qual_idx += 1
+    
+    # Analyze CV
+    logger.info(f"Analyzing CV for vacancy {vacancy_id} ({vacancy_row['title']})")
+    try:
+        result = await analyze_cv_base64(
+            pdf_base64=request.pdf_base64,
+            knockout_questions=knockout_questions,
+            qualification_questions=qualification_questions,
+        )
+    except Exception as e:
+        logger.error(f"CV analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"CV analysis failed: {str(e)}")
+    
+    # Determine if all knockout questions passed (have CV evidence)
+    knockout_all_passed = all(ka.is_answered for ka in result.knockout_analysis)
+    
+    # Status and qualified are based on KNOCKOUT questions only
+    # - If all knockouts passed → completed + qualified (can book meeting with recruiter)
+    # - If any knockout needs clarification → active + not qualified (needs follow-up)
+    # Qualification questions are extra info but don't block qualification
+    application_status = 'completed' if knockout_all_passed else 'active'
+    
+    # Create application
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Insert application
+            # Only set completed_at if status is 'completed'
+            # qualified = true if all knockout questions passed
+            if application_status == 'completed':
+                app_row = await conn.fetchrow(
+                    """
+                    INSERT INTO applications
+                    (vacancy_id, candidate_name, candidate_phone, channel, qualified,
+                     completed_at, summary, status)
+                    VALUES ($1, $2, $3, 'cv', $4, NOW(), $5, $6)
+                    RETURNING id, started_at, completed_at
+                    """,
+                    vacancy_uuid,
+                    request.candidate_name,
+                    request.candidate_phone,
+                    knockout_all_passed,  # True if all knockouts passed
+                    result.cv_summary,
+                    application_status
+                )
+            else:
+                app_row = await conn.fetchrow(
+                    """
+                    INSERT INTO applications
+                    (vacancy_id, candidate_name, candidate_phone, channel, qualified,
+                     summary, status)
+                    VALUES ($1, $2, $3, 'cv', $4, $5, $6)
+                    RETURNING id, started_at, completed_at
+                    """,
+                    vacancy_uuid,
+                    request.candidate_name,
+                    request.candidate_phone,
+                    False,  # Not qualified - knockouts need clarification
+                    result.cv_summary,
+                    application_status
+                )
+            application_id = app_row["id"]
+            started_at = app_row["started_at"]
+            
+            logger.info(f"Created CV application {application_id} for {request.candidate_name}")
+            
+            # Insert knockout answers
+            # passed=true if CV provides evidence for the knockout question
+            for ka in result.knockout_analysis:
+                await conn.execute(
+                    """
+                    INSERT INTO application_answers
+                    (application_id, question_id, question_text, answer, passed, source)
+                    VALUES ($1, $2, $3, $4, $5, 'cv')
+                    """,
+                    application_id,
+                    ka.id,
+                    ka.question_text,
+                    ka.cv_evidence if ka.is_answered else ka.clarification_needed,
+                    ka.is_answered if ka.is_answered else None
+                )
+            
+            # Insert qualification answers
+            for qa in result.qualification_analysis:
+                # If answered by CV, give a default score of 80
+                score = 80 if qa.is_answered else None
+                rating = "good" if qa.is_answered else None
+                
+                await conn.execute(
+                    """
+                    INSERT INTO application_answers
+                    (application_id, question_id, question_text, answer, passed, score, rating, source)
+                    VALUES ($1, $2, $3, $4, NULL, $5, $6, 'cv')
+                    """,
+                    application_id,
+                    qa.id,
+                    qa.question_text,
+                    qa.cv_evidence if qa.is_answered else qa.clarification_needed,
+                    score,
+                    rating
+                )
+    
+    # Build response
+    answers = []
+    
+    # Add knockout answers
+    # passed=true if CV provides evidence (knockout determines qualification)
+    for ka in result.knockout_analysis:
+        answers.append(QuestionAnswerResponse(
+            question_id=ka.id,
+            question_text=ka.question_text,
+            question_type="knockout",
+            answer=ka.cv_evidence if ka.is_answered else ka.clarification_needed,
+            passed=ka.is_answered if ka.is_answered else None
+        ))
+    
+    # Add qualification answers
+    for qa in result.qualification_analysis:
+        answers.append(QuestionAnswerResponse(
+            question_id=qa.id,
+            question_text=qa.question_text,
+            question_type="qualification",
+            answer=qa.cv_evidence if qa.is_answered else qa.clarification_needed,
+            passed=None,
+            score=80 if qa.is_answered else None,
+            rating="good" if qa.is_answered else None
+        ))
+    
+    # Count knockout questions passed (with CV evidence)
+    knockout_passed = sum(1 for ka in result.knockout_analysis if ka.is_answered)
+    knockout_total = len(result.knockout_analysis)
+    
+    # Generate meeting slots if qualified
+    meeting_slots = None
+    if knockout_all_passed:
+        from knockout_agent.agent import get_next_business_days, get_dutch_date
+        now = datetime.now()
+        next_days = get_next_business_days(now, 2)
+        meeting_slots = [
+            get_dutch_date(next_days[0]) + " om 10:00",
+            get_dutch_date(next_days[0]) + " om 14:00",
+            get_dutch_date(next_days[1]) + " om 11:00",
+        ]
+    
+    return ApplicationResponse(
+        id=str(application_id),
+        vacancy_id=vacancy_id,
+        candidate_name=request.candidate_name,
+        channel="cv",
+        status=application_status,
+        qualified=knockout_all_passed,  # Qualified if all knockouts passed
+        started_at=app_row["started_at"],
+        completed_at=app_row["completed_at"],
+        interaction_seconds=0,
+        answers=answers,
+        synced=False,
+        knockout_passed=knockout_passed,
+        knockout_total=knockout_total,
+        qualification_count=len(result.qualification_analysis),
+        summary=result.cv_summary,
+        meeting_slots=meeting_slots
+    )
+
+
 @app.get("/vacancies/{vacancy_id}/applications")
 async def list_applications(
     vacancy_id: str,
@@ -2270,16 +2538,18 @@ async def list_applications(
             existing_answer = answer_map.get(q_id)
             if not existing_answer:
                 # Try legacy format (ko_1, qual_2, etc.)
+                # Note: position in DB is 0-indexed, but ko_/qual_ IDs are 1-indexed
                 if q["question_type"] == "knockout":
-                    legacy_id = f"ko_{q['position']}"
+                    legacy_id = f"ko_{q['position'] + 1}"
                 else:
-                    legacy_id = f"qual_{q['position']}"
+                    legacy_id = f"qual_{q['position'] + 1}"
                 existing_answer = answer_map.get(legacy_id)
             
             if existing_answer:
                 answers.append(QuestionAnswerResponse(
                     question_id=existing_answer["question_id"],
                     question_text=existing_answer["question_text"],
+                    question_type=q["question_type"],
                     answer=existing_answer["answer"],
                     passed=existing_answer["passed"],
                     score=existing_answer["score"],
@@ -2303,6 +2573,7 @@ async def list_applications(
                 answers.append(QuestionAnswerResponse(
                     question_id=q_id,
                     question_text=q["question_text"],
+                    question_type=q["question_type"],
                     answer=None,
                     passed=None,
                     score=None,
@@ -2408,16 +2679,18 @@ async def get_application(application_id: str):
         existing_answer = answer_map.get(q_id)
         if not existing_answer:
             # Try legacy format (ko_1, qual_2, etc.)
+            # Note: position in DB is 0-indexed, but ko_/qual_ IDs are 1-indexed
             if q["question_type"] == "knockout":
-                legacy_id = f"ko_{q['position']}"
+                legacy_id = f"ko_{q['position'] + 1}"
             else:
-                legacy_id = f"qual_{q['position']}"
+                legacy_id = f"qual_{q['position'] + 1}"
             existing_answer = answer_map.get(legacy_id)
         
         if existing_answer:
             answers.append(QuestionAnswerResponse(
                 question_id=existing_answer["question_id"],
                 question_text=existing_answer["question_text"],
+                question_type=q["question_type"],
                 answer=existing_answer["answer"],
                 passed=existing_answer["passed"],
                 score=existing_answer["score"],
@@ -2441,6 +2714,7 @@ async def get_application(application_id: str):
             answers.append(QuestionAnswerResponse(
                 question_id=q_id,
                 question_text=q["question_text"],
+                question_type=q["question_type"],
                 answer=None,
                 passed=None,
                 score=None,
@@ -3600,6 +3874,13 @@ class ScreeningChatRequest(BaseModel):
     is_test: bool = False  # True for admin/internal test conversations
 
 
+class SimulateInterviewRequest(BaseModel):
+    """Request model for running an interview simulation."""
+    persona: str = "qualified"  # qualified, borderline, unqualified, rushed, enthusiastic, custom
+    custom_persona: Optional[str] = None  # Custom persona description when persona="custom"
+    candidate_name: Optional[str] = None  # Optional - random name generated if not provided
+
+
 class ScreeningConversationResponse(BaseModel):
     id: str
     vacancy_id: str
@@ -3725,29 +4006,8 @@ async def stream_screening_chat(
             create_screening_session_service()
             await create_screening_session()
         
-        # Create conversation record
-        conv_row = await pool.fetchrow(
-            """
-            INSERT INTO screening_conversations 
-            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_email, candidate_phone, status, channel, is_test)
-            VALUES ($1, $2, $3, $4, $5, $6, 'active', 'chat', $7)
-            RETURNING id
-            """,
-            vacancy_uuid, ps_row["id"], session_id, candidate_name, candidate_email, candidate_phone, is_test
-        )
-        conversation_id = conv_row["id"]
-        
-        # Create application record with status='active' (shows as "Niet afgerond" in frontend)
-        # Use 'whatsapp' channel since 'chat' is not allowed by the CHECK constraint
-        await pool.execute(
-            """
-            INSERT INTO applications 
-            (vacancy_id, candidate_name, candidate_phone, channel, qualified, is_test, status)
-            VALUES ($1, $2, $3, 'whatsapp', false, $4, 'active')
-            """,
-            vacancy_uuid, candidate_name, candidate_phone, is_test
-        )
-        logger.info(f"📝 Created in-progress application for candidate: {candidate_name}")
+        # Web chat conversations are not saved (only outbound voice/whatsapp are saved)
+        logger.info(f"💬 Web chat started for {candidate_name} (not saved to database)")
         
         # Log candidate and session info
         logger.info(f"👤 Candidate: {candidate_name}")
@@ -3757,20 +4017,11 @@ async def stream_screening_chat(
         # Trigger screening start
         trigger_message = f"START_SCREENING name={candidate_name}"
     else:
-        # Continuation - verify session exists
-        conv = await pool.fetchrow(
-            "SELECT id, candidate_name FROM screening_conversations WHERE session_id = $1",
-            session_id
-        )
-        if not conv:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found'})}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-        
-        conversation_id = conv["id"]
-        candidate_name = conv["candidate_name"]
+        # Continuation - use provided candidate_name or default
+        if not candidate_name:
+            candidate_name = "Kandidaat"
         trigger_message = message
-        logger.info(f"💬 Continuing conversation - Session: {session_id[:8]}... | Candidate: {candidate_name}")
+        logger.info(f"💬 Continuing conversation - Session: {session_id[:8]}...")
         logger.info(f"📩 User message: {message}")
     
     yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Antwoord genereren...'})}\n\n"
@@ -3804,47 +4055,11 @@ async def stream_screening_chat(
         if response_text:
             logger.info(f"🤖 Agent response: {response_text[:100]}..." if len(response_text) > 100 else f"🤖 Agent response: {response_text}")
             
-            # Store messages in conversation_messages table (skip START_SCREENING triggers)
-            if not trigger_message.startswith("START_SCREENING"):
-                await pool.execute(
-                    """
-                    INSERT INTO conversation_messages (conversation_id, role, message)
-                    VALUES ($1, 'user', $2)
-                    """,
-                    conversation_id, trigger_message
-                )
-            
-            await pool.execute(
-                """
-                INSERT INTO conversation_messages (conversation_id, role, message)
-                VALUES ($1, 'agent', $2)
-                """,
-                conversation_id, response_text
-            )
-            
-            # Update message count
-            await pool.execute(
-                """
-                UPDATE screening_conversations 
-                SET message_count = message_count + 2, updated_at = NOW()
-                WHERE session_id = $1
-                """,
-                session_id
-            )
-            
             # Check for completion (tool call or closing pattern)
             is_complete = tool_called
             if not tool_called and is_closing_message(response_text):
                 is_complete = True
-                completion_outcome = "detected via closing pattern"
                 logger.info(f"🏁 Closing pattern detected in chat response")
-            
-            # If conversation is complete, trigger transcript processing in background
-            if is_complete:
-                logger.info(f"🔄 Triggering background transcript processing for chat conversation {conversation_id}")
-                asyncio.create_task(_safe_process_conversation(
-                    pool, conversation_id, vacancy_id, pre_screening, completion_outcome
-                ))
             
             yield f"data: {json.dumps({'type': 'complete', 'message': response_text, 'session_id': session_id, 'candidate_name': candidate_name, 'is_complete': is_complete})}\n\n"
     except Exception as e:
@@ -3878,6 +4093,202 @@ async def screening_chat(request: ScreeningChatRequest):
             request.session_id,
             request.candidate_name,
             request.is_test
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+# =============================================================================
+# Interview Simulation (Auto-Tester)
+# =============================================================================
+
+async def stream_interview_simulation(
+    vacancy_id: str,
+    persona: str,
+    custom_persona: Optional[str],
+    candidate_name: str
+) -> AsyncGenerator[str, None]:
+    """
+    Stream SSE events during an interview simulation.
+    
+    This runs two agents against each other:
+    1. Screening agent (interviewer)
+    2. Candidate simulator (simulated candidate)
+    """
+    pool = await get_db_pool()
+    
+    # Validate vacancy exists
+    try:
+        vacancy_uuid = uuid.UUID(vacancy_id)
+    except ValueError:
+        yield f"data: {json.dumps({'type': 'error', 'message': f'Invalid vacancy ID: {vacancy_id}'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    
+    vacancy = await pool.fetchrow(
+        "SELECT id, title FROM vacancies WHERE id = $1",
+        vacancy_uuid
+    )
+    if not vacancy:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    
+    vacancy_title = vacancy["title"]
+    
+    # Get pre-screening config
+    pre_screening = await pool.fetchrow(
+        "SELECT * FROM pre_screenings WHERE vacancy_id = $1",
+        vacancy_uuid
+    )
+    if not pre_screening:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Pre-screening not configured for this vacancy'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    
+    # Build pre-screening config dict
+    questions = await pool.fetch(
+        """SELECT id, question_type, question_text, ideal_answer, position 
+           FROM pre_screening_questions 
+           WHERE pre_screening_id = $1 
+           ORDER BY question_type DESC, position ASC""",
+        pre_screening["id"]
+    )
+    
+    config = {
+        "intro": pre_screening["intro"],
+        "knockout_failed_action": pre_screening["knockout_failed_action"],
+        "final_action": pre_screening["final_action"],
+        "knockout_questions": [],
+        "qualification_questions": []
+    }
+    
+    for q in questions:
+        q_dict = {
+            "id": str(q["id"]),
+            "question_text": q["question_text"],
+            "ideal_answer": q["ideal_answer"]
+        }
+        if q["question_type"] == "knockout":
+            config["knockout_questions"].append(q_dict)
+        else:
+            config["qualification_questions"].append(q_dict)
+    
+    # Validate and convert persona
+    try:
+        persona_enum = SimulationPersona(persona)
+    except ValueError:
+        yield f"data: {json.dumps({'type': 'error', 'message': f'Invalid persona: {persona}. Valid options: qualified, borderline, unqualified, rushed, enthusiastic, custom'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    
+    # Create simulator agent
+    simulator_agent = create_simulator_agent(
+        config=config,
+        persona=persona_enum,
+        custom_persona=custom_persona,
+        vacancy_title=vacancy_title
+    )
+    
+    # Create a FRESH screening agent for simulation (not cached)
+    # This ensures no state leakage from real conversations
+    screening_instruction = build_screening_instruction(config, vacancy_title)
+    screening_agent = Agent(
+        name=f"sim_screening_{vacancy_id[:8]}",
+        model="gemini-2.5-flash",
+        instruction=screening_instruction,
+        description=f"Simulation screening agent for vacancy {vacancy_title}",
+        tools=[conversation_complete_tool],
+    )
+    
+    logger.info(f"🎭 Created fresh screening agent for simulation: {vacancy_id[:8]}")
+    
+    # Track conversation for storage
+    conversation = []
+    qa_pairs = []
+    outcome = "unknown"
+    total_turns = 0
+    
+    yield f"data: {json.dumps({'type': 'start', 'message': f'Starting simulation with {persona} persona...', 'candidate_name': candidate_name})}\n\n"
+    
+    try:
+        async for event in run_simulation(
+            screening_agent=screening_agent,
+            simulator_agent=simulator_agent,
+            candidate_name=candidate_name,
+            max_turns=20
+        ):
+            if event["type"] == "agent":
+                conversation.append({
+                    "role": "agent",
+                    "message": event["message"],
+                    "turn": event["turn"]
+                })
+                yield f"data: {json.dumps({'type': 'agent', 'message': event['message'], 'turn': event['turn']})}\n\n"
+            
+            elif event["type"] == "candidate":
+                conversation.append({
+                    "role": "candidate", 
+                    "message": event["message"],
+                    "turn": event["turn"]
+                })
+                yield f"data: {json.dumps({'type': 'candidate', 'message': event['message'], 'turn': event['turn']})}\n\n"
+            
+            elif event["type"] == "qa_pair":
+                qa_pairs.append(event["data"])
+            
+            elif event["type"] == "complete":
+                outcome = event["outcome"]
+                total_turns = event["total_turns"]
+                qa_pairs = event["qa_pairs"]
+        
+        # No database storage needed - simulations are just for live testing
+        yield f"data: {json.dumps({'type': 'complete', 'outcome': outcome, 'qa_pairs': qa_pairs, 'total_turns': total_turns})}\n\n"
+        
+        logger.info(f"✅ Simulation completed: {persona} persona, {total_turns} turns, outcome: {outcome}")
+        
+    except Exception as e:
+        logger.error(f"Error during simulation: {e}", exc_info=True)
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+    
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/vacancies/{vacancy_id}/simulate")
+async def simulate_interview(vacancy_id: str, request: SimulateInterviewRequest):
+    """
+    Run an automated interview simulation for testing.
+    
+    This creates a simulated conversation between the screening agent and
+    a candidate simulator with the specified persona.
+    
+    Personas:
+    - qualified: Ideal candidate who passes all questions
+    - borderline: Uncertain candidate who asks clarifications
+    - unqualified: Candidate who fails knockout questions
+    - rushed: Short answers, seems busy
+    - enthusiastic: Very eager, detailed answers
+    - custom: Provide your own persona in custom_persona field
+    
+    Returns SSE stream with conversation events.
+    """
+    # Generate random name if not provided
+    candidate_name = request.candidate_name
+    if not candidate_name:
+        candidate = generate_random_candidate()
+        candidate_name = candidate["name"]
+    
+    return StreamingResponse(
+        stream_interview_simulation(
+            vacancy_id=vacancy_id,
+            persona=request.persona,
+            custom_persona=request.custom_persona,
+            candidate_name=candidate_name
         ),
         media_type="text/event-stream",
         headers={

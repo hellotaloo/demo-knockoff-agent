@@ -51,6 +51,7 @@ class InterviewChannel(str, Enum):
 class QuestionAnswer(BaseModel):
     question_id: str              # e.g., "k1", "q2"
     question_text: str
+    question_type: Optional[str] = None  # "knockout" or "qualification"
     answer: str
     passed: Optional[bool] = None  # Only for knockout questions
 
@@ -190,12 +191,14 @@ Returns all applications (interview results) for a vacancy.
         {
           "question_id": "k1",
           "question_text": "Heb je een technische achtergrond?",
+          "question_type": "knockout",
           "answer": "Ja, ik heb 5 jaar ervaring als machineoperator.",
           "passed": true
         },
         {
           "question_id": "q1",
           "question_text": "Welke ervaring heb je met machines?",
+          "question_type": "qualification",
           "answer": "Bij mijn vorige werkgever was ik verantwoordelijk voor...",
           "passed": null
         }
@@ -284,6 +287,7 @@ export interface Vacancy {
 export interface QuestionAnswer {
   question_id: string;
   question_text: string;
+  question_type: string | null;  // "knockout" or "qualification"
   answer: string;
   passed: boolean | null;
 }
