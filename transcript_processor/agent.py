@@ -188,7 +188,7 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
 # Create the transcript processor agent
 transcript_processor_agent = Agent(
     name="transcript_processor",
-    model="gemini-2.5-flash",
+    model="gemini-3-pro-preview",
     instruction=INSTRUCTION,
     description="Agent for analyzing voice call transcripts and evaluating candidate responses",
 )
