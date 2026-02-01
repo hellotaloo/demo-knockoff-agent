@@ -1,0 +1,121 @@
+{
+  "type": "post_call_transcription",
+  "event_timestamp": 1738339200,
+  "data": {
+    "agent_id": "agent_8801kgb3zpyze49bd45zdb6n8w9w",
+    "conversation_id": "test_conv_001",
+    "status": "done",
+    "transcript": [
+      {
+        "role": "user",
+        "message": "Hallo, met Lulien.",
+        "time_in_call_secs": 0
+      },
+      {
+        "role": "agent",
+        "message": "Hallo! Je spreekt met Izy, de digitale assistent van ITZU. Ik bel je over je sollicitatie. Dit duurt ongeveer 3 minuten. Als alles matcht, plannen we direct een gesprek in met de recruiter! Past dat nu?",
+        "time_in_call_secs": 2
+      },
+      {
+        "role": "user",
+        "message": "Ja, dat past zeker.",
+        "time_in_call_secs": 12
+      },
+      {
+        "role": "agent",
+        "message": "Perfect! Laten we beginnen met een paar korte vragen. Ben je in het bezit van een geldige Belgische werkvergunning?",
+        "time_in_call_secs": 15
+      },
+      {
+        "role": "user",
+        "message": "Jot, dat heb ik.",
+        "time_in_call_secs": 22
+      },
+      {
+        "role": "agent",
+        "message": "Heel goed! Woon je in de regio Kortrijk of kan je er vlot geraken?",
+        "time_in_call_secs": 25
+      },
+      {
+        "role": "user",
+        "message": "Ik zie van Kortrijk zelfs.",
+        "time_in_call_secs": 30
+      },
+      {
+        "role": "agent",
+        "message": "Prima! Is fysiek zwaar werk, inclusief het tillen van grondstoffen tot 25 kilo, geen probleem voor jou?",
+        "time_in_call_secs": 33
+      },
+      {
+        "role": "user",
+        "message": "Nee, nee, dat is absoluut geen probleem.",
+        "time_in_call_secs": 40
+      },
+      {
+        "role": "agent",
+        "message": "Heel goed! Je voldoet aan alle basisvereisten. Laten we even kijken naar je ervaring. Kan je jouw ervaring als operator of productiemedewerker beschrijven, specifiek met betrekking tot het bedienen van machines of werken met recepten?",
+        "time_in_call_secs": 45
+      },
+      {
+        "role": "user",
+        "message": "Ja, tjot tjot. Ik ken al veel naar machineswerk in de fabriek. Dus ik zie dat gewoon.",
+        "time_in_call_secs": 55
+      },
+      {
+        "role": "agent",
+        "message": "Heel goed! Nauwkeurigheid en rekenvaardigheden zijn cruciaal voor het afwegen van grondstoffen. Kan je een voorbeeld geven van hoe je deze vaardigheden in een vorige functie hebt toegepast?",
+        "time_in_call_secs": 65
+      },
+      {
+        "role": "user",
+        "message": "Ja, op mijn vorige werk moest ik de beton afmaken voor in de molens. En dat moest altijd juist te zien hé!",
+        "time_in_call_secs": 75
+      },
+      {
+        "role": "agent",
+        "message": "Heel goed! Tijdens het productieproces voer je kwaliteitscontroles uit. Hoe ga je te werk om de kwaliteit te waarborgen en wat doe je als je een afwijking vaststelt?",
+        "time_in_call_secs": 85
+      },
+      {
+        "role": "user",
+        "message": "Nou ja, ik vind voor kwaliteit te waarborgen is consistentie vrij belangrijk. En het moment dat er daar wat niet klopt, had ik eigenlijk direct naar mijn teamleader of naar mijn verantwoordelijke of overleg met de collega's.",
+        "time_in_call_secs": 95
+      },
+      {
+        "role": "agent",
+        "message": "Heel goed! Je bent precies wat we zoeken. Ik wil graag een gesprek inplannen met de recruiter. Ik heb drie mogelijkheden: maandag om 10 uur, maandag om 14 uur, of dinsdag om 11 uur. Welke past jou het beste?",
+        "time_in_call_secs": 110
+      },
+      {
+        "role": "user",
+        "message": "Ah, maar ja, ik doe het dan dinsdag om 11 uur.",
+        "time_in_call_secs": 120
+      },
+      {
+        "role": "agent",
+        "message": "Perfect, ik heb je ingepland voor dinsdag om 11 uur. Je krijgt een bevestiging per SMS. Heel fijn! Bedankt voor dit gesprek en tot snel!",
+        "time_in_call_secs": 125
+      },
+      {
+        "role": "user",
+        "message": "Jo, geen probleem!",
+        "time_in_call_secs": 135
+      },
+      {
+        "role": "agent",
+        "message": "Heel fijn! Bedankt voor dit gesprek en tot snel!",
+        "time_in_call_secs": 138
+      }
+    ],
+    "metadata": {
+      "start_time_unix_secs": 1738339200,
+      "call_duration_secs": 140,
+      "cost": 450,
+      "termination_reason": ""
+    },
+    "analysis": {
+      "call_successful": "success",
+      "transcript_summary": "Successful screening call with candidate Lulien for operator position. Candidate passed all knockout questions (work permit, location, physical work) and showed relevant experience with machine operation and quality control."
+    }
+  }
+}

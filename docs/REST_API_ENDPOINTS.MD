@@ -437,7 +437,8 @@ CREATE TABLE applications (
     completed_at TIMESTAMPTZ,
     interaction_seconds INTEGER DEFAULT 0,
     synced BOOLEAN DEFAULT FALSE,
-    synced_at TIMESTAMPTZ
+    synced_at TIMESTAMPTZ,
+    conversation_id TEXT DEFAULT NULL  -- ElevenLabs conversation ID for voice calls
 );
 
 -- Question answers (stored as JSONB or separate table)
@@ -447,7 +448,9 @@ CREATE TABLE application_answers (
     question_id TEXT NOT NULL,
     question_text TEXT NOT NULL,
     answer TEXT,
-    passed BOOLEAN  -- NULL for qualification questions
+    passed BOOLEAN,  -- NULL for qualification questions
+    score INTEGER DEFAULT NULL,  -- 0-100 for qualification questions
+    source TEXT DEFAULT 'chat'  -- 'chat', 'whatsapp', or 'voice'
 );
 ```
 

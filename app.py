@@ -108,6 +108,8 @@ class QuestionAnswerResponse(BaseModel):
     question_text: str
     answer: Optional[str] = None
     passed: Optional[bool] = None
+    score: Optional[int] = None  # 0-100
+    rating: Optional[str] = None  # weak, below_average, average, good, excellent
 
 
 class ChannelsResponse(BaseModel):
@@ -144,6 +146,12 @@ class ApplicationResponse(BaseModel):
     answers: list[QuestionAnswerResponse] = []
     synced: bool
     synced_at: Optional[datetime] = None
+    # Score summary
+    overall_score: Optional[int] = None  # Average of all scores (0-100)
+    knockout_passed: int = 0  # Number of knockout questions passed
+    knockout_total: int = 0  # Total knockout questions
+    qualification_count: int = 0  # Number of qualification questions answered
+    summary: Optional[str] = None  # AI-generated executive summary
 
 
 class VacancyStatsResponse(BaseModel):
@@ -379,8 +387,25 @@ async def start_demo(request: StartDemoRequest):
     return {"status": "ok", "message": "Demo started", "phone": phone}
 
 
-async def _webhook_impl(user_id: str, incoming_msg: str) -> str:
-    """Internal implementation of webhook that can be retried."""
+async def _webhook_impl_vacancy_specific(phone_normalized: str, incoming_msg: str, vacancy_id: str, pre_screening: dict, vacancy_title: str) -> str:
+    """Handle webhook using vacancy-specific agent (for outbound screenings)."""
+    global screening_session_service
+    
+    # Get or create the same screening runner as was used for outbound
+    runner = get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
+    
+    # Run agent and get response
+    content = types.Content(role="user", parts=[types.Part(text=incoming_msg)])
+    response_text = ""
+    async for event in runner.run_async(user_id=phone_normalized, session_id=phone_normalized, new_message=content):
+        if event.is_final_response() and event.content and event.content.parts:
+            response_text = event.content.parts[0].text
+    
+    return response_text
+
+
+async def _webhook_impl_generic(user_id: str, incoming_msg: str) -> str:
+    """Handle webhook using generic agent (for demo/start-demo conversations)."""
     global session_service, runner
     
     # Get or create session for this user
@@ -410,20 +435,87 @@ async def _webhook_impl(user_id: str, incoming_msg: str) -> str:
 
 @app.post("/webhook")
 async def webhook(Body: str = Form(""), From: str = Form("")):
+    """
+    Handle incoming WhatsApp messages from Twilio.
+    
+    Routes to the correct agent based on whether there's an active outbound screening:
+    - If there's an active WhatsApp conversation for this phone, use the vacancy-specific agent
+    - Otherwise, fall back to the generic demo agent
+    """
     incoming_msg = Body
     from_number = From
     
     # Use phone number as user/session ID for conversation continuity
-    # Remove "whatsapp:" prefix and "+" to match /start-demo format
-    user_id = from_number.replace("whatsapp:", "").lstrip("+")
+    # Remove "whatsapp:" prefix and "+" to match outbound format
+    phone_normalized = from_number.replace("whatsapp:", "").lstrip("+")
     
-    # Try to run, and if we get a stale connection error, recreate the service and retry
+    pool = await get_db_pool()
+    
+    # Check for active WhatsApp conversation for this phone number
+    conv_row = await pool.fetchrow(
+        """
+        SELECT sc.vacancy_id, sc.pre_screening_id, v.title as vacancy_title
+        FROM screening_conversations sc
+        JOIN vacancies v ON v.id = sc.vacancy_id
+        WHERE sc.candidate_phone = $1 
+        AND sc.channel = 'whatsapp' 
+        AND sc.status = 'active'
+        ORDER BY sc.started_at DESC
+        LIMIT 1
+        """,
+        phone_normalized
+    )
+    
     try:
-        response_text = await _webhook_impl(user_id, incoming_msg)
+        if conv_row:
+            # Found active outbound screening - use vacancy-specific agent
+            vacancy_id = str(conv_row["vacancy_id"])
+            pre_screening_id = str(conv_row["pre_screening_id"])
+            vacancy_title = conv_row["vacancy_title"]
+            
+            # Get pre-screening config to build the agent
+            ps_row = await pool.fetchrow(
+                """
+                SELECT intro, knockout_failed_action, final_action
+                FROM pre_screenings
+                WHERE id = $1
+                """,
+                conv_row["pre_screening_id"]
+            )
+            
+            questions = await pool.fetch(
+                """
+                SELECT id, question_type, position, question_text, ideal_answer
+                FROM pre_screening_questions
+                WHERE pre_screening_id = $1
+                ORDER BY question_type, position
+                """,
+                conv_row["pre_screening_id"]
+            )
+            
+            pre_screening = {
+                "intro": ps_row["intro"],
+                "knockout_failed_action": ps_row["knockout_failed_action"],
+                "final_action": ps_row["final_action"],
+                "knockout_questions": [q for q in questions if q["question_type"] == "knockout"],
+                "qualification_questions": [q for q in questions if q["question_type"] == "qualification"],
+            }
+            
+            logger.info(f"WhatsApp webhook routing to vacancy-specific agent for {vacancy_id[:8]}")
+            response_text = await _webhook_impl_vacancy_specific(
+                phone_normalized, incoming_msg, vacancy_id, pre_screening, vacancy_title
+            )
+        else:
+            # No active outbound screening - use generic demo agent
+            logger.info(f"WhatsApp webhook routing to generic agent (no active screening found)")
+            response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
+            
     except (InterfaceError, OperationalError) as e:
-        logger.warning(f"Database connection error, recreating session service: {e}")
+        logger.warning(f"Database connection error, recreating services and retrying: {e}")
         create_session_service()
-        response_text = await _webhook_impl(user_id, incoming_msg)
+        create_screening_session_service()
+        # Retry with generic agent on connection error
+        response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
     
     # Send TwiML response
     resp = MessagingResponse()
@@ -1641,7 +1733,7 @@ async def list_applications(
     # Get applications
     query = f"""
         SELECT id, vacancy_id, candidate_name, channel, completed, qualified,
-               started_at, completed_at, interaction_seconds, synced, synced_at
+               started_at, completed_at, interaction_seconds, synced, synced_at, summary
         FROM applications
         {where_clause}
         ORDER BY started_at DESC
@@ -1655,22 +1747,44 @@ async def list_applications(
     applications = []
     for row in rows:
         answers_query = """
-            SELECT question_id, question_text, answer, passed
+            SELECT question_id, question_text, answer, passed, score, rating
             FROM application_answers
             WHERE application_id = $1
             ORDER BY id
         """
         answer_rows = await pool.fetch(answers_query, row["id"])
         
-        answers = [
-            QuestionAnswerResponse(
+        answers = []
+        total_score = 0
+        score_count = 0
+        knockout_passed = 0
+        knockout_total = 0
+        qualification_count = 0
+        
+        for a in answer_rows:
+            answers.append(QuestionAnswerResponse(
                 question_id=a["question_id"],
                 question_text=a["question_text"],
                 answer=a["answer"],
-                passed=a["passed"]
-            )
-            for a in answer_rows
-        ]
+                passed=a["passed"],
+                score=a["score"],
+                rating=a["rating"]
+            ))
+            
+            # Calculate stats
+            if a["question_id"].startswith("ko_"):
+                knockout_total += 1
+                if a["passed"]:
+                    knockout_passed += 1
+            else:
+                qualification_count += 1
+            
+            if a["score"] is not None:
+                total_score += a["score"]
+                score_count += 1
+        
+        # Calculate overall score as average
+        overall_score = round(total_score / score_count) if score_count > 0 else None
         
         applications.append(ApplicationResponse(
             id=str(row["id"]),
@@ -1684,7 +1798,12 @@ async def list_applications(
             interaction_seconds=row["interaction_seconds"],
             answers=answers,
             synced=row["synced"],
-            synced_at=row["synced_at"]
+            synced_at=row["synced_at"],
+            overall_score=overall_score,
+            knockout_passed=knockout_passed,
+            knockout_total=knockout_total,
+            qualification_count=qualification_count,
+            summary=row["summary"]
         ))
     
     return {
@@ -1708,7 +1827,7 @@ async def get_application(application_id: str):
     
     query = """
         SELECT id, vacancy_id, candidate_name, channel, completed, qualified,
-               started_at, completed_at, interaction_seconds, synced, synced_at
+               started_at, completed_at, interaction_seconds, synced, synced_at, summary
         FROM applications
         WHERE id = $1
     """
@@ -1720,22 +1839,44 @@ async def get_application(application_id: str):
     
     # Fetch answers
     answers_query = """
-        SELECT question_id, question_text, answer, passed
+        SELECT question_id, question_text, answer, passed, score, rating
         FROM application_answers
         WHERE application_id = $1
         ORDER BY id
     """
     answer_rows = await pool.fetch(answers_query, row["id"])
     
-    answers = [
-        QuestionAnswerResponse(
+    answers = []
+    total_score = 0
+    score_count = 0
+    knockout_passed = 0
+    knockout_total = 0
+    qualification_count = 0
+    
+    for a in answer_rows:
+        answers.append(QuestionAnswerResponse(
             question_id=a["question_id"],
             question_text=a["question_text"],
             answer=a["answer"],
-            passed=a["passed"]
-        )
-        for a in answer_rows
-    ]
+            passed=a["passed"],
+            score=a["score"],
+            rating=a["rating"]
+        ))
+        
+        # Calculate stats
+        if a["question_id"].startswith("ko_"):
+            knockout_total += 1
+            if a["passed"]:
+                knockout_passed += 1
+        else:
+            qualification_count += 1
+        
+        if a["score"] is not None:
+            total_score += a["score"]
+            score_count += 1
+    
+    # Calculate overall score as average
+    overall_score = round(total_score / score_count) if score_count > 0 else None
     
     return ApplicationResponse(
         id=str(row["id"]),
@@ -1749,7 +1890,12 @@ async def get_application(application_id: str):
         interaction_seconds=row["interaction_seconds"],
         answers=answers,
         synced=row["synced"],
-        synced_at=row["synced_at"]
+        synced_at=row["synced_at"],
+        overall_score=overall_score,
+        knockout_passed=knockout_passed,
+        knockout_total=knockout_total,
+        qualification_count=qualification_count,
+        summary=row["summary"]
     )
 
 
@@ -2826,8 +2972,10 @@ class OutboundScreeningRequest(BaseModel):
     """Request model for initiating outbound screening (voice or WhatsApp)."""
     vacancy_id: str  # UUID of the vacancy
     channel: InterviewChannel  # "voice" or "whatsapp"
-    phone_number: str  # E.164 format, e.g., "+31612345678"
-    candidate_name: Optional[str] = None  # Optional name for personalization
+    phone_number: str  # E.164 format, e.g., "+32412345678"
+    first_name: str  # Candidate's first name
+    last_name: str  # Candidate's last name
+    test_conversation_id: Optional[str] = None  # For testing: skip real call, use this ID
 
 
 class OutboundScreeningResponse(BaseModel):
@@ -2836,6 +2984,7 @@ class OutboundScreeningResponse(BaseModel):
     message: str
     channel: InterviewChannel
     conversation_id: Optional[str] = None
+    application_id: Optional[str] = None  # UUID of the created/updated application
     # Voice-specific fields
     call_sid: Optional[str] = None
     # WhatsApp-specific fields
@@ -2900,55 +3049,150 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     phone = request.phone_number
     if not phone.startswith("+"):
         phone = f"+{phone}"
+    phone_normalized = phone.lstrip("+")
+    
+    # Create full name from first_name + last_name
+    candidate_name = f"{request.first_name} {request.last_name}".strip()
+    
+    # Register/update candidate in applications table
+    existing_app = await pool.fetchrow(
+        """
+        SELECT id FROM applications 
+        WHERE vacancy_id = $1 AND candidate_phone = $2
+        """,
+        vacancy_uuid,
+        phone_normalized
+    )
+    
+    if existing_app:
+        # Update existing record
+        application_id = existing_app["id"]
+        await pool.execute(
+            """
+            UPDATE applications 
+            SET candidate_name = $1, channel = $2, completed = false
+            WHERE id = $3
+            """,
+            candidate_name,
+            request.channel.value,
+            application_id
+        )
+        logger.info(f"Updated candidate {application_id} for outbound screening")
+    else:
+        # Create new application record
+        app_row = await pool.fetchrow(
+            """
+            INSERT INTO applications 
+            (vacancy_id, candidate_name, candidate_phone, channel, completed, qualified)
+            VALUES ($1, $2, $3, $4, false, false)
+            RETURNING id
+            """,
+            vacancy_uuid,
+            candidate_name,
+            phone_normalized,
+            request.channel.value
+        )
+        application_id = app_row["id"]
+        logger.info(f"Created candidate {application_id} for outbound screening")
     
     # Handle based on channel
     if request.channel == InterviewChannel.VOICE:
-        return await _initiate_voice_screening(
+        response = await _initiate_voice_screening(
+            pool=pool,
             phone=phone,
-            candidate_name=request.candidate_name,
+            candidate_name=candidate_name,
             vacancy_id=str(vacancy_uuid),
             vacancy_title=row["vacancy_title"],
             pre_screening_id=str(row["pre_screening_id"]),
             elevenlabs_agent_id=row["elevenlabs_agent_id"],
+            test_conversation_id=request.test_conversation_id,
         )
+        response.application_id = str(application_id)
+        return response
     else:  # WhatsApp
-        return await _initiate_whatsapp_screening(
+        response = await _initiate_whatsapp_screening(
             pool=pool,
             phone=phone,
-            candidate_name=request.candidate_name,
+            candidate_name=candidate_name,
             vacancy_id=str(vacancy_uuid),
             vacancy_title=row["vacancy_title"],
             pre_screening_id=str(row["pre_screening_id"]),
             whatsapp_agent_id=row["whatsapp_agent_id"],
             intro=row["intro"],
         )
+        response.application_id = str(application_id)
+        return response
 
 
 async def _initiate_voice_screening(
+    pool,
     phone: str,
     candidate_name: Optional[str],
     vacancy_id: str,
     vacancy_title: str,
     pre_screening_id: str,
     elevenlabs_agent_id: Optional[str],
+    test_conversation_id: Optional[str] = None,
 ) -> OutboundScreeningResponse:
     """Initiate a voice call screening using ElevenLabs."""
     
-    if not elevenlabs_agent_id:
+    if not elevenlabs_agent_id and not test_conversation_id:
         raise HTTPException(
             status_code=400, 
             detail="Voice agent not configured. Re-publish the pre-screening with enable_voice=True"
         )
     
     try:
-        # Initiate the call with the vacancy-specific agent
-        result = initiate_outbound_call(
-            to_number=phone,
-            agent_id=elevenlabs_agent_id,
-            candidate_name=candidate_name,
-        )
+        # Normalize phone for database storage
+        phone_normalized = phone.lstrip("+")
         
-        logger.info(f"Voice screening initiated for vacancy {vacancy_id}: {result}")
+        # Abandon any existing active voice conversations for this phone number
+        abandoned = await pool.execute(
+            """
+            UPDATE screening_conversations 
+            SET status = 'abandoned'
+            WHERE candidate_phone = $1 
+            AND channel = 'voice' 
+            AND status = 'active'
+            """,
+            phone_normalized
+        )
+        if abandoned != "UPDATE 0":
+            logger.info(f"Abandoned previous voice conversations for phone {phone_normalized}: {abandoned}")
+        
+        # Test mode: skip real call, use provided conversation_id
+        if test_conversation_id:
+            result = {
+                "success": True,
+                "message": "Test mode: call simulated",
+                "conversation_id": test_conversation_id,
+                "call_sid": f"TEST_{test_conversation_id}",
+            }
+            logger.info(f"TEST MODE: Simulated call with conversation_id={test_conversation_id}")
+        else:
+            # Initiate the call with the vacancy-specific agent
+            # Note: candidate_name not passed - voice agent doesn't use names to avoid mispronunciation
+            result = initiate_outbound_call(
+                to_number=phone,
+                agent_id=elevenlabs_agent_id,
+            )
+        
+        if result.get("success"):
+            # Create conversation record in database to track the call
+            conv_row = await pool.fetchrow(
+                """
+                INSERT INTO screening_conversations 
+                (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status)
+                VALUES ($1, $2, $3, $4, $5, 'voice', 'active')
+                RETURNING id
+                """,
+                uuid.UUID(vacancy_id),
+                uuid.UUID(pre_screening_id),
+                result.get("conversation_id"),  # Use ElevenLabs conversation_id as session_id
+                candidate_name,
+                phone_normalized
+            )
+            logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, elevenlabs_conversation_id={result.get('conversation_id')}")
         
         return OutboundScreeningResponse(
             success=result["success"],
@@ -2986,6 +3230,24 @@ async def _initiate_whatsapp_screening(
         raise HTTPException(status_code=500, detail="TWILIO_WHATSAPP_NUMBER not configured")
     
     try:
+        # Normalize phone for session lookups
+        phone_normalized = phone.lstrip("+")
+        
+        # Abandon any existing active WhatsApp conversations for this phone number
+        # This ensures the webhook will route to the correct new conversation
+        abandoned = await pool.execute(
+            """
+            UPDATE screening_conversations 
+            SET status = 'abandoned'
+            WHERE candidate_phone = $1 
+            AND channel = 'whatsapp' 
+            AND status = 'active'
+            """,
+            phone_normalized
+        )
+        if abandoned != "UPDATE 0":
+            logger.info(f"Abandoned previous WhatsApp conversations for phone {phone_normalized}: {abandoned}")
+        
         # Get pre-screening questions to build the same agent as chat widget
         questions = await pool.fetch(
             """
@@ -3018,9 +3280,6 @@ async def _initiate_whatsapp_screening(
         
         # Get or create the same screening runner as chat widget uses
         runner = get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
-        
-        # Use phone as session identifier
-        phone_normalized = phone.lstrip("+")
         
         # Delete existing session if present (fresh start for each outbound screening)
         existing = await screening_session_service.get_session(
@@ -3091,6 +3350,335 @@ async def _initiate_whatsapp_screening(
     except Exception as e:
         logger.error(f"Error initiating WhatsApp screening: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send WhatsApp message: {str(e)}")
+
+
+# ============================================================================
+# ElevenLabs Post-Call Webhook
+# ============================================================================
+
+import hmac
+from hashlib import sha256
+from transcript_processor import process_transcript
+
+# HMAC secret for webhook validation (set in ElevenLabs dashboard)
+ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
+
+
+async def verify_elevenlabs_signature(request_body: bytes, signature_header: str) -> bool:
+    """
+    Verify ElevenLabs webhook HMAC signature.
+    
+    Signature format: t=timestamp,v0=hash
+    Hash is sha256 HMAC of "timestamp.request_body"
+    """
+    if not ELEVENLABS_WEBHOOK_SECRET:
+        logger.warning("ELEVENLABS_WEBHOOK_SECRET not set, skipping signature validation")
+        return True  # Allow for development without secret
+    
+    if not signature_header:
+        logger.warning("No elevenlabs-signature header provided")
+        return False
+    
+    try:
+        # Parse signature header
+        parts = signature_header.split(",")
+        timestamp = None
+        hmac_signature = None
+        
+        for part in parts:
+            if part.startswith("t="):
+                timestamp = part[2:]
+            elif part.startswith("v0="):
+                hmac_signature = part
+        
+        if not timestamp or not hmac_signature:
+            logger.warning(f"Invalid signature format: {signature_header}")
+            return False
+        
+        # Validate timestamp (within 30 minutes)
+        import time
+        tolerance = int(time.time()) - 30 * 60
+        if int(timestamp) < tolerance:
+            logger.warning("Webhook timestamp too old")
+            return False
+        
+        # Validate signature
+        payload_to_sign = f"{timestamp}.{request_body.decode('utf-8')}"
+        mac = hmac.new(
+            key=ELEVENLABS_WEBHOOK_SECRET.encode("utf-8"),
+            msg=payload_to_sign.encode("utf-8"),
+            digestmod=sha256,
+        )
+        expected = "v0=" + mac.hexdigest()
+        
+        if not hmac.compare_digest(hmac_signature, expected):
+            logger.warning("HMAC signature mismatch")
+            return False
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error validating signature: {e}")
+        return False
+
+
+from fastapi import Request
+
+
+class ElevenLabsWebhookData(BaseModel):
+    """Data object from ElevenLabs post-call webhook."""
+    agent_id: str
+    conversation_id: str
+    status: Optional[str] = None
+    transcript: list[dict] = []
+    metadata: Optional[dict] = None
+    analysis: Optional[dict] = None
+
+
+class ElevenLabsWebhookPayload(BaseModel):
+    """Full payload from ElevenLabs post-call webhook."""
+    type: str  # "post_call_transcription", "post_call_audio", "call_initiation_failure"
+    event_timestamp: int
+    data: ElevenLabsWebhookData
+
+
+@app.post("/webhook/elevenlabs")
+async def elevenlabs_webhook(request: Request):
+    """
+    Handle ElevenLabs post-call webhooks.
+    
+    Processes voice call transcripts after a call ends:
+    1. Validates HMAC signature (if ELEVENLABS_WEBHOOK_SECRET is set)
+    2. Looks up the pre-screening by agent_id
+    3. Processes the transcript using the transcript_processor agent
+    4. Stores evaluation results in application_answers
+    
+    Event types:
+    - post_call_transcription: Contains full conversation data (main handler)
+    - post_call_audio: Audio data (ignored)
+    - call_initiation_failure: Call failed to connect (logged only)
+    """
+    # Read raw body for signature validation
+    body = await request.body()
+    
+    # Validate signature
+    signature = request.headers.get("elevenlabs-signature", "")
+    if not await verify_elevenlabs_signature(body, signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    
+    # Parse payload
+    try:
+        payload_dict = json.loads(body)
+        payload = ElevenLabsWebhookPayload(**payload_dict)
+    except Exception as e:
+        logger.error(f"Failed to parse webhook payload: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid payload: {e}")
+    
+    event_type = payload.type
+    data = payload.data
+    
+    logger.info(f"ElevenLabs webhook received: type={event_type}, agent_id={data.agent_id}, conversation_id={data.conversation_id}")
+    
+    # Handle based on event type
+    if event_type == "call_initiation_failure":
+        logger.warning(f"Call initiation failed for conversation {data.conversation_id}")
+        return {"status": "received", "action": "logged"}
+    
+    if event_type == "post_call_audio":
+        logger.info(f"Audio webhook received for conversation {data.conversation_id} (ignored)")
+        return {"status": "received", "action": "ignored"}
+    
+    if event_type != "post_call_transcription":
+        logger.warning(f"Unknown webhook type: {event_type}")
+        return {"status": "received", "action": "unknown_type"}
+    
+    # Process transcription webhook
+    pool = await get_db_pool()
+    
+    # Look up pre-screening by ElevenLabs agent_id
+    ps_row = await pool.fetchrow(
+        """
+        SELECT ps.id as pre_screening_id, ps.vacancy_id, v.title as vacancy_title
+        FROM pre_screenings ps
+        JOIN vacancies v ON v.id = ps.vacancy_id
+        WHERE ps.elevenlabs_agent_id = $1
+        """,
+        data.agent_id
+    )
+    
+    if not ps_row:
+        logger.error(f"No pre-screening found for agent_id: {data.agent_id}")
+        raise HTTPException(status_code=404, detail=f"No pre-screening found for agent: {data.agent_id}")
+    
+    pre_screening_id = ps_row["pre_screening_id"]
+    vacancy_id = ps_row["vacancy_id"]
+    vacancy_title = ps_row["vacancy_title"]
+    
+    logger.info(f"Processing transcript for vacancy '{vacancy_title}' (pre-screening {pre_screening_id})")
+    
+    # Get pre-screening questions
+    questions = await pool.fetch(
+        """
+        SELECT id, question_type, position, question_text, ideal_answer
+        FROM pre_screening_questions
+        WHERE pre_screening_id = $1
+        ORDER BY question_type, position
+        """,
+        pre_screening_id
+    )
+    
+    # Build question lists with proper IDs (ko_1, qual_1, etc.)
+    knockout_questions = []
+    qualification_questions = []
+    ko_idx = 1
+    qual_idx = 1
+    
+    for q in questions:
+        q_dict = {
+            "db_id": str(q["id"]),
+            "question_text": q["question_text"],
+            "ideal_answer": q["ideal_answer"],
+        }
+        if q["question_type"] == "knockout":
+            q_dict["id"] = f"ko_{ko_idx}"
+            knockout_questions.append(q_dict)
+            ko_idx += 1
+        else:
+            q_dict["id"] = f"qual_{qual_idx}"
+            qualification_questions.append(q_dict)
+            qual_idx += 1
+    
+    # Process transcript with the agent
+    result = await process_transcript(
+        transcript=data.transcript,
+        knockout_questions=knockout_questions,
+        qualification_questions=qualification_questions,
+    )
+    
+    # Extract metadata
+    metadata = data.metadata or {}
+    call_duration = metadata.get("call_duration_secs", 0)
+    
+    # Try to find registered candidate by phone number from screening_conversations
+    screening_conv = await pool.fetchrow(
+        """
+        SELECT candidate_phone, candidate_name 
+        FROM screening_conversations 
+        WHERE session_id = $1 AND channel = 'voice'
+        """,
+        data.conversation_id
+    )
+    
+    candidate_phone = screening_conv["candidate_phone"] if screening_conv else None
+    candidate_name = screening_conv["candidate_name"] if screening_conv else "Voice Candidate"
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Try to find existing application by phone number (registered candidate)
+            existing_app = None
+            if candidate_phone:
+                existing_app = await conn.fetchrow(
+                    """
+                    SELECT id FROM applications 
+                    WHERE vacancy_id = $1 AND candidate_phone = $2 AND completed = false
+                    """,
+                    vacancy_id,
+                    candidate_phone
+                )
+            
+            if existing_app:
+                # Update existing application
+                application_id = existing_app["id"]
+                await conn.execute(
+                    """
+                    UPDATE applications 
+                    SET completed = true, qualified = $1, interaction_seconds = $2, 
+                        completed_at = NOW(), conversation_id = $3, channel = 'voice',
+                        summary = $4
+                    WHERE id = $5
+                    """,
+                    result.overall_passed,
+                    call_duration,
+                    data.conversation_id,
+                    result.summary,
+                    application_id
+                )
+                logger.info(f"Updated existing application {application_id} for phone {candidate_phone}")
+            else:
+                # Create new application record
+                app_row = await conn.fetchrow(
+                    """
+                    INSERT INTO applications 
+                    (vacancy_id, candidate_name, candidate_phone, channel, completed, qualified, 
+                     interaction_seconds, completed_at, conversation_id, summary)
+                    VALUES ($1, $2, $3, 'voice', true, $4, $5, NOW(), $6, $7)
+                    RETURNING id
+                    """,
+                    vacancy_id,
+                    candidate_name,
+                    candidate_phone,
+                    result.overall_passed,
+                    call_duration,
+                    data.conversation_id,
+                    result.summary
+                )
+                application_id = app_row["id"]
+                logger.info(f"Created new application {application_id}")
+            
+            # Store knockout results
+            for kr in result.knockout_results:
+                await conn.execute(
+                    """
+                    INSERT INTO application_answers 
+                    (application_id, question_id, question_text, answer, passed, score, rating, source)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'voice')
+                    """,
+                    application_id,
+                    kr.id,
+                    kr.question_text,
+                    kr.answer,
+                    kr.passed,
+                    kr.score,
+                    kr.rating
+                )
+            
+            # Store qualification results
+            for qr in result.qualification_results:
+                await conn.execute(
+                    """
+                    INSERT INTO application_answers 
+                    (application_id, question_id, question_text, answer, passed, score, rating, source)
+                    VALUES ($1, $2, $3, $4, NULL, $5, $6, 'voice')
+                    """,
+                    application_id,
+                    qr.id,
+                    qr.question_text,
+                    qr.answer,
+                    qr.score,
+                    qr.rating
+                )
+            
+            # Update screening_conversations status to completed
+            # The session_id in screening_conversations is the ElevenLabs conversation_id
+            await conn.execute(
+                """
+                UPDATE screening_conversations 
+                SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+                WHERE session_id = $1 AND channel = 'voice'
+                """,
+                data.conversation_id
+            )
+    
+    logger.info(f"Stored application {application_id} with {len(result.knockout_results)} knockout and {len(result.qualification_results)} qualification answers")
+    
+    return {
+        "status": "processed",
+        "application_id": str(application_id),
+        "overall_passed": result.overall_passed,
+        "knockout_results": len(result.knockout_results),
+        "qualification_results": len(result.qualification_results),
+        "notes": result.notes,
+        "summary": result.summary
+    }
 
 
 # ============================================================================
