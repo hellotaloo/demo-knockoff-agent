@@ -209,8 +209,8 @@ Wacht op antwoord, ga dan naar {next_step_desc}.""")
     # =========================================================================
     # STAP NIET-GESLAAGD: Failure path
     # =========================================================================
-    steps.append(f"""=== STAP NIET-GESLAAGD ===
-Zeg: "Ik begrijp het. {knockout_failed_action}"
+    steps.append("""=== STAP NIET-GESLAAGD ===
+Zeg: "Ik begrijp het. Helaas voldoe je niet aan de basisvereisten. Interesse in andere matches?"
 Vraag: "Zou je interesse hebben in andere vacatures die beter bij jouw situatie passen?"
 - Als JA: Zeg "Super! Dan neemt een collega contact op om te kijken wat er mogelijk is. Bedankt voor je tijd!"
 - Als NEE: Zeg "Geen probleem! Bedankt voor je tijd en veel succes!"
