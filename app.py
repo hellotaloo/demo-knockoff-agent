@@ -2295,8 +2295,8 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
                     """
                     INSERT INTO applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
-                     completed_at, summary, status)
-                    VALUES ($1, $2, $3, 'cv', $4, NOW(), $5, $6)
+                     completed_at, summary, status, is_test)
+                    VALUES ($1, $2, $3, 'cv', $4, NOW(), $5, $6, $7)
                     RETURNING id, started_at, completed_at
                     """,
                     vacancy_uuid,
@@ -2304,15 +2304,16 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
                     request.candidate_phone,
                     knockout_all_passed,  # True if all knockouts passed
                     result.cv_summary,
-                    application_status
+                    application_status,
+                    True  # CV applications are always in test mode for now
                 )
             else:
                 app_row = await conn.fetchrow(
                     """
                     INSERT INTO applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
-                     summary, status)
-                    VALUES ($1, $2, $3, 'cv', $4, $5, $6)
+                     summary, status, is_test)
+                    VALUES ($1, $2, $3, 'cv', $4, $5, $6, $7)
                     RETURNING id, started_at, completed_at
                     """,
                     vacancy_uuid,
@@ -2320,12 +2321,13 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
                     request.candidate_phone,
                     False,  # Not qualified - knockouts need clarification
                     result.cv_summary,
-                    application_status
+                    application_status,
+                    True  # CV applications are always in test mode for now
                 )
             application_id = app_row["id"]
             started_at = app_row["started_at"]
             
-            logger.info(f"Created CV application {application_id} for {request.candidate_name}")
+            logger.info(f"Created CV application {application_id} for {request.candidate_name} (is_test=True)")
             
             # Insert knockout answers
             # passed=true if CV provides evidence for the knockout question

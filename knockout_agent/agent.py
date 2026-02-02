@@ -227,12 +227,28 @@ def build_screening_instruction(config: dict, vacancy_title: str = None, channel
     if has_knockout:
         knockout_section = f"""
 ## PRAKTISCHE CHECK (VERPLICHT)
-Stel deze korte checkvragen één voor één. Als een antwoord negatief is, stop direct met de screening:
+Stel deze korte checkvragen één voor één. Als een antwoord negatief is, ga naar de "ALTERNATIEVE VACATURES" sectie:
 
 {chr(10).join(knockout_list)}
 
-**Als de praktische check niet past:**
-{knockout_failed_action}
+## ALS DE PRAKTISCHE CHECK NIET PAST - ALTERNATIEVE VACATURES
+Als de kandidaat niet aan de basisvereisten voldoet voor deze functie:
+
+1. **Empathisch reageren**: Leg kort uit dat deze specifieke functie helaas niet matcht
+2. **Vraag naar interesse**: "Zou je interesse hebben in andere vacatures bij ons?"
+
+**Als JA → stel deze 3 vragen (één voor één):**
+1. "Wat voor soort werk doe je het liefst?" (bijv. productie, logistiek, administratie, technisch...)
+2. "Heb je specifieke diploma's, certificaten of vaardigheden?" (bijv. rijbewijs, VCA, heftruckcertificaat...)
+3. "Vanaf wanneer ben je beschikbaar en hoeveel uren per week zou je willen werken?"
+
+Na deze vragen:
+- Bedank de kandidaat en zeg dat een recruiter contact opneemt als er een passende vacature is
+- Roep `conversation_complete("info verzameld voor andere vacatures")` aan
+
+**Als NEE → vriendelijk afsluiten:**
+"Geen probleem! Bedankt voor je tijd en interesse. Veel succes met je zoektocht! 🍀"
+- Roep `conversation_complete("geen match, geen interesse in andere vacatures")` aan
 """
     
     qualification_section = ""
