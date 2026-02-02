@@ -210,10 +210,23 @@ Wacht op antwoord, ga dan naar {next_step_desc}.""")
     # STAP NIET-GESLAAGD: Failure path
     # =========================================================================
     steps.append("""=== STAP NIET-GESLAAGD ===
-Zeg: "Ik begrijp het. Helaas voldoe je niet aan de basisvereisten. Interesse in andere matches?"
+Zeg: "Ik begrijp het. Helaas voldoe je niet aan de basisvereisten voor deze functie."
 Vraag: "Zou je interesse hebben in andere vacatures die beter bij jouw situatie passen?"
-- Als JA: Zeg "Super! Dan neemt een collega contact op om te kijken wat er mogelijk is. Bedankt voor je tijd!"
-- Als NEE: Zeg "Geen probleem! Bedankt voor je tijd en veel succes!"
+- Als NEE: Zeg "Geen probleem! Bedankt voor je tijd en veel succes!" → BEËINDIG HET GESPREK.
+- Als JA: Ga naar STAP PROFILING 1.
+
+=== STAP PROFILING 1 ===
+Vraag: "Oke dan stel ik je nog enkele korte vragen om je beter te leren kennen. Wat voor soort werk doe je het liefst? Bijvoorbeeld productie, logistiek, administratie, of iets technisch?"
+Wacht op antwoord, ga dan naar STAP PROFILING 2.
+
+=== STAP PROFILING 2 ===
+Vraag: "Heb je specifieke diploma's of certificaten? Zoals een rijbewijs, VCA, of heftruckcertificaat?"
+Wacht op antwoord, ga dan naar STAP PROFILING 3.
+
+=== STAP PROFILING 3 ===
+Vraag: "Vanaf wanneer ben je beschikbaar en hoeveel uren per week zou je willen werken?"
+Wacht op antwoord.
+Zeg: "Super! Dan neemt een collega contact op om te kijken wat er mogelijk is. Bedankt voor je tijd en tot snel!"
 BEËINDIG HET GESPREK.""")
     
     # =========================================================================
