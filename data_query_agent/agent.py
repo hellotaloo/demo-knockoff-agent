@@ -26,7 +26,8 @@ async def get_pool() -> asyncpg.Pool:
             raise RuntimeError("DATABASE_URL environment variable is required")
         # Convert SQLAlchemy URL to asyncpg format if needed
         raw_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
-        _db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=5)
+        # Disable statement cache for Supabase transaction-level pooling compatibility
+        _db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=5, statement_cache_size=0)
     return _db_pool
 
 

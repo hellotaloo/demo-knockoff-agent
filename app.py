@@ -299,7 +299,11 @@ session_service = None
 def create_session_service():
     """Create a new DatabaseSessionService instance."""
     global session_service
-    session_service = DatabaseSessionService(db_url=DATABASE_URL)
+    # Disable statement cache for Supabase transaction-level pooling compatibility
+    session_service = DatabaseSessionService(
+        db_url=DATABASE_URL,
+        connect_args={"statement_cache_size": 0}
+    )
     logger.info("Created session service")
 
 @asynccontextmanager
@@ -971,7 +975,11 @@ def should_use_fast_agent(session, message: str) -> bool:
 def create_interview_session_service():
     """Create interview generator session service and runners."""
     global interview_session_service, interview_runner, interview_editor_runner
-    interview_session_service = DatabaseSessionService(db_url=DATABASE_URL)
+    # Disable statement cache for Supabase transaction-level pooling compatibility
+    interview_session_service = DatabaseSessionService(
+        db_url=DATABASE_URL,
+        connect_args={"statement_cache_size": 0}
+    )
     
     # Full thinking agent for initial generation
     interview_runner = Runner(
@@ -1841,7 +1849,11 @@ analyst_runner = None
 def create_analyst_session_service():
     """Create recruiter analyst session service and runner."""
     global analyst_session_service, analyst_runner
-    analyst_session_service = DatabaseSessionService(db_url=DATABASE_URL)
+    # Disable statement cache for Supabase transaction-level pooling compatibility
+    analyst_session_service = DatabaseSessionService(
+        db_url=DATABASE_URL,
+        connect_args={"statement_cache_size": 0}
+    )
     analyst_runner = Runner(
         agent=recruiter_analyst_agent,
         app_name="recruiter_analyst",
@@ -3820,7 +3832,11 @@ screening_runners: dict[str, Runner] = {}  # Cache runners by vacancy_id
 def create_screening_session_service():
     """Create screening chat session service."""
     global screening_session_service
-    screening_session_service = DatabaseSessionService(db_url=DATABASE_URL)
+    # Disable statement cache for Supabase transaction-level pooling compatibility
+    screening_session_service = DatabaseSessionService(
+        db_url=DATABASE_URL,
+        connect_args={"statement_cache_size": 0}
+    )
     logger.info("Created screening chat session service")
 
 
