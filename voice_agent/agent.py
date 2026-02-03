@@ -45,6 +45,21 @@ def get_elevenlabs_client() -> ElevenLabs:
 
 
 # =============================================================================
+# Voice Agent Defaults (aligned with ElevenLabs dashboard)
+# =============================================================================
+# LLM: GPT-OSS-120B, temperature more expressive, reasoning effort medium, no token limit
+# Voice: set ELEVENLABS_VOICE_ID for e.g. "Hans Claesen - Professional Narrator"
+# TTS: Turbo, stability more expressive, speed slightly faster, similarity low
+DEFAULT_LLM_MODEL = "qwen3-30b-a3b"
+DEFAULT_LLM_TEMPERATURE = 0.5  # More expressive (0 = deterministic, 1 = creative)
+## DEFAULT_LLM_REASONING_EFFORT = "medium"  # default | low | medium | high
+DEFAULT_LLM_MAX_TOKENS = -1  # No limit
+DEFAULT_TTS_MODEL_ID = "eleven_turbo_v2_5"  # Turbo family
+DEFAULT_TTS_STABILITY = 1  # More expressive (0 = expressive, 1 = consistent)
+DEFAULT_TTS_SPEED = 1  # Slightly faster than 1.0
+DEFAULT_TTS_SIMILARITY_BOOST = 1  # Low (0 = low, 1 = high)
+
+# =============================================================================
 # Dynamic Vacancy-Specific Agent Creation
 # =============================================================================
 
@@ -145,9 +160,9 @@ def build_voice_prompt(config: dict, vacancy_title: str = None) -> str:
     
     steps.append(f"""=== STAP {current_step}: WACHT OP ANTWOORD ===
 Dit is een uitgaand gesprek. Wacht tot de kandidaat opneemt en iets zegt zoals "Hallo".
-Stel jezelf dan voor: "Hallo! Met Izy, de digitale assistent van ITZU. Ik bel je over je sollicitatie. Het duurt maar {estimated_minutes} {"minuutje" if estimated_minutes == 1 else "minuutjes"}. Past dat nu?"
+Stel jezelf dan voor: "Hallo, met de digitale assistent van ITZU. ik bel je even in verband met je sollicitatie. Past het nu, of bel ik je straks terug?"
 - Als NEE: Vraag wanneer je kunt terugbellen en sluit af.
-- Als JA: Ga naar STAP {first_question_step}.""")
+- Als JA:: Antwoord: "oke super dan kunnen we beginnen " en ga naar STAP {first_question_step}.""")
     
     current_step += 1
     
@@ -250,7 +265,7 @@ BEËINDIG HET GESPREK.""")
     # =========================================================================
     steps_text = "\n\n".join(steps)
     
-    prompt = f"""Je bent een vriendelijke digitale recruiter van ITZU. Je voert een telefonische screening uit.
+    prompt = f"""Je bent een vriendelijke eerder informele recruiter van ITZU. Je voert een telefonische screening uit.
 
 Huidige datum en tijd: {timestamp}{vacancy_header}
 
@@ -259,14 +274,13 @@ BELANGRIJK: Volg dit script STAP VOOR STAP in exact deze volgorde. Sla GEEN stap
 {steps_text}
 
 === STIJLREGELS ===
-- Spreek Vlaams Nederlands (nl-BE)
-- Als de kandidaat in een andere taal antwoordt, schakel dan direct over naar die taal
-- Korte, natuurlijke zinnen - dit is een telefoongesprek
+Pas je korte bevestigende reactie aan op de kwaliteit en zekerheid van het antwoord van de kandidaat:
+- Bij een onzeker of matig antwoord: gebruik een neutrale bevestiging (bv. “oké”, “goed”, “duidelijk”).
+- Bij een gewoon, voldoende antwoord: gebruik een positieve, informele bevestiging (bv. “oké”, “top”, “allright”, “yes”).
+- Bij een zeer sterk of overtuigend antwoord: gebruik een duidelijk positieve reactie (bv. “super”, “heel goed”, “klinkt sterk”).
+Varieer in woordkeuze en ga daarna vlot verder met de volgende vraag.
+- Gebruik informele spreektaal zoals: "hey", "oke", “yes”, “top”).
 - Wacht altijd op antwoord voor de volgende vraag
-- Wees warm en professioneel
-- Gebruik NOOIT de naam van de kandidaat (namen worden vaak verkeerd uitgesproken)
-- Spreek duidelijk en niet te snel
-- Verzin GEEN extra vragen - stel ALLEEN de vragen die hierboven staan
 """
     
     return prompt
@@ -329,7 +343,10 @@ def create_or_update_voice_agent(
         "agent": {
             "prompt": {
                 "prompt": prompt,
-                "llm": "qwen3-30b-a3b",
+                "llm": os.environ.get("ELEVENLABS_LLM_MODEL", DEFAULT_LLM_MODEL),
+                "temperature": float(os.environ.get("ELEVENLABS_LLM_TEMPERATURE", DEFAULT_LLM_TEMPERATURE)),
+                #"reasoning_effort": os.environ.get("ELEVENLABS_LLM_REASONING_EFFORT", DEFAULT_LLM_REASONING_EFFORT),
+                "max_tokens": int(os.environ.get("ELEVENLABS_LLM_MAX_TOKENS", str(DEFAULT_LLM_MAX_TOKENS))),
             },
             "first_message": "",
             "language": "nl",
@@ -338,8 +355,11 @@ def create_or_update_voice_agent(
             "text_only": False,
         },
         "tts": {
-            "model_id": "eleven_turbo_v2_5",
+            "model_id": os.environ.get("ELEVENLABS_TTS_MODEL_ID", DEFAULT_TTS_MODEL_ID),
             "voice_id": os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
+            "stability": float(os.environ.get("ELEVENLABS_TTS_STABILITY", str(DEFAULT_TTS_STABILITY))),
+            "speed": float(os.environ.get("ELEVENLABS_TTS_SPEED", str(DEFAULT_TTS_SPEED))),
+            "similarity_boost": float(os.environ.get("ELEVENLABS_TTS_SIMILARITY_BOOST", str(DEFAULT_TTS_SIMILARITY_BOOST))),
         },
         "asr": {
             "user_input_audio_format": "ulaw_8000",
