@@ -2569,95 +2569,44 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
     Creates pre_screening record and inserts questions into pre_screening_questions.
     Also updates vacancy status to 'agent_created'.
     """
+    from src.repositories import PreScreeningRepository, VacancyRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
+
     # Verify vacancy exists
-    vacancy_exists = await pool.fetchval(
-        "SELECT 1 FROM vacancies WHERE id = $1",
-        vacancy_uuid
-    )
-    if not vacancy_exists:
+    vacancy_repo = VacancyRepository(pool)
+    if not await vacancy_repo.exists(vacancy_uuid):
         raise HTTPException(status_code=404, detail="Vacancy not found")
-    
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Check if pre-screening already exists for this vacancy
-            existing_id = await conn.fetchval(
-                "SELECT id FROM pre_screenings WHERE vacancy_id = $1",
-                vacancy_uuid
-            )
-            
-            if existing_id:
-                # Update existing pre-screening
-                await conn.execute(
-                    """
-                    UPDATE pre_screenings 
-                    SET intro = $1, knockout_failed_action = $2, final_action = $3, 
-                        status = 'active', updated_at = NOW()
-                    WHERE id = $4
-                    """,
-                    config.intro, config.knockout_failed_action, config.final_action, existing_id
-                )
-                pre_screening_id = existing_id
-                
-                # Delete existing questions (will be replaced)
-                await conn.execute(
-                    "DELETE FROM pre_screening_questions WHERE pre_screening_id = $1",
-                    pre_screening_id
-                )
-            else:
-                # Create new pre-screening
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
-                    VALUES ($1, $2, $3, $4, 'active')
-                    RETURNING id
-                    """,
-                    vacancy_uuid, config.intro, config.knockout_failed_action, config.final_action
-                )
-                pre_screening_id = row["id"]
-            
-            # Insert knockout questions
-            for position, q in enumerate(config.knockout_questions):
-                is_approved = q.id in config.approved_ids
-                await conn.execute(
-                    """
-                    INSERT INTO pre_screening_questions 
-                    (pre_screening_id, question_type, position, question_text, is_approved)
-                    VALUES ($1, 'knockout', $2, $3, $4)
-                    """,
-                    pre_screening_id, position, q.question, is_approved
-                )
-            
-            # Insert qualification questions (with ideal_answer)
-            for position, q in enumerate(config.qualification_questions):
-                is_approved = q.id in config.approved_ids
-                await conn.execute(
-                    """
-                    INSERT INTO pre_screening_questions 
-                    (pre_screening_id, question_type, position, question_text, ideal_answer, is_approved)
-                    VALUES ($1, 'qualification', $2, $3, $4, $5)
-                    """,
-                    pre_screening_id, position, q.question, q.ideal_answer, is_approved
-                )
-            
-            # Update vacancy status
-            await conn.execute(
-                "UPDATE vacancies SET status = 'screening_active' WHERE id = $1",
-                vacancy_uuid
-            )
-    
+
+    # Prepare question lists
+    knockout_questions = [{"id": q.id, "question": q.question} for q in config.knockout_questions]
+    qualification_questions = [
+        {"id": q.id, "question": q.question, "ideal_answer": q.ideal_answer}
+        for q in config.qualification_questions
+    ]
+
+    # Save pre-screening
+    ps_repo = PreScreeningRepository(pool)
+    pre_screening_id = await ps_repo.upsert(
+        vacancy_uuid,
+        config.intro,
+        config.knockout_failed_action,
+        config.final_action,
+        knockout_questions,
+        qualification_questions,
+        config.approved_ids
+    )
+
     # Invalidate cached screening runner so next chat uses updated questions
     if vacancy_id in screening_runners:
         del screening_runners[vacancy_id]
         logger.info(f"🔄 Cleared cached screening runner for vacancy {vacancy_id[:8]}...")
-    
+
     return {
         "status": "success",
         "message": "Pre-screening configuration saved",
@@ -2671,45 +2620,31 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
 async def get_pre_screening(vacancy_id: str):
     """
     Get pre-screening configuration for a vacancy.
-    
+
     Always creates/restores an interview session pre-populated with the saved
     questions, returning session_id and interview for use with /interview/feedback.
     """
+    from src.repositories import PreScreeningRepository
     global interview_session_service
     pool = await get_db_pool()
-    
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
+
     # Get pre-screening
-    ps_row = await pool.fetchrow(
-        """
-        SELECT id, vacancy_id, intro, knockout_failed_action, final_action, status, 
-               created_at, updated_at, published_at, is_online, elevenlabs_agent_id, whatsapp_agent_id
-        FROM pre_screenings
-        WHERE vacancy_id = $1
-        """,
-        vacancy_uuid
-    )
-    
+    ps_repo = PreScreeningRepository(pool)
+    ps_row = await ps_repo.get_for_vacancy(vacancy_uuid)
+
     if not ps_row:
         raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
-    
+
     pre_screening_id = ps_row["id"]
-    
-    # Get questions (including ideal_answer for qualification questions)
-    question_rows = await pool.fetch(
-        """
-        SELECT id, question_type, position, question_text, ideal_answer, is_approved
-        FROM pre_screening_questions
-        WHERE pre_screening_id = $1
-        ORDER BY question_type, position
-        """,
-        pre_screening_id
-    )
+
+    # Get questions
+    question_rows = await ps_repo.get_questions(pre_screening_id)
     
     # Build interview structure and response lists with consistent ko_1/qual_1 IDs
     # This ensures the frontend and session use the same IDs for reordering
@@ -2835,42 +2770,27 @@ async def get_pre_screening(vacancy_id: str):
 @app.delete("/vacancies/{vacancy_id}/pre-screening")
 async def delete_pre_screening(vacancy_id: str):
     """Delete pre-screening configuration for a vacancy. Resets status to 'new'."""
+    from src.repositories import PreScreeningRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
-    # Check if pre-screening exists
-    pre_screening_id = await pool.fetchval(
-        "SELECT id FROM pre_screenings WHERE vacancy_id = $1",
-        vacancy_uuid
-    )
-    
-    if not pre_screening_id:
+
+    # Delete pre-screening
+    ps_repo = PreScreeningRepository(pool)
+    deleted = await ps_repo.delete(vacancy_uuid)
+
+    if not deleted:
         raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
-    
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Delete pre-screening (questions cascade automatically)
-            await conn.execute(
-                "DELETE FROM pre_screenings WHERE id = $1",
-                pre_screening_id
-            )
-            
-            # Reset vacancy status
-            await conn.execute(
-                "UPDATE vacancies SET status = 'new' WHERE id = $1",
-                vacancy_uuid
-            )
-    
+
     # Invalidate cached screening runner
     if vacancy_id in screening_runners:
         del screening_runners[vacancy_id]
         logger.info(f"🔄 Cleared cached screening runner for vacancy {vacancy_id[:8]}...")
-    
+
     return {
         "status": "success",
         "message": "Pre-screening configuration deleted",
@@ -2883,58 +2803,42 @@ async def delete_pre_screening(vacancy_id: str):
 async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningRequest):
     """
     Publish a pre-screening configuration by creating the AI agents.
-    
+
     This creates:
     - ElevenLabs voice agent (if enable_voice=True)
     - WhatsApp agent (if enable_whatsapp=True)
-    
+
     The agents are created with the current pre-screening questions and configuration.
     After publishing, the pre-screening can be set online/offline.
     """
+    from src.repositories import PreScreeningRepository, VacancyRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
+
     # Get vacancy title
-    vacancy_row = await pool.fetchrow(
-        "SELECT title FROM vacancies WHERE id = $1",
-        vacancy_uuid
-    )
+    vacancy_repo = VacancyRepository(pool)
+    vacancy_row = await vacancy_repo.get_basic_info(vacancy_uuid)
     if not vacancy_row:
         raise HTTPException(status_code=404, detail=f"Vacancy not found: {vacancy_id}")
-    
+
     vacancy_title = vacancy_row["title"]
-    
-    # Get pre-screening with questions and existing agent IDs
-    ps_row = await pool.fetchrow(
-        """
-        SELECT id, vacancy_id, intro, knockout_failed_action, final_action, status,
-               elevenlabs_agent_id, whatsapp_agent_id
-        FROM pre_screenings
-        WHERE vacancy_id = $1
-        """,
-        vacancy_uuid
-    )
-    
+
+    # Get pre-screening with questions
+    ps_repo = PreScreeningRepository(pool)
+    ps_row = await ps_repo.get_for_vacancy(vacancy_uuid)
+
     if not ps_row:
         raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
-    
+
     pre_screening_id = ps_row["id"]
-    
+
     # Get questions
-    question_rows = await pool.fetch(
-        """
-        SELECT id, question_type, position, question_text, ideal_answer, is_approved
-        FROM pre_screening_questions
-        WHERE pre_screening_id = $1
-        ORDER BY question_type, position
-        """,
-        pre_screening_id
-    )
+    question_rows = await ps_repo.get_questions(pre_screening_id)
     
     # Build config for agent creation
     knockout_questions = []
@@ -2991,22 +2895,16 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
     
     # Update database with agent IDs and published_at, set online
     published_at = datetime.utcnow()
-    
-    await pool.execute(
-        """
-        UPDATE pre_screenings 
-        SET published_at = $1, 
-            elevenlabs_agent_id = $2, 
-            whatsapp_agent_id = $3,
-            is_online = TRUE,
-            voice_enabled = $5,
-            whatsapp_enabled = $6,
-            cv_enabled = $7,
-            updated_at = NOW()
-        WHERE id = $4
-        """,
-        published_at, elevenlabs_agent_id, whatsapp_agent_id, pre_screening_id,
-        request.enable_voice, request.enable_whatsapp, request.enable_cv
+
+    await ps_repo.update_publish_state(
+        pre_screening_id,
+        published_at,
+        elevenlabs_agent_id,
+        whatsapp_agent_id,
+        is_online=True,
+        voice_enabled=request.enable_voice,
+        whatsapp_enabled=request.enable_whatsapp,
+        cv_enabled=request.enable_cv
     )
     
     return {
@@ -3023,46 +2921,38 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
 async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequest):
     """
     Update the online/offline status and channel toggles for a pre-screening.
-    
+
     All fields are optional - only provided fields will be updated.
-    
+
     - is_online: Toggle the overall online/offline status (requires published pre-screening)
     - voice_enabled: Toggle voice channel (creates agent if not exists)
     - whatsapp_enabled: Toggle WhatsApp channel (creates agent if not exists)
     - cv_enabled: Toggle CV analysis channel
     """
+    from src.repositories import PreScreeningRepository, VacancyRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
+
     # Get vacancy title (needed for agent creation)
-    vacancy_row = await pool.fetchrow(
-        "SELECT title FROM vacancies WHERE id = $1",
-        vacancy_uuid
-    )
+    vacancy_repo = VacancyRepository(pool)
+    vacancy_row = await vacancy_repo.get_basic_info(vacancy_uuid)
     if not vacancy_row:
         raise HTTPException(status_code=404, detail=f"Vacancy not found: {vacancy_id}")
-    
+
     vacancy_title = vacancy_row["title"]
-    
+
     # Get pre-screening
-    ps_row = await pool.fetchrow(
-        """
-        SELECT id, published_at, elevenlabs_agent_id, whatsapp_agent_id, is_online,
-               voice_enabled, whatsapp_enabled, cv_enabled, intro, knockout_failed_action, final_action
-        FROM pre_screenings
-        WHERE vacancy_id = $1
-        """,
-        vacancy_uuid
-    )
-    
+    ps_repo = PreScreeningRepository(pool)
+    ps_row = await ps_repo.get_for_vacancy(vacancy_uuid)
+
     if not ps_row:
         raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
-    
+
     pre_screening_id = ps_row["id"]
     elevenlabs_agent_id = ps_row["elevenlabs_agent_id"]
     whatsapp_agent_id = ps_row["whatsapp_agent_id"]
@@ -3070,15 +2960,7 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     # If enabling voice and no agent exists, create one
     if request.voice_enabled and not elevenlabs_agent_id:
         # Build config for agent creation
-        question_rows = await pool.fetch(
-            """
-            SELECT id, question_type, position, question_text, ideal_answer, is_approved
-            FROM pre_screening_questions
-            WHERE pre_screening_id = $1
-            ORDER BY question_type, position
-            """,
-            pre_screening_id
-        )
+        question_rows = await ps_repo.get_questions(pre_screening_id)
         
         knockout_questions = []
         qualification_questions = []
@@ -3109,12 +2991,9 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
                 vacancy_title=vacancy_title
             )
             logger.info(f"Created ElevenLabs agent for vacancy {vacancy_id}: {elevenlabs_agent_id}")
-            
+
             # Update the agent ID in database
-            await pool.execute(
-                "UPDATE pre_screenings SET elevenlabs_agent_id = $1, updated_at = NOW() WHERE id = $2",
-                elevenlabs_agent_id, pre_screening_id
-            )
+            await ps_repo.update_agent_id(pre_screening_id, "elevenlabs", elevenlabs_agent_id)
         except Exception as e:
             logger.error(f"Failed to create ElevenLabs agent: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create voice agent: {str(e)}")
@@ -3123,15 +3002,7 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     if request.whatsapp_enabled and not whatsapp_agent_id:
         # Build config for agent creation (reuse if already built above)
         if 'config' not in locals():
-            question_rows = await pool.fetch(
-                """
-                SELECT id, question_type, position, question_text, ideal_answer, is_approved
-                FROM pre_screening_questions
-                WHERE pre_screening_id = $1
-                ORDER BY question_type, position
-                """,
-                pre_screening_id
-            )
+            question_rows = await ps_repo.get_questions(pre_screening_id)
             
             knockout_questions = []
             qualification_questions = []
@@ -3158,72 +3029,36 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
         try:
             whatsapp_agent_id = create_vacancy_whatsapp_agent(vacancy_id, config)
             logger.info(f"Created WhatsApp agent for vacancy {vacancy_id}: {whatsapp_agent_id}")
-            
+
             # Update the agent ID in database
-            await pool.execute(
-                "UPDATE pre_screenings SET whatsapp_agent_id = $1, updated_at = NOW() WHERE id = $2",
-                whatsapp_agent_id, pre_screening_id
-            )
+            await ps_repo.update_agent_id(pre_screening_id, "whatsapp", whatsapp_agent_id)
         except Exception as e:
             logger.error(f"Failed to create WhatsApp agent: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to create WhatsApp agent: {str(e)}")
     
-    # Build dynamic update query based on provided fields
-    updates = []
-    params = []
-    param_idx = 1
-    
-    if request.is_online is not None:
-        # is_online requires published pre-screening
-        if not ps_row["published_at"]:
-            raise HTTPException(
-                status_code=400, 
-                detail="Pre-screening must be published before changing online status"
-            )
-        updates.append(f"is_online = ${param_idx}")
-        params.append(request.is_online)
-        param_idx += 1
-    
-    if request.voice_enabled is not None:
-        updates.append(f"voice_enabled = ${param_idx}")
-        params.append(request.voice_enabled)
-        param_idx += 1
-    
-    if request.whatsapp_enabled is not None:
-        updates.append(f"whatsapp_enabled = ${param_idx}")
-        params.append(request.whatsapp_enabled)
-        param_idx += 1
-    
-    if request.cv_enabled is not None:
-        updates.append(f"cv_enabled = ${param_idx}")
-        params.append(request.cv_enabled)
-        param_idx += 1
-    
-    if not updates:
+    # Validate is_online requires published pre-screening
+    if request.is_online is not None and not ps_row["published_at"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Pre-screening must be published before changing online status"
+        )
+
+    # Check if there are fields to update
+    if (request.is_online is None and request.voice_enabled is None and
+        request.whatsapp_enabled is None and request.cv_enabled is None):
         raise HTTPException(status_code=400, detail="No fields to update")
-    
-    # Add updated_at and the WHERE clause parameter
-    updates.append("updated_at = NOW()")
-    params.append(ps_row["id"])
-    
-    # Execute update
-    query = f"""
-        UPDATE pre_screenings 
-        SET {", ".join(updates)}
-        WHERE id = ${param_idx}
-    """
-    await pool.execute(query, *params)
+
+    # Update status flags
+    await ps_repo.update_status_flags(
+        pre_screening_id,
+        is_online=request.is_online,
+        voice_enabled=request.voice_enabled,
+        whatsapp_enabled=request.whatsapp_enabled,
+        cv_enabled=request.cv_enabled
+    )
     
     # Fetch updated values
-    updated_row = await pool.fetchrow(
-        """
-        SELECT is_online, voice_enabled, whatsapp_enabled, cv_enabled,
-               elevenlabs_agent_id, whatsapp_agent_id
-        FROM pre_screenings
-        WHERE id = $1
-        """,
-        ps_row["id"]
-    )
+    updated_row = await ps_repo.get_with_status(pre_screening_id)
     
     # Calculate effective channel states
     voice_active = (updated_row["elevenlabs_agent_id"] is not None) and updated_row["voice_enabled"]
@@ -3238,19 +3073,13 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     
     # Auto-set is_online = TRUE if any channel is enabled and agent was offline
     if any_channel_on and not updated_row["is_online"] and ps_row["published_at"]:
-        await pool.execute(
-            "UPDATE pre_screenings SET is_online = TRUE WHERE id = $1",
-            ps_row["id"]
-        )
+        await ps_repo.update_online_status(pre_screening_id, True)
         effective_is_online = True
         auto_status_message = " (auto-online: channel enabled)"
-    
+
     # Auto-set is_online = FALSE if all channels are disabled
     elif all_channels_off and updated_row["is_online"]:
-        await pool.execute(
-            "UPDATE pre_screenings SET is_online = FALSE WHERE id = $1",
-            ps_row["id"]
-        )
+        await ps_repo.update_online_status(pre_screening_id, False)
         effective_is_online = False
         auto_status_message = " (auto-offline: no channels enabled)"
     
@@ -3746,44 +3575,18 @@ async def list_screening_conversations(
     offset: int = Query(0, ge=0)
 ):
     """List all screening conversations for a vacancy."""
+    from src.repositories import ConversationRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
-    # Build query
-    conditions = ["vacancy_id = $1"]
-    params = [vacancy_uuid]
-    param_idx = 2
-    
-    if status:
-        conditions.append(f"status = ${param_idx}")
-        params.append(status)
-        param_idx += 1
-    
-    where_clause = " AND ".join(conditions)
-    
-    # Get total count
-    total = await pool.fetchval(
-        f"SELECT COUNT(*) FROM screening_conversations WHERE {where_clause}",
-        *params
-    )
-    
+
     # Get conversations
-    query = f"""
-        SELECT id, vacancy_id, candidate_name, candidate_email, status, 
-               started_at, completed_at, message_count
-        FROM screening_conversations
-        WHERE {where_clause}
-        ORDER BY started_at DESC
-        LIMIT ${param_idx} OFFSET ${param_idx + 1}
-    """
-    params.extend([limit, offset])
-    
-    rows = await pool.fetch(query, *params)
+    conv_repo = ConversationRepository(pool)
+    rows, total = await conv_repo.list_for_vacancy(vacancy_uuid, status, limit, offset)
     
     conversations = [
         ScreeningConversationResponse(
@@ -3810,40 +3613,25 @@ async def list_screening_conversations(
 @app.get("/screening/conversations/{conversation_id}")
 async def get_screening_conversation(conversation_id: str):
     """Get a single conversation with its messages."""
+    from src.repositories import ConversationRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID
     try:
         conv_uuid = uuid.UUID(conversation_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid conversation ID format: {conversation_id}")
-    
+
     # Get conversation
-    conv = await pool.fetchrow(
-        """
-        SELECT id, vacancy_id, pre_screening_id, session_id, candidate_name, 
-               candidate_email, candidate_phone, status, started_at, completed_at, 
-               message_count, channel, is_test
-        FROM screening_conversations
-        WHERE id = $1
-        """,
-        conv_uuid
-    )
-    
+    conv_repo = ConversationRepository(pool)
+    conv = await conv_repo.get_by_id(conv_uuid)
+
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
+
     # Try to get messages from conversation_messages table first (new approach)
     messages = []
-    stored_messages = await pool.fetch(
-        """
-        SELECT role, message, created_at
-        FROM conversation_messages
-        WHERE conversation_id = $1
-        ORDER BY created_at ASC
-        """,
-        conv_uuid
-    )
+    stored_messages = await conv_repo.get_messages(conv_uuid)
     
     if stored_messages:
         # Use messages from our table
@@ -3912,34 +3700,26 @@ async def get_screening_conversation(conversation_id: str):
 @app.post("/screening/conversations/{conversation_id}/complete")
 async def complete_screening_conversation(conversation_id: str, qualified: bool = Query(...)):
     """Mark a conversation as completed with qualification status."""
+    from src.repositories import ConversationRepository
     pool = await get_db_pool()
-    
+
     # Validate UUID
     try:
         conv_uuid = uuid.UUID(conversation_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid conversation ID format: {conversation_id}")
-    
+
     # Get conversation
-    conv = await pool.fetchrow(
-        "SELECT id, vacancy_id, pre_screening_id, candidate_name, candidate_email FROM screening_conversations WHERE id = $1",
-        conv_uuid
-    )
-    
+    conv_repo = ConversationRepository(pool)
+    conv = await conv_repo.get_by_id(conv_uuid)
+
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Update conversation status
-            await conn.execute(
-                """
-                UPDATE screening_conversations 
-                SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-                WHERE id = $1
-                """,
-                conv_uuid
-            )
+            await conv_repo.complete(conv_uuid)
             
             # Create application record
             app_row = await conn.fetchrow(
