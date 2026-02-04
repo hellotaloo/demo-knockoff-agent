@@ -7,9 +7,6 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 from datetime import datetime
 from enum import Enum
-from dotenv import load_dotenv
-load_dotenv()  # Load .env file for local development
-
 import asyncpg
 from fastapi import FastAPI, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,17 +29,59 @@ from utils.random_candidate import generate_random_candidate
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 from google.adk.agents.llm_agent import Agent
 
-# Configure logging to show INFO level messages
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+# Import configuration from centralized config module
+from src.config import (
+    DATABASE_URL,
+    TWILIO_ACCOUNT_SID,
+    TWILIO_AUTH_TOKEN,
+    TWILIO_WHATSAPP_NUMBER,
+    ELEVENLABS_WEBHOOK_SECRET,
+    SIMPLE_EDIT_KEYWORDS,
+    SIMULATED_REASONING,
+    logger
 )
-logger = logging.getLogger(__name__)
 
-# Use Supabase PostgreSQL for persistent session storage
-DATABASE_URL = os.environ.get("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is required")
+# Import models from centralized models module
+from src.models import (
+    VacancyStatus,
+    VacancySource,
+    InterviewChannel,
+    ChannelsResponse,
+    VacancyResponse,
+    VacancyStatsResponse,
+    DashboardStatsResponse,
+    QuestionAnswerResponse,
+    ApplicationResponse,
+    CVApplicationRequest,
+    PreScreeningQuestionRequest,
+    PreScreeningQuestionResponse,
+    PreScreeningRequest,
+    PreScreeningResponse,
+    PublishPreScreeningRequest,
+    PublishPreScreeningResponse,
+    StatusUpdateRequest,
+    GenerateInterviewRequest,
+    FeedbackRequest,
+    ReorderRequest,
+    DeleteQuestionRequest,
+    AddQuestionRequest,
+    RestoreSessionRequest,
+    ScreeningChatRequest,
+    SimulateInterviewRequest,
+    ScreeningConversationResponse,
+    OutboundScreeningRequest,
+    OutboundScreeningResponse,
+    ElevenLabsWebhookData,
+    ElevenLabsWebhookPayload,
+    CVQuestionRequest,
+    CVAnalyzeRequest,
+    CVQuestionAnalysisResponse,
+    CVAnalyzeResponse,
+    DataQueryRequest,
+)
+
+# Import database utilities
+from src.database import get_db_pool, close_db_pool, run_schema_migrations
 
 
 # ============================================================================
@@ -83,216 +122,6 @@ async def safe_append_event(session_service, session, event, app_name: str, user
             raise
 
 
-# ============================================================================
-# Enums and Models for Vacancies/Applications API
-# ============================================================================
-
-class VacancyStatus(str, Enum):
-    NEW = "new"
-    DRAFT = "draft"
-    SCREENING_ACTIVE = "screening_active"
-    ARCHIVED = "archived"
-
-
-class VacancySource(str, Enum):
-    SALESFORCE = "salesforce"
-    BULLHORN = "bullhorn"
-    MANUAL = "manual"
-
-
-class InterviewChannel(str, Enum):
-    VOICE = "voice"
-    WHATSAPP = "whatsapp"
-
-
-class QuestionAnswerResponse(BaseModel):
-    question_id: str
-    question_text: str
-    question_type: Optional[str] = None  # knockout or qualification
-    answer: Optional[str] = None
-    passed: Optional[bool] = None
-    score: Optional[int] = None  # 0-100
-    rating: Optional[str] = None  # weak, below_average, average, good, excellent
-    motivation: Optional[str] = None  # Explanation of score: what was good/bad, what's missing for 100%
-
-
-class ChannelsResponse(BaseModel):
-    voice: bool = False
-    whatsapp: bool = False
-    cv: bool = False
-
-
-class VacancyResponse(BaseModel):
-    id: str
-    title: str
-    company: str
-    location: Optional[str] = None
-    description: Optional[str] = None
-    status: str
-    created_at: datetime
-    archived_at: Optional[datetime] = None
-    source: Optional[str] = None
-    source_id: Optional[str] = None
-    has_screening: bool = False  # True if pre-screening exists
-    is_online: Optional[bool] = None  # None=draft/unpublished, True=online, False=offline
-    channels: ChannelsResponse = ChannelsResponse()  # Voice/WhatsApp channel availability
-    # Application stats
-    candidates_count: int = 0  # Total number of applications (excluding test)
-    completed_count: int = 0  # Applications with status='completed'
-    qualified_count: int = 0  # Applications with qualified=true
-    last_activity_at: Optional[datetime] = None  # Most recent application activity
-
-
-class ApplicationResponse(BaseModel):
-    id: str
-    vacancy_id: str
-    candidate_name: str
-    channel: str
-    status: str  # Workflow state: 'active', 'processing', 'completed'
-    qualified: bool  # Outcome: did applicant pass the screening?
-    started_at: datetime
-    completed_at: Optional[datetime] = None
-    interaction_seconds: int
-    answers: list[QuestionAnswerResponse] = []
-    synced: bool
-    synced_at: Optional[datetime] = None
-    # Score summary
-    overall_score: Optional[int] = None  # Average of all scores (0-100)
-    knockout_passed: int = 0  # Number of knockout questions passed
-    knockout_total: int = 0  # Total knockout questions
-    qualification_count: int = 0  # Number of qualification questions answered
-    summary: Optional[str] = None  # AI-generated executive summary
-    interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit"
-    meeting_slots: Optional[list[str]] = None  # Available meeting slots for qualified candidates
-    is_test: bool = False  # True for internal test conversations
-
-
-class VacancyStatsResponse(BaseModel):
-    vacancy_id: str
-    total_applications: int
-    completed_count: int  # Applications with status='completed'
-    completion_rate: int
-    qualified_count: int  # Applications with qualified=true
-    qualification_rate: int
-    channel_breakdown: dict[str, int]
-    avg_interaction_seconds: int
-    last_application_at: Optional[datetime] = None
-
-
-class DashboardStatsResponse(BaseModel):
-    """Dashboard-level aggregate statistics across all vacancies."""
-    total_prescreenings: int  # Total applications
-    total_prescreenings_this_week: int  # Applications started this week
-    completed_count: int
-    completion_rate: int  # Percentage
-    qualified_count: int
-    qualification_rate: int  # Percentage of completed
-    channel_breakdown: dict[str, int]  # voice, whatsapp, cv
-
-
-class PreScreeningQuestionRequest(BaseModel):
-    """Request model for a pre-screening question."""
-    id: str  # Client-provided ID (e.g., "ko_1", "qual_2")
-    question: str
-    ideal_answer: Optional[str] = None  # Scoring guidance for qualification questions
-
-
-class PreScreeningQuestionResponse(BaseModel):
-    """Response model for a pre-screening question."""
-    id: str  # Database UUID
-    question_type: str  # "knockout" or "qualification"
-    position: int
-    question_text: str
-    ideal_answer: Optional[str] = None  # Scoring guidance for qualification questions
-    is_approved: bool
-
-
-class PreScreeningRequest(BaseModel):
-    """Request model for saving pre-screening configuration."""
-    intro: str
-    knockout_questions: list[PreScreeningQuestionRequest]
-    knockout_failed_action: str
-    qualification_questions: list[PreScreeningQuestionRequest]
-    final_action: str
-    approved_ids: list[str] = []
-
-
-class PreScreeningResponse(BaseModel):
-    """Response model for pre-screening configuration."""
-    id: str  # Pre-screening UUID
-    vacancy_id: str
-    intro: str
-    knockout_questions: list[PreScreeningQuestionResponse]
-    knockout_failed_action: str
-    qualification_questions: list[PreScreeningQuestionResponse]
-    final_action: str
-    status: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    # Publishing fields
-    published_at: Optional[datetime] = None
-    is_online: bool = False
-    elevenlabs_agent_id: Optional[str] = None
-    whatsapp_agent_id: Optional[str] = None
-
-
-class PublishPreScreeningRequest(BaseModel):
-    """Request model for publishing a pre-screening."""
-    enable_voice: bool = True      # Create ElevenLabs agent
-    enable_whatsapp: bool = True   # Create WhatsApp agent
-    enable_cv: bool = False        # Enable CV analysis channel
-
-
-class PublishPreScreeningResponse(BaseModel):
-    """Response model for publish operation."""
-    published_at: datetime
-    elevenlabs_agent_id: Optional[str] = None
-    whatsapp_agent_id: Optional[str] = None
-    is_online: bool
-
-
-class StatusUpdateRequest(BaseModel):
-    """Request model for updating pre-screening status and channel toggles."""
-    is_online: Optional[bool] = None
-    voice_enabled: Optional[bool] = None
-    whatsapp_enabled: Optional[bool] = None
-    cv_enabled: Optional[bool] = None
-
-
-class CVApplicationRequest(BaseModel):
-    """Request model for creating an application from a CV."""
-    pdf_base64: str
-    candidate_name: str
-    candidate_phone: Optional[str] = None
-    candidate_email: Optional[str] = None
-
-
-# ============================================================================
-# Database Connection Pool for Vacancies/Applications
-# ============================================================================
-
-db_pool: Optional[asyncpg.Pool] = None
-
-
-async def get_db_pool() -> asyncpg.Pool:
-    """Get or create the database connection pool."""
-    global db_pool
-    if db_pool is None:
-        # Convert SQLAlchemy URL to asyncpg format
-        raw_url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-        # Disable statement cache for Supabase pooler compatibility (transaction-level pooling)
-        db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=10, statement_cache_size=0)
-    return db_pool
-
-
-async def close_db_pool():
-    """Close the database connection pool."""
-    global db_pool
-    if db_pool is not None:
-        await db_pool.close()
-        db_pool = None
-
-
 # Global session service (legacy - kept for backward compatibility with existing sessions)
 session_service = None
 
@@ -324,73 +153,6 @@ async def lifespan(app: FastAPI):
     # Cleanup on shutdown
     await close_db_pool()
 
-
-async def run_schema_migrations(pool: asyncpg.Pool):
-    """Run schema migrations to ensure required columns exist."""
-    try:
-        # Add 'channel' column to screening_conversations if it doesn't exist
-        await pool.execute("""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_name = 'screening_conversations' 
-                    AND column_name = 'channel'
-                ) THEN
-                    ALTER TABLE screening_conversations 
-                    ADD COLUMN channel VARCHAR(20) DEFAULT 'chat';
-                END IF;
-            END $$;
-        """)
-        
-        # Add 'status' column to applications if it doesn't exist
-        await pool.execute("""
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.columns 
-                    WHERE table_name = 'applications' 
-                    AND column_name = 'status'
-                ) THEN
-                    ALTER TABLE applications 
-                    ADD COLUMN status VARCHAR(20) DEFAULT 'active';
-                    
-                    -- Update existing completed applications to 'completed' status
-                    UPDATE applications SET status = 'completed' WHERE completed = true;
-                END IF;
-            END $$;
-        """)
-        
-        # Ensure default is 'active' (fixes earlier migration that used 'completed' as default)
-        await pool.execute("""
-            ALTER TABLE applications ALTER COLUMN status SET DEFAULT 'active';
-        """)
-        
-        # Note: completed column will be removed by migration 005
-        # For now, keep sync logic for backwards compatibility during transition
-        
-        # Add 'cv' to applications channel check constraint
-        await pool.execute("""
-            DO $$
-            BEGIN
-                -- Drop the existing check constraint if it exists
-                IF EXISTS (
-                    SELECT 1 FROM pg_constraint WHERE conname = 'applications_channel_check'
-                ) THEN
-                    ALTER TABLE applications DROP CONSTRAINT applications_channel_check;
-                END IF;
-                
-                -- Add the new check constraint with 'cv' included
-                ALTER TABLE applications 
-                ADD CONSTRAINT applications_channel_check 
-                CHECK (channel IN ('voice', 'whatsapp', 'cv'));
-            END $$;
-        """)
-        
-        logger.info("Schema migrations completed")
-    except Exception as e:
-        logger.warning(f"Schema migration warning (may be ok if already done): {e}")
-
 app = FastAPI(lifespan=lifespan)
 
 # CORS middleware for cross-origin requests from job board
@@ -402,11 +164,7 @@ app.add_middleware(
 )
 
 # Twilio client for proactive messages
-twilio_client = Client(
-    os.environ.get("TWILIO_ACCOUNT_SID"),
-    os.environ.get("TWILIO_AUTH_TOKEN")
-)
-TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")  # e.g., "whatsapp:+14155238886"
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
 async def _safe_process_conversation(
@@ -937,16 +695,6 @@ def reset_change_statuses(interview: dict) -> dict:
 
 
 # Keywords that indicate simple edit operations (Dutch)
-SIMPLE_EDIT_KEYWORDS = [
-    "verwijder", "delete",  # delete
-    "korter", "kort",  # shorter
-    "herformuleer",  # rephrase
-    "verplaats", "zet",  # move/reorder
-    "wijzig", "aanpas", "pas aan",  # change/adjust
-    "voeg toe", "toevoeg",  # add (simple additions)
-    "goedkeur", "approve",  # approve
-]
-
 def should_use_fast_agent(session, message: str) -> bool:
     """
     Determine if we should use the fast editor agent (no thinking) 
@@ -996,53 +744,6 @@ def create_interview_session_service():
     )
     
     logger.info("Created interview generator session service with both runners (generator + editor)")
-
-
-class GenerateInterviewRequest(BaseModel):
-    vacancy_text: str
-    session_id: str | None = None  # Optional: reuse session for feedback
-
-
-class FeedbackRequest(BaseModel):
-    session_id: str
-    message: str
-
-
-class ReorderRequest(BaseModel):
-    session_id: str
-    knockout_order: list[str] | None = None  # List of question IDs in new order
-    qualification_order: list[str] | None = None
-
-
-class DeleteQuestionRequest(BaseModel):
-    session_id: str
-    question_id: str  # ID of question to delete (e.g., "ko_1" or "qual_2")
-
-
-class AddQuestionRequest(BaseModel):
-    session_id: str
-    question_type: str  # "knockout" or "qualification"
-    question: str
-    ideal_answer: str | None = None  # Required for qualification questions
-
-
-# Simulated reasoning messages - feel like AI is analyzing
-# ~20 seconds total (13 messages × 1.5s interval)
-SIMULATED_REASONING = [
-    "Vacaturetekst ontvangen, begin met analyse...",
-    "Kernvereisten identificeren uit de functieomschrijving...",
-    "Zoeken naar harde eisen: werkvergunning, locatie, beschikbaarheid...",
-    "Ploegensysteem of flexibele uren detecteren...",
-    "Fysieke vereisten en werkomstandigheden analyseren...",
-    "Relevante ervaring en competenties in kaart brengen...",
-    "Knockout criteria formuleren op basis van must-haves...",
-    "Kwalificatievragen opstellen voor ervaring en motivatie...",
-    "Vraagvolgorde bepalen voor optimale gespreksstroom...",
-    "Interview structuur optimaliseren voor WhatsApp/voice...",
-    "Vragen afstemmen op best-practices voor screening...",
-    "Toon en woordkeuze verfijnen...",
-    "Vragen afronden en valideren...",
-]
 
 
 async def stream_interview_generation(vacancy_text: str, session_id: str) -> AsyncGenerator[str, None]:
@@ -1547,10 +1248,6 @@ async def reorder_questions(request: ReorderRequest):
     return {"status": "success", "interview": interview}
 
 
-class RestoreSessionRequest(BaseModel):
-    vacancy_id: str
-
-
 @app.post("/interview/restore-session")
 async def restore_session_from_db(request: RestoreSessionRequest):
     """
@@ -1860,11 +1557,6 @@ def create_analyst_session_service():
         session_service=analyst_session_service
     )
     logger.info("Created recruiter analyst session service and runner")
-
-
-class DataQueryRequest(BaseModel):
-    question: str
-    session_id: str | None = None  # Optional: reuse session for context
 
 
 async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator[str, None]:
@@ -3885,32 +3577,6 @@ def get_or_create_screening_runner(vacancy_id: str, pre_screening: dict, vacancy
     return runner
 
 
-class ScreeningChatRequest(BaseModel):
-    vacancy_id: str
-    message: str
-    session_id: Optional[str] = None
-    candidate_name: Optional[str] = None  # Optional - if not provided, random name generated
-    is_test: bool = False  # True for admin/internal test conversations
-
-
-class SimulateInterviewRequest(BaseModel):
-    """Request model for running an interview simulation."""
-    persona: str = "qualified"  # qualified, borderline, unqualified, rushed, enthusiastic, custom
-    custom_persona: Optional[str] = None  # Custom persona description when persona="custom"
-    candidate_name: Optional[str] = None  # Optional - random name generated if not provided
-
-
-class ScreeningConversationResponse(BaseModel):
-    id: str
-    vacancy_id: str
-    candidate_name: str
-    candidate_email: Optional[str] = None
-    status: str
-    started_at: datetime
-    completed_at: Optional[datetime] = None
-    message_count: int
-
-
 async def stream_screening_chat(
     vacancy_id: str, 
     message: str, 
@@ -4548,30 +4214,6 @@ from voice_agent import initiate_outbound_call, create_or_update_voice_agent, li
 from knockout_agent.agent import create_vacancy_whatsapp_agent, get_vacancy_whatsapp_agent
 
 
-class OutboundScreeningRequest(BaseModel):
-    """Request model for initiating outbound screening (voice or WhatsApp)."""
-    vacancy_id: str  # UUID of the vacancy
-    channel: InterviewChannel  # "voice" or "whatsapp"
-    phone_number: str  # E.164 format, e.g., "+32412345678"
-    first_name: str  # Candidate's first name
-    last_name: str  # Candidate's last name
-    test_conversation_id: Optional[str] = None  # For testing: skip real call, use this ID
-    is_test: bool = False  # True for internal test conversations (admin testing)
-
-
-class OutboundScreeningResponse(BaseModel):
-    """Response model for outbound screening initiation."""
-    success: bool
-    message: str
-    channel: InterviewChannel
-    conversation_id: Optional[str] = None
-    application_id: Optional[str] = None  # UUID of the created/updated application
-    # Voice-specific fields
-    call_sid: Optional[str] = None
-    # WhatsApp-specific fields
-    whatsapp_message_sid: Optional[str] = None
-
-
 @app.post("/screening/outbound", response_model=OutboundScreeningResponse)
 async def initiate_outbound_screening(request: OutboundScreeningRequest):
     """
@@ -5000,10 +4642,6 @@ import hmac
 from hashlib import sha256
 from transcript_processor import process_transcript
 
-# HMAC secret for webhook validation (set in ElevenLabs dashboard)
-ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
-
-
 async def verify_elevenlabs_signature(request_body: bytes, signature_header: str) -> bool:
     """
     Verify ElevenLabs webhook HMAC signature.
@@ -5062,23 +4700,6 @@ async def verify_elevenlabs_signature(request_body: bytes, signature_header: str
 
 
 from fastapi import Request
-
-
-class ElevenLabsWebhookData(BaseModel):
-    """Data object from ElevenLabs post-call webhook."""
-    agent_id: str
-    conversation_id: str
-    status: Optional[str] = None
-    transcript: list[dict] = []
-    metadata: Optional[dict] = None
-    analysis: Optional[dict] = None
-
-
-class ElevenLabsWebhookPayload(BaseModel):
-    """Full payload from ElevenLabs post-call webhook."""
-    type: str  # "post_call_transcription", "post_call_audio", "call_initiation_failure"
-    event_timestamp: int
-    data: ElevenLabsWebhookData
 
 
 @app.post("/webhook/elevenlabs")
@@ -5549,37 +5170,6 @@ async def reset_demo_data(reseed: bool = Query(True, description="Reseed with de
 # ============================================================================
 # CV Analyzer
 # ============================================================================
-
-class CVQuestionRequest(BaseModel):
-    """A question to analyze against the CV."""
-    id: str  # e.g., "ko_1" or "qual_1"
-    question: str  # The question text
-    ideal_answer: Optional[str] = None  # For qualification questions
-
-
-class CVAnalyzeRequest(BaseModel):
-    """Request model for CV analysis."""
-    pdf_base64: str  # Base64-encoded PDF
-    knockout_questions: list[CVQuestionRequest]
-    qualification_questions: list[CVQuestionRequest]
-
-
-class CVQuestionAnalysisResponse(BaseModel):
-    """Analysis result for a single question."""
-    id: str
-    question_text: str
-    cv_evidence: str
-    is_answered: bool
-    clarification_needed: Optional[str] = None
-
-
-class CVAnalyzeResponse(BaseModel):
-    """Response model for CV analysis."""
-    knockout_analysis: list[CVQuestionAnalysisResponse]
-    qualification_analysis: list[CVQuestionAnalysisResponse]
-    cv_summary: str
-    clarification_questions: list[str]
-
 
 @app.post("/cv/analyze", response_model=CVAnalyzeResponse)
 async def analyze_cv_endpoint(request: CVAnalyzeRequest):

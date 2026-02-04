@@ -42,6 +42,36 @@ cp .env.example .env
 # - TWILIO_*: Optional, for WhatsApp
 ```
 
+#### Using Staging Environment
+
+The project includes a staging environment with a separate Supabase database branch:
+
+```bash
+# Production environment (default)
+cp .env.example .env
+# Edit .env with production credentials
+
+# Staging environment
+# The .env.staging file is pre-configured with staging database
+# You need to update the DATABASE_URL with your staging database password
+
+# Get the password from: Supabase Dashboard > Staging Branch > Settings > Database
+# Replace YOUR_STAGING_DB_PASSWORD in .env.staging
+
+# Run with staging environment
+# Option 1: Rename files
+mv .env .env.production
+mv .env.staging .env
+
+# Option 2: Use environment variable
+export $(cat .env.staging | xargs) && uvicorn app:app --reload --port 8080
+```
+
+**Environment Details:**
+- Production Project ID: `szascstjqkmssauvfaaj`
+- Staging Project ID: `svebhvifkcxrsbpxjptr`
+- Staging URL: `https://svebhvifkcxrsbpxjptr.supabase.co`
+
 ### 3. Start the Backend API
 
 ```bash
