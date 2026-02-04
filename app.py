@@ -122,6 +122,51 @@ async def safe_append_event(session_service, session, event, app_name: str, user
             raise
 
 
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def build_vacancy_response(row) -> VacancyResponse:
+    """
+    Build a VacancyResponse model from a database row.
+
+    Calculates effective channel states and is_online status based on
+    published state and active channels.
+    """
+    # Calculate effective channel states
+    voice_active = row["voice_enabled"] or False
+    whatsapp_active = row["whatsapp_enabled"] or False
+    cv_active = row["cv_enabled"] or False
+
+    # is_online is only true if at least one channel is active
+    any_channel_active = voice_active or whatsapp_active or cv_active
+    effective_is_online = row["is_online"] and any_channel_active
+
+    return VacancyResponse(
+        id=str(row["id"]),
+        title=row["title"],
+        company=row["company"],
+        location=row["location"],
+        description=row["description"],
+        status=row["status"],
+        created_at=row["created_at"],
+        archived_at=row["archived_at"],
+        source=row["source"],
+        source_id=row["source_id"],
+        has_screening=row["has_screening"],
+        is_online=effective_is_online,
+        channels=ChannelsResponse(
+            voice=voice_active,
+            whatsapp=whatsapp_active,
+            cv=cv_active
+        ),
+        candidates_count=row["candidates_count"],
+        completed_count=row["completed_count"],
+        qualified_count=row["qualified_count"],
+        last_activity_at=row["last_activity_at"]
+    )
+
+
 # Global session service (legacy - kept for backward compatibility with existing sessions)
 session_service = None
 
@@ -141,10 +186,36 @@ async def lifespan(app: FastAPI):
     create_session_service()
     create_interview_session_service()
     pool = await get_db_pool()  # Initialize database pool
-    
+
     # Run schema migrations
     await run_schema_migrations(pool)
-    
+
+    # Initialize ADK session tables
+    # The ADK library auto-creates tables on first use, but may show warnings
+    # We suppress these by attempting a test session creation
+    try:
+        global interview_session_service
+        # Try to create and delete a test session to initialize tables
+        test_session = await interview_session_service.create_session(
+            app_name="interview_generator",
+            user_id="__init_test__",
+            session_id="__init_test__"
+        )
+        await interview_session_service.delete_session(
+            app_name="interview_generator",
+            user_id="__init_test__",
+            session_id="__init_test__"
+        )
+        logger.info("✓ ADK session tables initialized successfully")
+    except ValueError as e:
+        # Expected on first run - ADK will create tables automatically
+        if "Schema version not found" in str(e) or "malformed" in str(e):
+            logger.info("ADK session tables will be auto-created on first use")
+        else:
+            logger.warning(f"ADK session initialization: {e}")
+    except Exception as e:
+        logger.warning(f"ADK session initialization (non-fatal): {e}")
+
     # Set up data query agent with db pool (used by recruiter analyst sub-agent)
     set_data_query_db_pool(pool)
     create_analyst_session_service()
@@ -1710,100 +1781,14 @@ async def list_vacancies(
     offset: int = Query(0, ge=0)
 ):
     """List all vacancies with optional filtering."""
+    from src.repositories import VacancyRepository
+
     pool = await get_db_pool()
-    
-    # Build query with optional filters
-    conditions = []
-    params = []
-    param_idx = 1
-    
-    if status:
-        conditions.append(f"status = ${param_idx}")
-        params.append(status)
-        param_idx += 1
-    
-    if source:
-        conditions.append(f"source = ${param_idx}")
-        params.append(source)
-        param_idx += 1
-    
-    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    
-    # Get total count
-    count_query = f"SELECT COUNT(*) FROM vacancies {where_clause}"
-    total = await pool.fetchval(count_query, *params)
-    
-    # Get vacancies with application stats
-    query = f"""
-        SELECT v.id, v.title, v.company, v.location, v.description, v.status, 
-               v.created_at, v.archived_at, v.source, v.source_id,
-               (ps.id IS NOT NULL) as has_screening,
-               CASE 
-                   WHEN ps.published_at IS NULL THEN NULL
-                   ELSE ps.is_online
-               END as is_online,
-               (ps.voice_enabled AND ps.elevenlabs_agent_id IS NOT NULL) as voice_enabled,
-               (ps.whatsapp_enabled AND ps.whatsapp_agent_id IS NOT NULL) as whatsapp_enabled,
-               (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled,
-               COALESCE(app_stats.candidates_count, 0) as candidates_count,
-               COALESCE(app_stats.completed_count, 0) as completed_count,
-               COALESCE(app_stats.qualified_count, 0) as qualified_count,
-               app_stats.last_activity_at
-        FROM vacancies v
-        LEFT JOIN pre_screenings ps ON ps.vacancy_id = v.id
-        LEFT JOIN LATERAL (
-            SELECT 
-                COUNT(*) as candidates_count,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                MAX(COALESCE(completed_at, started_at)) as last_activity_at
-            FROM applications a
-            WHERE a.vacancy_id = v.id
-        ) app_stats ON true
-        {where_clause}
-        ORDER BY v.created_at DESC
-        LIMIT ${param_idx} OFFSET ${param_idx + 1}
-    """
-    params.extend([limit, offset])
-    
-    rows = await pool.fetch(query, *params)
-    
-    def build_vacancy_response(row):
-        # Calculate effective channel states
-        voice_active = row["voice_enabled"] or False
-        whatsapp_active = row["whatsapp_enabled"] or False
-        cv_active = row["cv_enabled"] or False
-        
-        # is_online is only true if at least one channel is active
-        any_channel_active = voice_active or whatsapp_active or cv_active
-        effective_is_online = row["is_online"] and any_channel_active
-        
-        return VacancyResponse(
-            id=str(row["id"]),
-            title=row["title"],
-            company=row["company"],
-            location=row["location"],
-            description=row["description"],
-            status=row["status"],
-            created_at=row["created_at"],
-            archived_at=row["archived_at"],
-            source=row["source"],
-            source_id=row["source_id"],
-            has_screening=row["has_screening"],
-            is_online=effective_is_online,
-            channels=ChannelsResponse(
-                voice=voice_active,
-                whatsapp=whatsapp_active,
-                cv=cv_active
-            ),
-            candidates_count=row["candidates_count"],
-            completed_count=row["completed_count"],
-            qualified_count=row["qualified_count"],
-            last_activity_at=row["last_activity_at"]
-        )
-    
+    repo = VacancyRepository(pool)
+
+    rows, total = await repo.list_with_stats(status=status, source=source, limit=limit, offset=offset)
     vacancies = [build_vacancy_response(row) for row in rows]
-    
+
     return {
         "vacancies": vacancies,
         "total": total,
@@ -1815,80 +1800,23 @@ async def list_vacancies(
 @app.get("/vacancies/{vacancy_id}")
 async def get_vacancy(vacancy_id: str):
     """Get a single vacancy by ID."""
-    pool = await get_db_pool()
-    
+    from src.repositories import VacancyRepository
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
-    query = """
-        SELECT v.id, v.title, v.company, v.location, v.description, v.status,
-               v.created_at, v.archived_at, v.source, v.source_id,
-               (ps.id IS NOT NULL) as has_screening,
-               CASE 
-                   WHEN ps.published_at IS NULL THEN NULL
-                   ELSE ps.is_online
-               END as is_online,
-               (ps.voice_enabled AND ps.elevenlabs_agent_id IS NOT NULL) as voice_enabled,
-               (ps.whatsapp_enabled AND ps.whatsapp_agent_id IS NOT NULL) as whatsapp_enabled,
-               (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled,
-               COALESCE(app_stats.candidates_count, 0) as candidates_count,
-               COALESCE(app_stats.completed_count, 0) as completed_count,
-               COALESCE(app_stats.qualified_count, 0) as qualified_count,
-               app_stats.last_activity_at
-        FROM vacancies v
-        LEFT JOIN pre_screenings ps ON ps.vacancy_id = v.id
-        LEFT JOIN LATERAL (
-            SELECT 
-                COUNT(*) as candidates_count,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                MAX(COALESCE(completed_at, started_at)) as last_activity_at
-            FROM applications a
-            WHERE a.vacancy_id = v.id
-        ) app_stats ON true
-        WHERE v.id = $1
-    """
-    
-    row = await pool.fetchrow(query, vacancy_uuid)
-    
+
+    pool = await get_db_pool()
+    repo = VacancyRepository(pool)
+
+    row = await repo.get_by_id(vacancy_uuid)
+
     if not row:
         raise HTTPException(status_code=404, detail="Vacancy not found")
-    
-    # Calculate effective channel states
-    voice_active = row["voice_enabled"] or False
-    whatsapp_active = row["whatsapp_enabled"] or False
-    cv_active = row["cv_enabled"] or False
-    
-    # is_online is only true if at least one channel is active
-    any_channel_active = voice_active or whatsapp_active or cv_active
-    effective_is_online = row["is_online"] and any_channel_active
-    
-    return VacancyResponse(
-        id=str(row["id"]),
-        title=row["title"],
-        company=row["company"],
-        location=row["location"],
-        description=row["description"],
-        status=row["status"],
-        created_at=row["created_at"],
-        archived_at=row["archived_at"],
-        source=row["source"],
-        source_id=row["source_id"],
-        has_screening=row["has_screening"],
-        is_online=effective_is_online,
-        channels=ChannelsResponse(
-            voice=voice_active,
-            whatsapp=whatsapp_active,
-            cv=cv_active
-        ),
-        candidates_count=row["candidates_count"],
-        completed_count=row["completed_count"],
-        qualified_count=row["qualified_count"],
-        last_activity_at=row["last_activity_at"]
-    )
+
+    return build_vacancy_response(row)
 
 
 @app.post("/vacancies/{vacancy_id}/cv-application")
@@ -2704,46 +2632,32 @@ async def reprocess_test_applications():
 @app.get("/vacancies/{vacancy_id}/stats")
 async def get_vacancy_stats(vacancy_id: str):
     """Get aggregated statistics for a vacancy."""
-    pool = await get_db_pool()
-    
+    from src.repositories import VacancyRepository
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
+
+    pool = await get_db_pool()
+    repo = VacancyRepository(pool)
+
     # Verify vacancy exists
-    vacancy_exists = await pool.fetchval(
-        "SELECT 1 FROM vacancies WHERE id = $1",
-        vacancy_uuid
-    )
-    if not vacancy_exists:
+    if not await repo.exists(vacancy_uuid):
         raise HTTPException(status_code=404, detail="Vacancy not found")
-    
+
     # Get stats
-    stats_query = """
-        SELECT 
-            COUNT(*) as total,
-            COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-            COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-            COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-            COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
-            COALESCE(AVG(interaction_seconds), 0) as avg_seconds,
-            MAX(started_at) as last_application
-        FROM applications
-        WHERE vacancy_id = $1
-    """
-    
-    row = await pool.fetchrow(stats_query, vacancy_uuid)
-    
+    row = await repo.get_stats(vacancy_uuid)
+
     total = row["total"]
     completed_count = row["completed_count"]
     qualified_count = row["qualified_count"]
-    
+
     # Calculate rates (avoid division by zero)
     completion_rate = int((completed_count / total * 100) if total > 0 else 0)
     qualification_rate = int((qualified_count / completed_count * 100) if completed_count > 0 else 0)
-    
+
     return VacancyStatsResponse(
         vacancy_id=vacancy_id,
         total_applications=total,
@@ -2763,32 +2677,22 @@ async def get_vacancy_stats(vacancy_id: str):
 @app.get("/stats")
 async def get_dashboard_stats():
     """Get dashboard-level aggregate statistics across all vacancies."""
+    from src.repositories import VacancyRepository
+
     pool = await get_db_pool()
-    
-    # Get aggregate stats
-    stats_query = """
-        SELECT 
-            COUNT(*) as total,
-            COUNT(*) FILTER (WHERE started_at >= NOW() - INTERVAL '7 days') as this_week,
-            COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-            COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-            COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-            COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
-            COUNT(*) FILTER (WHERE channel = 'cv') as cv_count
-        FROM applications
-    """
-    
-    row = await pool.fetchrow(stats_query)
-    
+    repo = VacancyRepository(pool)
+
+    row = await repo.get_dashboard_stats()
+
     total = row["total"]
     this_week = row["this_week"]
     completed_count = row["completed_count"]
     qualified_count = row["qualified_count"]
-    
+
     # Calculate rates (avoid division by zero)
     completion_rate = int((completed_count / total * 100) if total > 0 else 0)
     qualification_rate = int((qualified_count / completed_count * 100) if completed_count > 0 else 0)
-    
+
     return DashboardStatsResponse(
         total_prescreenings=total,
         total_prescreenings_this_week=this_week,

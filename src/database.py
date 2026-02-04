@@ -36,6 +36,36 @@ async def close_db_pool():
 async def run_schema_migrations(pool: asyncpg.Pool):
     """Run schema migrations to ensure required columns exist."""
     try:
+        # Initialize Google ADK session tables
+        # The ADK library expects these tables to exist with proper schema
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS adk_internal_metadata (
+                key VARCHAR(255) PRIMARY KEY,
+                value TEXT
+            );
+        """)
+
+        # Insert the schema version if it doesn't exist
+        await pool.execute("""
+            INSERT INTO adk_internal_metadata (key, value)
+            VALUES ('schema_version', '1')
+            ON CONFLICT (key) DO NOTHING;
+        """)
+
+        # Create sessions table if it doesn't exist
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                app_name VARCHAR(255) NOT NULL,
+                user_id VARCHAR(255) NOT NULL,
+                session_id VARCHAR(255) NOT NULL,
+                data JSONB,
+                last_update_time TIMESTAMP WITH TIME ZONE,
+                PRIMARY KEY (app_name, user_id, session_id)
+            );
+        """)
+
+        logger.info("ADK session tables initialized")
+
         # Add 'channel' column to screening_conversations if it doesn't exist
         await pool.execute("""
             DO $$
