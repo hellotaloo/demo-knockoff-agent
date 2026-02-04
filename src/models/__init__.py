@@ -4,6 +4,9 @@ Taloo Backend API Models.
 This module re-exports all model classes for convenient importing.
 """
 
+# Common models
+from .common import PaginatedResponse
+
 # Enums
 from .enums import VacancyStatus, VacancySource, InterviewChannel
 
@@ -74,6 +77,8 @@ from .cv import (
 from .data_query import DataQueryRequest
 
 __all__ = [
+    # Common
+    "PaginatedResponse",
     # Enums
     "VacancyStatus",
     "VacancySource",

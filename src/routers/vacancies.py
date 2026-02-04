@@ -15,6 +15,7 @@ from src.repositories import VacancyRepository
 from src.services import VacancyService
 from src.database import get_db_pool
 from src.dependencies import get_vacancy_repo, get_vacancy_service
+from src.exceptions import parse_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,7 @@ async def get_vacancy(
     service: VacancyService = Depends(get_vacancy_service)
 ):
     """Get a single vacancy by ID."""
-    # Validate UUID format
-    try:
-        vacancy_uuid = uuid.UUID(vacancy_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-
+    vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     row = await repo.get_by_id(vacancy_uuid)
 
     if not row:

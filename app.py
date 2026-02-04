@@ -86,6 +86,7 @@ from src.database import get_db_pool, close_db_pool, run_schema_migrations
 # Import services and dependencies
 from src.services import SessionManager
 from src.dependencies import set_session_manager as set_global_session_manager
+from src.exceptions import register_exception_handlers
 
 # Import routers
 from src.routers import (
@@ -189,6 +190,9 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 
 app = FastAPI(lifespan=lifespan)
+
+# Register custom exception handlers
+register_exception_handlers(app)
 
 # CORS middleware for cross-origin requests from job board
 app.add_middleware(
