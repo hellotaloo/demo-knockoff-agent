@@ -585,10 +585,10 @@ async def _webhook_impl_vacancy_specific(session_id: str, incoming_msg: str, vac
         - is_complete: True if conversation is complete (tool called or closing pattern)
         - completion_outcome: The outcome string if tool was called, None otherwise
     """
-    global session_manager
+    global screening_session_service
     
     # Get or create the same screening runner as was used for outbound
-    runner = session_manager.get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
+    runner = get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
     
     # CRITICAL: Verify session exists before running agent
     # The session should have been created during _initiate_whatsapp_screening
@@ -1280,7 +1280,7 @@ async def process_feedback(request: FeedbackRequest):
 @app.get("/interview/session/{session_id}")
 async def get_interview_session(session_id: str):
     """Get the current interview state for a session."""
-    global session_manager
+    global interview_session_service
     
     try:
         session = await interview_session_service.get_session(
@@ -1309,7 +1309,7 @@ async def get_interview_session(session_id: str):
 @app.post("/interview/reorder")
 async def reorder_questions(request: ReorderRequest):
     """Reorder questions without invoking the agent. Instant response."""
-    global session_manager
+    global interview_session_service
     
     # Debug logging
     logger.info(f"[REORDER] Request received - session_id: {request.session_id}")
@@ -1375,7 +1375,7 @@ async def reorder_questions(request: ReorderRequest):
         actions=actions,
         timestamp=time.time()
     )
-    await session_manager.safe_append_event(
+    await safe_append_event(
         interview_session_service, session, event,
         app_name="interview_generator", user_id="web", session_id=request.session_id
     )
@@ -1392,7 +1392,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
     Creates a new session with the saved questions pre-populated,
     allowing the user to continue editing via /interview/feedback.
     """
-    global session_manager
+    global interview_session_service
     
     pool = await get_db_pool()
     
@@ -1470,7 +1470,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
     
     async def get_or_create_feedback_session():
         """Helper to get existing session or create new one, handling race conditions."""
-        global session_manager
+        global interview_session_service
         session = await interview_session_service.get_session(
             app_name="interview_generator", user_id="web", session_id=session_id
         )
@@ -1503,7 +1503,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
         actions=actions,
         timestamp=time.time()
     )
-    await session_manager.safe_append_event(
+    await safe_append_event(
         interview_session_service, session, event,
         app_name="interview_generator", user_id="web", session_id=session_id
     )
@@ -1519,7 +1519,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
 @app.post("/interview/delete")
 async def delete_question(request: DeleteQuestionRequest):
     """Delete a question without invoking the agent. Instant response."""
-    global session_manager
+    global interview_session_service
     
     try:
         session = await interview_session_service.get_session(
@@ -1578,7 +1578,7 @@ async def delete_question(request: DeleteQuestionRequest):
         actions=actions,
         timestamp=time.time()
     )
-    await session_manager.safe_append_event(
+    await safe_append_event(
         interview_session_service, session, event,
         app_name="interview_generator", user_id="web", session_id=request.session_id
     )
@@ -1589,7 +1589,7 @@ async def delete_question(request: DeleteQuestionRequest):
 @app.post("/interview/add")
 async def add_question(request: AddQuestionRequest):
     """Add a question without invoking the agent. Instant response."""
-    global session_manager
+    global interview_session_service
     
     # Validate question type
     if request.question_type not in ("knockout", "qualification"):
@@ -1661,7 +1661,7 @@ async def add_question(request: AddQuestionRequest):
         actions=actions,
         timestamp=time.time()
     )
-    await session_manager.safe_append_event(
+    await safe_append_event(
         interview_session_service, session, event,
         app_name="interview_generator", user_id="web", session_id=request.session_id
     )
@@ -1674,19 +1674,40 @@ async def add_question(request: AddQuestionRequest):
 # ============================================================================
 
 # Session service for recruiter analyst agent (multi-agent with data_query sub-agent)
+analyst_session_service = None
+analyst_runner = None
+
+
+def create_analyst_session_service():
+    """Create recruiter analyst session service and runner."""
+    global analyst_session_service, analyst_runner
+    # Disable statement cache for Supabase transaction-level pooling compatibility
+    analyst_session_service = DatabaseSessionService(
+        db_url=DATABASE_URL,
+        connect_args={"statement_cache_size": 0}
+    )
+    analyst_runner = Runner(
+        agent=recruiter_analyst_agent,
+        app_name="recruiter_analyst",
+        session_service=analyst_session_service
+    )
+    logger.info("Created recruiter analyst session service and runner")
+
+
 async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator[str, None]:
     """Stream SSE events during analyst query processing."""
-    global session_manager
-
+    global analyst_session_service, analyst_runner
+    
     async def get_or_create_analyst_session():
         """Helper to get existing session or create new one, handling race conditions."""
-        existing = await session_manager.analyst_session_service.get_session(
+        global analyst_session_service
+        existing = await analyst_session_service.get_session(
             app_name="recruiter_analyst", user_id="web", session_id=session_id
         )
         if existing:
             return
         try:
-            await session_manager.analyst_session_service.create_session(
+            await analyst_session_service.create_session(
                 app_name="recruiter_analyst",
                 user_id="web",
                 session_id=session_id
@@ -1694,12 +1715,13 @@ async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator
         except IntegrityError:
             # Session was created by another request, that's fine
             logger.info(f"Analyst session {session_id} already exists")
-
-    await session_manager.with_session_retry(
-        get_or_create_analyst_session,
-        lambda: session_manager.create_analyst_session_service(recruiter_analyst_agent),
-        "create analyst session"
-    )
+    
+    try:
+        await get_or_create_analyst_session()
+    except (InterfaceError, OperationalError) as e:
+        logger.warning(f"Database connection error, recreating analyst session service: {e}")
+        create_analyst_session_service()
+        await get_or_create_analyst_session()
     
     # Send initial status
     yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Vraag analyseren...'})}\n\n"
@@ -1753,7 +1775,7 @@ async def analyst_query(request: DataQueryRequest):
 @app.get("/data-query/session/{session_id}")
 async def get_analyst_session(session_id: str):
     """Get the current session state for an analyst session."""
-    global session_manager
+    global analyst_session_service
     
     try:
         session = await analyst_session_service.get_session(
@@ -1782,7 +1804,7 @@ async def get_analyst_session(session_id: str):
 @app.delete("/data-query/session/{session_id}")
 async def delete_analyst_session(session_id: str):
     """Delete an analyst session to start fresh."""
-    global session_manager
+    global analyst_session_service
     
     try:
         session = await analyst_session_service.get_session(
@@ -2546,7 +2568,7 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
     # Invalidate cached screening runner so next chat uses updated questions
     if vacancy_id in screening_runners:
         del screening_runners[vacancy_id]
-    session_manager.invalidate_screening_runner(vacancy_id)
+        logger.info(f"🔄 Cleared cached screening runner for vacancy {vacancy_id[:8]}...")
 
     return {
         "status": "success",
@@ -2566,7 +2588,7 @@ async def get_pre_screening(vacancy_id: str):
     questions, returning session_id and interview for use with /interview/feedback.
     """
     from src.repositories import PreScreeningRepository
-    global session_manager
+    global interview_session_service
     pool = await get_db_pool()
 
     # Validate UUID format
@@ -2647,7 +2669,7 @@ async def get_pre_screening(vacancy_id: str):
     
     async def get_or_create_session():
         """Helper to get existing session or create new one, handling race conditions."""
-        global session_manager
+        global interview_session_service
         session = await interview_session_service.get_session(
             app_name="interview_generator", user_id="web", session_id=session_id
         )
@@ -2680,7 +2702,7 @@ async def get_pre_screening(vacancy_id: str):
         actions=actions,
         timestamp=time.time()
     )
-    await session_manager.safe_append_event(
+    await safe_append_event(
         interview_session_service, session, event,
         app_name="interview_generator", user_id="web", session_id=session_id
     )
@@ -2730,7 +2752,7 @@ async def delete_pre_screening(vacancy_id: str):
     # Invalidate cached screening runner
     if vacancy_id in screening_runners:
         del screening_runners[vacancy_id]
-    session_manager.invalidate_screening_runner(vacancy_id)
+        logger.info(f"🔄 Cleared cached screening runner for vacancy {vacancy_id[:8]}...")
 
     return {
         "status": "success",
@@ -3041,6 +3063,66 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
 # ============================================================================
 
 # Session service for screening chat (separate from knockout agent)
+screening_session_service = None
+screening_runners: dict[str, Runner] = {}  # Cache runners by vacancy_id
+
+
+def create_screening_session_service():
+    """Create screening chat session service."""
+    global screening_session_service
+    # Disable statement cache for Supabase transaction-level pooling compatibility
+    screening_session_service = DatabaseSessionService(
+        db_url=DATABASE_URL,
+        connect_args={"statement_cache_size": 0}
+    )
+    logger.info("Created screening chat session service")
+
+
+def get_or_create_screening_runner(vacancy_id: str, pre_screening: dict, vacancy_title: str) -> Runner:
+    """Get or create a screening runner for a specific vacancy."""
+    global screening_session_service, screening_runners
+    
+    # Check cache
+    if vacancy_id in screening_runners:
+        logger.info(f"Using cached screening runner for vacancy {vacancy_id[:8]}")
+        return screening_runners[vacancy_id]
+    
+    # Build dynamic instruction
+    instruction = build_screening_instruction(pre_screening, vacancy_title)
+    
+    # Log the full system prompt
+    logger.info("=" * 60)
+    logger.info(f"📋 SCREENING AGENT CREATED: screening_{vacancy_id[:8]}")
+    logger.info("=" * 60)
+    logger.info("FULL SYSTEM PROMPT:")
+    logger.info("=" * 60)
+    for line in instruction.split('\n'):
+        logger.info(line)
+    logger.info("=" * 60)
+    
+    # Create agent with conversation_complete tool
+    agent = Agent(
+        name=f"screening_{vacancy_id[:8]}",
+        model="gemini-2.5-flash",
+        instruction=instruction,
+        description=f"Screening agent for vacancy {vacancy_title}",
+        tools=[conversation_complete_tool],
+    )
+    
+    # Create runner
+    runner = Runner(
+        agent=agent,
+        app_name="screening_chat",
+        session_service=screening_session_service
+    )
+    
+    # Cache it
+    screening_runners[vacancy_id] = runner
+    logger.info(f"✅ Screening runner ready: screening_{vacancy_id[:8]}")
+    
+    return runner
+
+
 async def stream_screening_chat(
     vacancy_id: str, 
     message: str, 
@@ -3049,7 +3131,7 @@ async def stream_screening_chat(
     is_test: bool = False
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events during screening chat."""
-    global session_manager
+    global screening_session_service
     
     pool = await get_db_pool()
     
@@ -3104,7 +3186,7 @@ async def stream_screening_chat(
     }
     
     # Get or create runner
-    runner = session_manager.get_or_create_screening_runner(vacancy_id, pre_screening, vacancy["title"])
+    runner = get_or_create_screening_runner(vacancy_id, pre_screening, vacancy["title"])
     
     # Handle new conversation vs continuation
     is_new_conversation = session_id is None or message.upper() == "START"
@@ -3231,7 +3313,7 @@ async def screening_chat(request: ScreeningChatRequest):
     - Include session_id from previous response
     """
     # Initialize session service if needed
-    global session_manager
+    global screening_session_service
     if screening_session_service is None:
         create_screening_session_service()
     
@@ -3965,7 +4047,7 @@ async def _initiate_whatsapp_screening(
         }
         
         # Get or create the same screening runner as chat widget uses
-        runner = session_manager.get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
+        runner = get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
         
         # Generate a unique session ID for this conversation (like webchat does)
         adk_session_id = str(uuid.uuid4())
