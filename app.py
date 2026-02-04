@@ -167,6 +167,107 @@ def build_vacancy_response(row) -> VacancyResponse:
     )
 
 
+def build_application_response(
+    app_row: asyncpg.Record,
+    all_questions: list[asyncpg.Record],
+    answer_rows: list[asyncpg.Record]
+) -> ApplicationResponse:
+    """
+    Build an ApplicationResponse model from database rows.
+
+    Merges questions with answers, handling both UUID and legacy (ko_1, qual_2) formats.
+    Calculates overall score and question statistics.
+    """
+    # Build a map of existing answers by question_id
+    answer_map = {a["question_id"]: a for a in answer_rows}
+
+    answers = []
+    total_score = 0
+    score_count = 0
+    knockout_passed = 0
+    knockout_total = 0
+    qualification_count = 0
+
+    # Process all questions, merging with answers where available
+    for q in all_questions:
+        q_id = str(q["id"])
+        # Check both UUID format and ko_/qual_ prefix format
+        existing_answer = answer_map.get(q_id)
+        if not existing_answer:
+            # Try legacy format (ko_1, qual_2, etc.)
+            # Note: position in DB is 0-indexed, but ko_/qual_ IDs are 1-indexed
+            if q["question_type"] == "knockout":
+                legacy_id = f"ko_{q['position'] + 1}"
+            else:
+                legacy_id = f"qual_{q['position'] + 1}"
+            existing_answer = answer_map.get(legacy_id)
+
+        if existing_answer:
+            answers.append(QuestionAnswerResponse(
+                question_id=existing_answer["question_id"],
+                question_text=existing_answer["question_text"],
+                question_type=q["question_type"],
+                answer=existing_answer["answer"],
+                passed=existing_answer["passed"],
+                score=existing_answer["score"],
+                rating=existing_answer["rating"],
+                motivation=existing_answer["motivation"]
+            ))
+
+            # Calculate stats
+            if q["question_type"] == "knockout":
+                knockout_total += 1
+                if existing_answer["passed"]:
+                    knockout_passed += 1
+            else:
+                qualification_count += 1
+
+            if existing_answer["score"] is not None:
+                total_score += existing_answer["score"]
+                score_count += 1
+        else:
+            # Question exists but no answer yet - include with null values
+            answers.append(QuestionAnswerResponse(
+                question_id=q_id,
+                question_text=q["question_text"],
+                question_type=q["question_type"],
+                answer=None,
+                passed=None,
+                score=None,
+                rating=None,
+                motivation=None
+            ))
+
+            # Count knockout questions even if unanswered
+            if q["question_type"] == "knockout":
+                knockout_total += 1
+
+    # Calculate overall score as average
+    overall_score = round(total_score / score_count) if score_count > 0 else None
+
+    return ApplicationResponse(
+        id=str(app_row["id"]),
+        vacancy_id=str(app_row["vacancy_id"]),
+        candidate_name=app_row["candidate_name"],
+        channel=app_row["channel"],
+        status=app_row["status"] or "completed",
+        qualified=app_row["qualified"],
+        started_at=app_row["started_at"],
+        completed_at=app_row["completed_at"],
+        interaction_seconds=app_row["interaction_seconds"],
+        answers=answers,
+        synced=app_row["synced"],
+        synced_at=app_row["synced_at"],
+        overall_score=overall_score,
+        knockout_passed=knockout_passed,
+        knockout_total=knockout_total,
+        qualification_count=qualification_count,
+        summary=app_row["summary"],
+        interview_slot=app_row["interview_slot"],
+        is_test=app_row["is_test"] or False
+    )
+
+
 # Global session service (legacy - kept for backward compatibility with existing sessions)
 session_service = None
 
@@ -2071,180 +2172,37 @@ async def list_applications(
     offset: int = Query(0, ge=0)
 ):
     """List all applications for a vacancy. Use is_test=true to see test conversations, is_test=false for real ones."""
-    pool = await get_db_pool()
-    
+    from src.repositories import ApplicationRepository, VacancyRepository
+
     # Validate UUID format
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
-    
+
+    pool = await get_db_pool()
+    vacancy_repo = VacancyRepository(pool)
+    app_repo = ApplicationRepository(pool)
+
     # Verify vacancy exists
-    vacancy_exists = await pool.fetchval(
-        "SELECT 1 FROM vacancies WHERE id = $1",
-        vacancy_uuid
-    )
-    if not vacancy_exists:
+    if not await vacancy_repo.exists(vacancy_uuid):
         raise HTTPException(status_code=404, detail="Vacancy not found")
-    
-    # Build query with filters
-    conditions = ["vacancy_id = $1"]
-    params = [vacancy_uuid]
-    param_idx = 2
-    
-    if qualified is not None:
-        conditions.append(f"qualified = ${param_idx}")
-        params.append(qualified)
-        param_idx += 1
-    
-    if completed is not None:
-        # Translate completed boolean to status filter for backwards compatibility
-        if completed:
-            conditions.append(f"status = 'completed'")
-        else:
-            conditions.append(f"status != 'completed'")
-    
-    if synced is not None:
-        conditions.append(f"synced = ${param_idx}")
-        params.append(synced)
-        param_idx += 1
-    
-    if is_test is not None:
-        conditions.append(f"is_test = ${param_idx}")
-        params.append(is_test)
-        param_idx += 1
-    
-    where_clause = f"WHERE {' AND '.join(conditions)}"
-    
-    # Get total count
-    count_query = f"SELECT COUNT(*) FROM applications {where_clause}"
-    total = await pool.fetchval(count_query, *params)
-    
+
     # Get applications
-    query = f"""
-        SELECT id, vacancy_id, candidate_name, channel, status, qualified,
-               started_at, completed_at, interaction_seconds, synced, synced_at, summary, interview_slot, is_test
-        FROM applications
-        {where_clause}
-        ORDER BY started_at DESC
-        LIMIT ${param_idx} OFFSET ${param_idx + 1}
-    """
-    params.extend([limit, offset])
-    
-    rows = await pool.fetch(query, *params)
-    
+    rows, total = await app_repo.list_for_vacancy(
+        vacancy_uuid, qualified=qualified, completed=completed,
+        synced=synced, is_test=is_test, limit=limit, offset=offset
+    )
+
     # Fetch all pre-screening questions for this vacancy once
-    questions_query = """
-        SELECT psq.id, psq.question_type, psq.position, psq.question_text
-        FROM pre_screening_questions psq
-        JOIN pre_screenings ps ON ps.id = psq.pre_screening_id
-        WHERE ps.vacancy_id = $1
-        ORDER BY 
-            CASE psq.question_type WHEN 'knockout' THEN 0 ELSE 1 END,
-            psq.position
-    """
-    all_questions = await pool.fetch(questions_query, vacancy_uuid)
-    
-    # Fetch answers for each application
+    all_questions = await app_repo.get_questions_for_vacancy(vacancy_uuid)
+
+    # Build application responses
     applications = []
     for row in rows:
-        answers_query = """
-            SELECT question_id, question_text, answer, passed, score, rating, motivation
-            FROM application_answers
-            WHERE application_id = $1
-            ORDER BY id
-        """
-        answer_rows = await pool.fetch(answers_query, row["id"])
-        
-        # Build a map of existing answers by question_id
-        answer_map = {a["question_id"]: a for a in answer_rows}
-        
-        answers = []
-        total_score = 0
-        score_count = 0
-        knockout_passed = 0
-        knockout_total = 0
-        qualification_count = 0
-        
-        # Process all questions, merging with answers where available
-        for q in all_questions:
-            q_id = str(q["id"])
-            # Check both UUID format and ko_/qual_ prefix format
-            existing_answer = answer_map.get(q_id)
-            if not existing_answer:
-                # Try legacy format (ko_1, qual_2, etc.)
-                # Note: position in DB is 0-indexed, but ko_/qual_ IDs are 1-indexed
-                if q["question_type"] == "knockout":
-                    legacy_id = f"ko_{q['position'] + 1}"
-                else:
-                    legacy_id = f"qual_{q['position'] + 1}"
-                existing_answer = answer_map.get(legacy_id)
-            
-            if existing_answer:
-                answers.append(QuestionAnswerResponse(
-                    question_id=existing_answer["question_id"],
-                    question_text=existing_answer["question_text"],
-                    question_type=q["question_type"],
-                    answer=existing_answer["answer"],
-                    passed=existing_answer["passed"],
-                    score=existing_answer["score"],
-                    rating=existing_answer["rating"],
-                    motivation=existing_answer["motivation"]
-                ))
-                
-                # Calculate stats
-                if q["question_type"] == "knockout":
-                    knockout_total += 1
-                    if existing_answer["passed"]:
-                        knockout_passed += 1
-                else:
-                    qualification_count += 1
-                
-                if existing_answer["score"] is not None:
-                    total_score += existing_answer["score"]
-                    score_count += 1
-            else:
-                # Question exists but no answer yet - include with null values
-                answers.append(QuestionAnswerResponse(
-                    question_id=q_id,
-                    question_text=q["question_text"],
-                    question_type=q["question_type"],
-                    answer=None,
-                    passed=None,
-                    score=None,
-                    rating=None,
-                    motivation=None
-                ))
-                
-                # Count knockout questions even if unanswered
-                if q["question_type"] == "knockout":
-                    knockout_total += 1
-        
-        # Calculate overall score as average
-        overall_score = round(total_score / score_count) if score_count > 0 else None
-        
-        applications.append(ApplicationResponse(
-            id=str(row["id"]),
-            vacancy_id=str(row["vacancy_id"]),
-            candidate_name=row["candidate_name"],
-            channel=row["channel"],
-            status=row["status"] or "completed",
-            qualified=row["qualified"],
-            started_at=row["started_at"],
-            completed_at=row["completed_at"],
-            interaction_seconds=row["interaction_seconds"],
-            answers=answers,
-            synced=row["synced"],
-            synced_at=row["synced_at"],
-            overall_score=overall_score,
-            knockout_passed=knockout_passed,
-            knockout_total=knockout_total,
-            qualification_count=qualification_count,
-            summary=row["summary"],
-            interview_slot=row["interview_slot"],
-            is_test=row["is_test"] or False
-        ))
-    
+        answer_rows = await app_repo.get_answers(row["id"])
+        applications.append(build_application_response(row, all_questions, answer_rows))
+
     return {
         "applications": applications,
         "total": total,
@@ -2256,135 +2214,27 @@ async def list_applications(
 @app.get("/applications/{application_id}")
 async def get_application(application_id: str):
     """Get a single application by ID."""
-    pool = await get_db_pool()
-    
+    from src.repositories import ApplicationRepository
+
     # Validate UUID format
     try:
         application_uuid = uuid.UUID(application_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid application ID format: {application_id}")
-    
-    query = """
-        SELECT id, vacancy_id, candidate_name, channel, status, qualified,
-               started_at, completed_at, interaction_seconds, synced, synced_at, summary, interview_slot, is_test
-        FROM applications
-        WHERE id = $1
-    """
-    
-    row = await pool.fetchrow(query, application_uuid)
-    
+
+    pool = await get_db_pool()
+    app_repo = ApplicationRepository(pool)
+
+    row = await app_repo.get_by_id(application_uuid)
+
     if not row:
         raise HTTPException(status_code=404, detail="Application not found")
-    
-    # Fetch answers that exist
-    answers_query = """
-        SELECT question_id, question_text, answer, passed, score, rating, motivation
-        FROM application_answers
-        WHERE application_id = $1
-        ORDER BY id
-    """
-    answer_rows = await pool.fetch(answers_query, row["id"])
-    
-    # Build a map of existing answers by question_id
-    answer_map = {a["question_id"]: a for a in answer_rows}
-    
-    # Fetch all pre-screening questions for this vacancy to include unanswered questions
-    questions_query = """
-        SELECT psq.id, psq.question_type, psq.position, psq.question_text
-        FROM pre_screening_questions psq
-        JOIN pre_screenings ps ON ps.id = psq.pre_screening_id
-        WHERE ps.vacancy_id = $1
-        ORDER BY 
-            CASE psq.question_type WHEN 'knockout' THEN 0 ELSE 1 END,
-            psq.position
-    """
-    question_rows = await pool.fetch(questions_query, row["vacancy_id"])
-    
-    answers = []
-    total_score = 0
-    score_count = 0
-    knockout_passed = 0
-    knockout_total = 0
-    qualification_count = 0
-    
-    # Process all questions, merging with answers where available
-    for q in question_rows:
-        q_id = str(q["id"])
-        # Check both UUID format and ko_/qual_ prefix format
-        existing_answer = answer_map.get(q_id)
-        if not existing_answer:
-            # Try legacy format (ko_1, qual_2, etc.)
-            # Note: position in DB is 0-indexed, but ko_/qual_ IDs are 1-indexed
-            if q["question_type"] == "knockout":
-                legacy_id = f"ko_{q['position'] + 1}"
-            else:
-                legacy_id = f"qual_{q['position'] + 1}"
-            existing_answer = answer_map.get(legacy_id)
-        
-        if existing_answer:
-            answers.append(QuestionAnswerResponse(
-                question_id=existing_answer["question_id"],
-                question_text=existing_answer["question_text"],
-                question_type=q["question_type"],
-                answer=existing_answer["answer"],
-                passed=existing_answer["passed"],
-                score=existing_answer["score"],
-                rating=existing_answer["rating"],
-                motivation=existing_answer["motivation"]
-            ))
-            
-            # Calculate stats
-            if q["question_type"] == "knockout":
-                knockout_total += 1
-                if existing_answer["passed"]:
-                    knockout_passed += 1
-            else:
-                qualification_count += 1
-            
-            if existing_answer["score"] is not None:
-                total_score += existing_answer["score"]
-                score_count += 1
-        else:
-            # Question exists but no answer yet - include with null values
-            answers.append(QuestionAnswerResponse(
-                question_id=q_id,
-                question_text=q["question_text"],
-                question_type=q["question_type"],
-                answer=None,
-                passed=None,
-                score=None,
-                rating=None,
-                motivation=None
-            ))
-            
-            # Count knockout questions even if unanswered
-            if q["question_type"] == "knockout":
-                knockout_total += 1
-    
-    # Calculate overall score as average
-    overall_score = round(total_score / score_count) if score_count > 0 else None
-    
-    return ApplicationResponse(
-        id=str(row["id"]),
-        vacancy_id=str(row["vacancy_id"]),
-        candidate_name=row["candidate_name"],
-        channel=row["channel"],
-        status=row["status"] or "completed",
-        qualified=row["qualified"],
-        started_at=row["started_at"],
-        completed_at=row["completed_at"],
-        interaction_seconds=row["interaction_seconds"],
-        answers=answers,
-        synced=row["synced"],
-        synced_at=row["synced_at"],
-        overall_score=overall_score,
-        knockout_passed=knockout_passed,
-        knockout_total=knockout_total,
-        qualification_count=qualification_count,
-        summary=row["summary"],
-        interview_slot=row["interview_slot"],
-        is_test=row["is_test"] or False
-    )
+
+    # Fetch answers and questions
+    answer_rows = await app_repo.get_answers(row["id"])
+    question_rows = await app_repo.get_questions_for_vacancy(row["vacancy_id"])
+
+    return build_application_response(row, question_rows, answer_rows)
 
 
 @app.post("/applications/reprocess-tests")
