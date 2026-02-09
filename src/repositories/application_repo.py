@@ -30,7 +30,9 @@ class ApplicationRepository:
             Tuple of (application rows, total count)
         """
         # Build query with filters
-        conditions = ["vacancy_id = $1"]
+        conditions = [
+            "vacancy_id = $1"
+        ]
         params = [vacancy_id]
         param_idx = 2
 

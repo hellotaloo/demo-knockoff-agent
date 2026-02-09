@@ -76,6 +76,13 @@ from .cv import (
 # Data query models
 from .data_query import DataQueryRequest
 
+# Document collection models
+from .document_collection import (
+    OutboundDocumentRequest,
+    OutboundDocumentResponse,
+    DocumentCollectionDebugResponse,
+)
+
 __all__ = [
     # Common
     "PaginatedResponse",
@@ -124,4 +131,8 @@ __all__ = [
     "CVAnalyzeResponse",
     # Data query
     "DataQueryRequest",
+    # Document collection
+    "OutboundDocumentRequest",
+    "OutboundDocumentResponse",
+    "DocumentCollectionDebugResponse",
 ]

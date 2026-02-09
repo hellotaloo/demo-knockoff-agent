@@ -31,6 +31,7 @@ class SessionManager:
         self.interview_session_service: Optional[DatabaseSessionService] = None
         self.analyst_session_service: Optional[DatabaseSessionService] = None
         self.screening_session_service: Optional[DatabaseSessionService] = None
+        self.document_session_service: Optional[DatabaseSessionService] = None
 
         # Runners (stateful)
         self.interview_runner: Optional[Runner] = None
@@ -39,6 +40,9 @@ class SessionManager:
 
         # Screening runners cache (keyed by vacancy_id)
         self.screening_runners: dict[str, Runner] = {}
+
+        # Document collection runners cache (keyed by collection_id)
+        self.document_runners: dict[str, Runner] = {}
 
     def create_session_service(self) -> DatabaseSessionService:
         """Create the main session service."""
@@ -102,6 +106,15 @@ class SessionManager:
         )
         logger.info("Created screening chat session service")
         return self.screening_session_service
+
+    def create_document_session_service(self) -> DatabaseSessionService:
+        """Create document collection session service."""
+        self.document_session_service = DatabaseSessionService(
+            db_url=self.database_url,
+            connect_args=self.connect_args
+        )
+        logger.info("Created document collection session service")
+        return self.document_session_service
 
     async def safe_append_event(
         self,
@@ -227,3 +240,46 @@ class SessionManager:
         if vacancy_id in self.screening_runners:
             del self.screening_runners[vacancy_id]
             logger.info(f"🔄 Cleared cached screening runner for vacancy {vacancy_id[:8]}...")
+
+    def get_or_create_document_runner(
+        self,
+        collection_id: str,
+        candidate_name: str,
+        documents_required: list[str]
+    ) -> Runner:
+        """
+        Get or create a document collection runner for a specific collection.
+
+        Runners are cached per collection_id to avoid recreating them on every webhook.
+        """
+        # Check cache
+        if collection_id in self.document_runners:
+            logger.info(f"Using cached document runner for collection {collection_id[:8]}")
+            return self.document_runners[collection_id]
+
+        # Create agent
+        from document_collection_agent import create_document_collection_agent
+        agent = create_document_collection_agent(
+            collection_id=collection_id,
+            candidate_name=candidate_name,
+            documents_required=documents_required
+        )
+
+        # Create runner
+        runner = Runner(
+            agent=agent,
+            app_name="document_collection",
+            session_service=self.document_session_service
+        )
+
+        # Cache it
+        self.document_runners[collection_id] = runner
+        logger.info(f"✅ Document collection runner ready: {collection_id[:8]}")
+
+        return runner
+
+    def invalidate_document_runner(self, collection_id: str):
+        """Remove a document runner from cache."""
+        if collection_id in self.document_runners:
+            del self.document_runners[collection_id]
+            logger.info(f"🔄 Cleared cached document runner for collection {collection_id[:8]}...")

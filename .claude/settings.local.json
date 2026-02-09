@@ -12,7 +12,16 @@
       "Bash(wc:*)",
       "Bash(python3:*)",
       "Bash(timeout 10 python:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(chmod:*)",
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "mcp__plugin_supabase_supabase__list_projects",
+      "mcp__plugin_supabase_supabase__list_branches",
+      "mcp__plugin_supabase_supabase__apply_migration",
+      "Bash(python -m py_compile:*)",
+      "Bash(python test_document_verification.py:*)",
+      "Bash(python:*)"
     ]
   }
 }

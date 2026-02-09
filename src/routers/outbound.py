@@ -98,67 +98,37 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     # Create full name from first_name + last_name
     candidate_name = f"{request.first_name} {request.last_name}".strip()
 
-    # Delete any existing applications for this phone/vacancy (and their related records)
-    existing_apps = await pool.fetch(
+    # Mark any existing applications as abandoned (preserves test history)
+    # Only affects applications from the SAME channel to avoid race conditions
+    abandoned_apps = await pool.execute(
         """
-        SELECT id FROM applications
-        WHERE vacancy_id = $1 AND candidate_phone = $2
+        UPDATE applications
+        SET status = 'abandoned'
+        WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = $3 AND status != 'completed'
         """,
         vacancy_uuid,
-        phone_normalized
+        phone_normalized,
+        request.channel.value
     )
 
-    if existing_apps:
-        app_ids = [row["id"] for row in existing_apps]
-        logger.info(f"🗑️ Deleting {len(app_ids)} existing application(s) for phone {phone_normalized}")
+    if abandoned_apps != "UPDATE 0":
+        logger.info(f"📦 Marked previous applications as abandoned for phone {phone_normalized}: {abandoned_apps}")
 
-        # Delete related application_answers first (foreign key constraint)
-        for app_id in app_ids:
-            await pool.execute(
-                "DELETE FROM application_answers WHERE application_id = $1",
-                app_id
-            )
-
-        # Delete the applications
-        await pool.execute(
-            """
-            DELETE FROM applications
-            WHERE vacancy_id = $1 AND candidate_phone = $2
-            """,
-            vacancy_uuid,
-            phone_normalized
-        )
-
-    # Delete any existing screening_conversations for this phone/vacancy (and their messages)
-    existing_convs = await pool.fetch(
+    # Mark any existing conversations as abandoned (preserves test history)
+    # Only affects conversations from the SAME channel to avoid race conditions
+    abandoned_convs = await pool.execute(
         """
-        SELECT id FROM screening_conversations
-        WHERE vacancy_id = $1 AND candidate_phone = $2
+        UPDATE screening_conversations
+        SET status = 'abandoned'
+        WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = $3 AND status = 'active'
         """,
         vacancy_uuid,
-        phone_normalized
+        phone_normalized,
+        request.channel.value
     )
 
-    if existing_convs:
-        conv_ids = [row["id"] for row in existing_convs]
-        logger.info(f"🗑️ Deleting {len(conv_ids)} existing conversation(s) for phone {phone_normalized}")
-
-        # Delete related conversation_messages first
-        for conv_id in conv_ids:
-            await pool.execute(
-                "DELETE FROM conversation_messages WHERE conversation_id = $1",
-                conv_id
-            )
-
-        # Delete the conversations
-        await pool.execute(
-            """
-            DELETE FROM screening_conversations
-            WHERE vacancy_id = $1 AND candidate_phone = $2
-            """,
-            vacancy_uuid,
-            phone_normalized
-        )
+    if abandoned_convs != "UPDATE 0":
+        logger.info(f"📦 Marked previous conversations as abandoned for phone {phone_normalized}: {abandoned_convs}")
 
     # Create new application record
     app_row = await pool.fetchrow(
@@ -233,7 +203,7 @@ async def _initiate_voice_screening(
         phone_normalized = phone.lstrip("+")
 
         # Abandon any existing active voice conversations for this phone number
-        abandoned = await pool.execute(
+        abandoned_convs = await pool.execute(
             """
             UPDATE screening_conversations
             SET status = 'abandoned'
@@ -243,8 +213,22 @@ async def _initiate_voice_screening(
             """,
             phone_normalized
         )
-        if abandoned != "UPDATE 0":
-            logger.info(f"Abandoned previous voice conversations for phone {phone_normalized}: {abandoned}")
+        if abandoned_convs != "UPDATE 0":
+            logger.info(f"📦 Marked previous voice conversations as abandoned for phone {phone_normalized}: {abandoned_convs}")
+
+        # Also mark previous voice applications as abandoned (for consistency with WhatsApp)
+        abandoned_apps = await pool.execute(
+            """
+            UPDATE applications
+            SET status = 'abandoned'
+            WHERE candidate_phone = $1
+            AND channel = 'voice'
+            AND status != 'completed'
+            """,
+            phone_normalized
+        )
+        if abandoned_apps != "UPDATE 0":
+            logger.info(f"📦 Marked previous voice applications as abandoned for phone {phone_normalized}: {abandoned_apps}")
 
         # Test mode: skip real call, use provided conversation_id
         if test_conversation_id:

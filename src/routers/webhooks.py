@@ -137,12 +137,13 @@ async def _process_whatsapp_conversation(
     is_test = conv_row["is_test"] or False
 
     # Find existing application and set status to 'processing' BEFORE AI processing
+    # IMPORTANT: Only find applications for the WHATSAPP channel to avoid race conditions with voice
     existing_app = None
     if candidate_phone:
         existing_app = await pool.fetchrow(
             """
             SELECT id FROM applications
-            WHERE vacancy_id = $1 AND candidate_phone = $2 AND status != 'completed'
+            WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = 'whatsapp' AND status != 'completed'
             """,
             vacancy_uuid, candidate_phone
         )
@@ -151,7 +152,7 @@ async def _process_whatsapp_conversation(
         existing_app = await pool.fetchrow(
             """
             SELECT id FROM applications
-            WHERE vacancy_id = $1 AND candidate_name = $2 AND status != 'completed'
+            WHERE vacancy_id = $1 AND candidate_name = $2 AND channel = 'whatsapp' AND status != 'completed'
             """,
             vacancy_uuid, candidate_name
         )
@@ -440,13 +441,20 @@ async def verify_elevenlabs_signature(request_body: bytes, signature_header: str
 # ============================================================================
 
 @router.post("/webhook")
-async def webhook(Body: str = Form(""), From: str = Form("")):
+async def webhook(
+    Body: str = Form(""),
+    From: str = Form(""),
+    NumMedia: int = Form(0),
+    MediaUrl0: Optional[str] = Form(None),
+    MediaContentType0: Optional[str] = Form(None)
+):
     """
-    Handle incoming WhatsApp messages from Twilio.
+    Handle incoming WhatsApp messages from Twilio with SMART ROUTING.
 
-    Routes to the correct agent based on whether there's an active outbound screening:
-    - If there's an active WhatsApp conversation for this phone, use the vacancy-specific agent
-    - Otherwise, fall back to the generic demo agent
+    Routes to the correct agent based on active conversation type:
+    1. Document collection (if active document_collection_conversation exists)
+    2. Pre-screening (if active screening_conversation exists)
+    3. Generic demo agent (fallback)
     """
     incoming_msg = Body
     from_number = From
@@ -457,7 +465,38 @@ async def webhook(Body: str = Form(""), From: str = Form("")):
 
     pool = await get_db_pool()
 
-    # Check for active WhatsApp conversation for this phone number
+    # SMART ROUTING: Check for active DOCUMENT COLLECTION first
+    logger.info(f"🔍 Webhook received from {phone_normalized} - checking routing...")
+
+    doc_conv_row = await pool.fetchrow(
+        """
+        SELECT id, vacancy_id, session_id, candidate_name
+        FROM document_collection_conversations
+        WHERE candidate_phone = $1
+        AND status = 'active'
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        phone_normalized
+    )
+
+    if doc_conv_row:
+        # Route to document collection webhook
+        logger.info(f"📄 SMART ROUTING → Document collection (conversation_id={doc_conv_row['id']})")
+        from src.routers.document_collection import router as doc_router
+        # Import the webhook handler
+        from src.routers import document_collection as doc_module
+        return await doc_module.document_webhook(
+            Body=Body,
+            From=From,
+            NumMedia=NumMedia,
+            MediaUrl0=MediaUrl0,
+            MediaContentType0=MediaContentType0
+        )
+
+    logger.info(f"❌ No active document collection found for {phone_normalized}")
+
+    # Check for active WhatsApp SCREENING conversation
     conv_row = await pool.fetchrow(
         """
         SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, v.title as vacancy_title
@@ -471,6 +510,12 @@ async def webhook(Body: str = Form(""), From: str = Form("")):
         """,
         phone_normalized
     )
+
+    if conv_row:
+        logger.info(f"📞 SMART ROUTING → Pre-screening (conversation_id={conv_row['id']})")
+    else:
+        logger.info(f"❌ No active pre-screening found for {phone_normalized}")
+        logger.info(f"🔀 SMART ROUTING → Generic fallback (no active conversations)")
 
     is_complete = False
     completion_outcome = None
@@ -692,12 +737,13 @@ async def elevenlabs_webhook(request: Request):
     candidate_name = screening_conv["candidate_name"] if screening_conv else "Voice Candidate"
 
     # Find existing application and set status to 'processing' BEFORE AI analysis
+    # IMPORTANT: Only find applications for the VOICE channel to avoid race conditions with WhatsApp
     existing_app = None
     if candidate_phone:
         existing_app = await pool.fetchrow(
             """
             SELECT id FROM applications
-            WHERE vacancy_id = $1 AND candidate_phone = $2 AND status != 'completed'
+            WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = 'voice' AND status != 'completed'
             """,
             vacancy_id,
             candidate_phone

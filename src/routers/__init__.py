@@ -12,6 +12,8 @@ from .data_query import router as data_query_router
 from .outbound import router as outbound_router
 from .cv import router as cv_router
 from .demo import router as demo_router
+from .documents import router as documents_router
+from .document_collection import router as document_collection_router
 
 __all__ = [
     "health_router",
@@ -24,5 +26,7 @@ __all__ = [
     "data_query_router",
     "outbound_router",
     "cv_router",
-    "demo_router"
+    "demo_router",
+    "documents_router",
+    "document_collection_router"
 ]

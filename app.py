@@ -100,7 +100,9 @@ from src.routers import (
     data_query_router,
     outbound_router,
     cv_router,
-    demo_router
+    demo_router,
+    documents_router,
+    document_collection_router
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -108,6 +110,7 @@ import src.routers.screening as screening_router_module
 import src.routers.webhooks as webhooks_router_module
 import src.routers.data_query as data_query_router_module
 import src.routers.outbound as outbound_router_module
+import src.routers.document_collection as document_collection_router_module
 
 
 # ============================================================================
@@ -135,6 +138,7 @@ async def lifespan(app: FastAPI):
     session_manager.create_interview_session_service(interview_agent, interview_editor_agent)
     session_manager.create_analyst_session_service(recruiter_analyst_agent)
     session_manager.create_screening_session_service()
+    session_manager.create_document_session_service()
 
     pool = await get_db_pool()  # Initialize database pool
 
@@ -179,6 +183,7 @@ async def lifespan(app: FastAPI):
     webhooks_router_module.set_session_manager(session_manager)
     data_query_router_module.set_session_manager(session_manager)
     outbound_router_module.set_session_manager(session_manager)
+    document_collection_router_module.set_session_manager(session_manager)
 
     yield
     # Cleanup on shutdown
@@ -214,6 +219,8 @@ app.include_router(data_query_router)
 app.include_router(outbound_router)
 app.include_router(cv_router)
 app.include_router(demo_router)
+app.include_router(documents_router)
+app.include_router(document_collection_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

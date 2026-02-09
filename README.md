@@ -104,17 +104,60 @@ adk web --port 8001
 
 Open http://localhost:8001 - select `interview_generator` or `knockout_agent`.
 
-### 5. Test WhatsApp Webhook Locally (Optional)
+### 5. Test WhatsApp & Voice Webhooks Locally
 
+For testing webhooks from Twilio (WhatsApp) and ElevenLabs (Voice) on your local machine:
+
+#### Quick Start (Recommended)
 ```bash
-# Start the FastAPI server
-uvicorn app:app --reload --port 8080
-
-# In another terminal, expose via ngrok
-ngrok http 8080
+# Automated setup - starts ngrok tunnel and backend
+./start-local-dev.sh
 ```
 
-Then configure the ngrok URL as your Twilio webhook.
+This script will:
+1. Start ngrok tunnel on port 8080
+2. Display the webhook URLs you need to configure
+3. Start the FastAPI backend with auto-reload
+
+#### Manual Setup
+```bash
+# Terminal 1: Start ngrok
+ngrok http 8080
+
+# Terminal 2: Start backend
+uvicorn app:app --reload --port 8080
+```
+
+#### Configure Webhooks
+
+After starting ngrok, update these URLs (replace `YOUR_NGROK_URL` with the URL shown):
+
+**Twilio (WhatsApp):**
+- Console: [Twilio Messaging](https://console.twilio.com/us1/develop/sms/settings/whatsapp-sandbox)
+- Webhook URL: `https://YOUR_NGROK_URL/webhook`
+- Method: POST
+
+**ElevenLabs (Voice):**
+- Console: [ElevenLabs Agents](https://elevenlabs.io/app/conversational-ai)
+- Post-call webhook: `https://YOUR_NGROK_URL/webhook/elevenlabs`
+
+**Note:** ngrok URLs change on each restart unless you use a paid plan with a fixed subdomain.
+
+#### Troubleshooting Local Testing
+
+**Problem:** Webhooks hitting production while testing locally
+
+If your local backend can't find conversations created via test buttons:
+1. Verify your `.env` file points to the correct database (not production)
+2. Check that Twilio/ElevenLabs webhooks point to your ngrok URL (not production)
+3. Restart backend after changing `.env` to ensure new configuration is loaded
+
+```bash
+# Check which database you're connected to
+cat .env | grep SUPABASE_URL
+
+# Should show your local/staging URL, not production
+```
 
 ## Interview Generator API
 
