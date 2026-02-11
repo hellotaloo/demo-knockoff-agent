@@ -4,6 +4,20 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-02-11** — Added `is_test` field to candidates table and API responses; added `is_test` filter to GET /candidates endpoint
+- **2026-02-11** — Added Agent endpoints for listing vacancies by agent status (GET /agents/prescreening/vacancies, GET /agents/preonboarding/vacancies)
+- **2026-02-11** — Added client_id to vacancies, VacancyResponse now includes client info (ClientSummary)
+- **2026-02-11** — Added Recruiters table with vacancy ownership (recruiter_id foreign key on vacancies)
+- **2026-02-11** — Added Clients table and fixture data (name, location, industry, logo)
+- **2026-02-11** — Changed VacancyStatus to lifecycle statuses (concept, open, on_hold, filled, closed) - decoupled from screening config
+- **2026-02-11** — Added agents field to vacancy responses (prescreening, preonboarding, insights)
+- **2026-02-11** — Added activity timeline to GET /vacancies/{vacancy_id} endpoint
+- **2026-02-11** — Added activity timeline to GET /candidates/{candidate_id} endpoint
+- **2026-02-11** — Added optional candidate_email to save-slot for sending calendar invites to candidates
+- **2026-02-11** — Added Candidates endpoints (list, get, update status/rating)
+- **2026-02-11** — Added cancel endpoint, calendar_event_id tracking, improved reschedule with event cancellation
+- **2026-02-11** — Added reschedule endpoint (POST /api/scheduling/interviews/by-conversation/{conversation_id}/reschedule)
+- **2026-02-10** — Added Scheduling endpoints (get-time-slots, save-slot, update notes by conversation_id)
 - **2026-02-09** — Initial contract — generated from codebase
 
 ---
@@ -15,17 +29,22 @@ Complete API reference for the Taloo recruitment screening platform.
 3. [Health](#health)
 4. [Vacancies](#vacancies)
 5. [Applications](#applications)
-6. [Pre-Screening](#pre-screening)
-7. [Interviews](#interviews)
-8. [Screening](#screening)
-9. [Outbound](#outbound)
-10. [CV Analysis](#cv-analysis)
-11. [Data Query](#data-query)
-12. [Documents](#documents)
-13. [Document Collection](#document-collection)
-14. [Webhooks](#webhooks)
-15. [Demo](#demo)
-16. [Error Reference](#error-reference)
+6. [Candidates](#candidates)
+7. [Clients](#clients)
+8. [Recruiters](#recruiters)
+9. [Agents](#agents)
+10. [Pre-Screening](#pre-screening)
+11. [Interviews](#interviews)
+12. [Screening](#screening)
+13. [Outbound](#outbound)
+14. [CV Analysis](#cv-analysis)
+15. [Data Query](#data-query)
+16. [Documents](#documents)
+17. [Document Collection](#document-collection)
+18. [Webhooks](#webhooks)
+19. [Scheduling](#scheduling)
+20. [Demo](#demo)
+21. [Error Reference](#error-reference)
 
 ---
 
@@ -59,11 +78,13 @@ interface PaginatedResponse<T> {
 ### Enums
 
 ```typescript
-type VacancyStatus = "new" | "draft" | "screening_active" | "archived";
+type VacancyStatus = "concept" | "open" | "on_hold" | "filled" | "closed";
 type VacancySource = "salesforce" | "bullhorn" | "manual";
 type InterviewChannel = "voice" | "whatsapp";
 type QuestionType = "knockout" | "qualification";
 type ApplicationStatus = "active" | "processing" | "completed" | "abandoned";
+type CandidateStatus = "new" | "qualified" | "active" | "placed" | "inactive";
+type AvailabilityStatus = "available" | "unavailable" | "unknown";
 type DocumentCategory = "driver_license" | "medical_certificate" | "work_permit" | "certificate_diploma" | "id_card" | "unknown" | "unreadable";
 type FraudRiskLevel = "low" | "medium" | "high";
 type ImageQuality = "excellent" | "good" | "acceptable" | "poor" | "unreadable";
@@ -136,6 +157,35 @@ interface ChannelsResponse {
   cv: boolean;
 }
 
+interface AgentStatusResponse {
+  exists: boolean;         // True if agent is generated/configured
+  status: "online" | "offline" | null;  // Agent status (null if not applicable)
+}
+
+interface AgentsResponse {
+  prescreening: AgentStatusResponse;   // Pre-screening AI agent
+  preonboarding: AgentStatusResponse;  // Pre-onboarding AI agent (document collection)
+  insights: AgentStatusResponse;       // Insights AI agent (analytics)
+}
+
+interface RecruiterSummary {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  team?: string;
+  role?: string;
+  avatar_url?: string;
+}
+
+interface ClientSummary {
+  id: string;
+  name: string;
+  location?: string;
+  industry?: string;
+  logo?: string;
+}
+
 interface VacancyResponse {
   id: string;
   title: string;
@@ -150,6 +200,11 @@ interface VacancyResponse {
   has_screening: boolean;
   is_online?: boolean;
   channels: ChannelsResponse;
+  agents: AgentsResponse;
+  recruiter_id?: string;         // UUID - foreign key to recruiters table
+  recruiter?: RecruiterSummary;  // Full recruiter info (if assigned)
+  client_id?: string;            // UUID - foreign key to clients table
+  client?: ClientSummary;        // Full client info (if assigned)
   candidates_count: number;
   completed_count: number;
   qualified_count: number;
@@ -174,7 +229,7 @@ interface VacanciesListResponse {
 
 ### GET /vacancies/{vacancy_id}
 
-Get a single vacancy by ID.
+Get a single vacancy by ID with activity timeline.
 
 **Auth:** None
 
@@ -184,7 +239,15 @@ Get a single vacancy by ID.
 |------|------|-------------|
 | `vacancy_id` | string (UUID) | Vacancy identifier |
 
-**Response:** `VacancyResponse`
+**Response:**
+
+```typescript
+interface VacancyDetailResponse extends VacancyResponse {
+  timeline: ActivityResponse[];  // Activity timeline for this vacancy, newest first (max 50)
+}
+```
+
+Note: See `ActivityResponse` in [Candidates](#candidates) section for the activity object structure.
 
 **Error Responses:**
 
@@ -415,6 +478,386 @@ interface ReprocessResponse {
   error_details: string[];
 }
 ```
+
+---
+
+## Candidates
+
+### GET /candidates
+
+List candidates with skills, vacancy count, and last activity.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `limit` | number | No | 50 | Results per page (1-100) |
+| `offset` | number | No | 0 | Pagination offset |
+| `status` | CandidateStatus | No | - | Filter by status |
+| `availability` | AvailabilityStatus | No | - | Filter by availability |
+| `search` | string | No | - | Search by name, email, or phone |
+| `is_test` | boolean | No | - | Filter by test flag: true for test candidates, false for real ones |
+| `sort_by` | string | No | "status" | Sort field: status, name, last_activity, rating, availability |
+| `sort_order` | string | No | "asc" | Sort order: asc or desc |
+
+**Response:**
+
+```typescript
+interface CandidateSkillResponse {
+  id: string;
+  skill_name: string;
+  skill_code?: string;
+  skill_category?: string;  // skills, education, certificates, personality
+  score?: number;           // 0.0-1.0
+  evidence?: string;
+  source: string;           // cv_analysis, manual, screening, import
+  created_at: string;
+}
+
+interface CandidateListResponse {
+  id: string;
+  phone?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  full_name: string;
+  source?: string;
+  status: CandidateStatus;
+  status_updated_at?: string;
+  availability: AvailabilityStatus;
+  available_from?: string;  // YYYY-MM-DD
+  rating?: number;          // 0.0-5.0
+  is_test: boolean;         // Flag for test candidates created during admin testing
+  created_at: string;
+  updated_at: string;
+  skills: CandidateSkillResponse[];
+  vacancy_count: number;
+  last_activity?: string;
+}
+```
+
+---
+
+### GET /candidates/{candidate_id}
+
+Get a single candidate with applications, skills, and activity timeline.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `candidate_id` | string (UUID) | Candidate identifier |
+
+**Response:**
+
+```typescript
+interface CandidateApplicationSummary {
+  id: string;
+  vacancy_id: string;
+  vacancy_title: string;
+  vacancy_company: string;
+  channel: string;
+  status: string;
+  qualified?: boolean;
+  started_at: string;
+  completed_at?: string;
+}
+
+interface ActivityResponse {
+  id: string;
+  candidate_id: string;
+  application_id?: string;
+  vacancy_id?: string;
+  event_type: string;  // screening_started, qualified, disqualified, interview_scheduled, etc.
+  channel?: string;    // voice, whatsapp, cv, web
+  actor_type: string;  // candidate, agent, recruiter, system
+  actor_id?: string;
+  metadata: Record<string, any>;
+  summary?: string;    // Human-readable description in Dutch
+  created_at: string;
+}
+
+interface CandidateWithApplicationsResponse {
+  id: string;
+  phone?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  full_name: string;
+  source?: string;
+  status: CandidateStatus;
+  status_updated_at?: string;
+  availability: AvailabilityStatus;
+  available_from?: string;
+  rating?: number;
+  is_test: boolean;         // Flag for test candidates created during admin testing
+  created_at: string;
+  updated_at: string;
+  applications: CandidateApplicationSummary[];
+  skills: CandidateSkillResponse[];
+  timeline: ActivityResponse[];  // Activity timeline, newest first (max 50)
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Candidate not found |
+
+---
+
+### PATCH /candidates/{candidate_id}/status
+
+Update a candidate's status.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `candidate_id` | string (UUID) | Candidate identifier |
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `status` | CandidateStatus | Yes | New status value |
+
+**Response:**
+
+```typescript
+interface UpdateStatusResponse {
+  status: "success";
+  candidate_id: string;
+  new_status: CandidateStatus;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Candidate not found |
+
+---
+
+### PATCH /candidates/{candidate_id}/rating
+
+Update a candidate's rating.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `candidate_id` | string (UUID) | Candidate identifier |
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `rating` | number | Yes | Rating from 0 to 5 |
+
+**Response:**
+
+```typescript
+interface UpdateRatingResponse {
+  status: "success";
+  candidate_id: string;
+  new_rating: number;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Candidate not found |
+
+---
+
+## Clients
+
+Client/company information for recruitment tracking.
+
+### Database Schema
+
+```typescript
+interface Client {
+  id: string;           // UUID
+  name: string;         // Required - company name
+  location?: string;    // City, country
+  industry?: string;    // Industry sector
+  logo?: string;        // Path to logo image (e.g., "/companies/name.png")
+  website?: string;
+  contact_name?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### Available Clients (Fixtures)
+
+| Name | Location | Industry | Logo |
+|------|----------|----------|------|
+| Vandemoortele | Gent, België | Voeding | `/companies/vandmoortele.png` |
+| Agristo | Harelbeke, België | Voeding | `/companies/agristo.png` |
+| Colruyt Group | Halle, België | Retail | `/companies/colruyt_group.png` |
+| Essers | Genk, België | Logistiek | `/companies/essers.png` |
+| Nike Laakdal | Laakdal, België | Logistiek | - |
+| McDonalds Genk | Genk, België | Horeca | `/companies/mcdonalds.png` |
+| Intern | België | Intern | - |
+
+> **Note:** API endpoints for clients (CRUD operations) are not yet implemented. Currently, clients are managed directly in the database.
+
+---
+
+## Recruiters
+
+Recruiter information for vacancy ownership. Every vacancy is owned by a recruiter.
+
+### Database Schema
+
+```typescript
+interface Recruiter {
+  id: string;           // UUID
+  name: string;         // Required - recruiter name
+  email?: string;       // Unique email address
+  phone?: string;
+  team?: string;        // Team/region assignment
+  role?: string;        // Job title (e.g., "Senior Recruiter", "Team Lead")
+  avatar_url?: string;  // Profile image URL
+  is_active: boolean;   // Default: true
+  created_at: string;
+  updated_at: string;
+}
+```
+
+### Vacancy Ownership
+
+Vacancies have an optional `recruiter_id` foreign key linking to the recruiters table:
+
+```typescript
+interface VacancyResponse {
+  // ... existing fields
+  recruiter_id?: string;  // UUID - owner recruiter
+}
+```
+
+### Available Recruiters (Fixtures)
+
+| Name | Email | Phone | Team | Role |
+|------|-------|-------|------|------|
+| Sarah De Vos | sarah.devos@taloo.be | +32 473 12 34 56 | West-Vlaanderen | Senior Recruiter |
+| Thomas Peeters | thomas.peeters@taloo.be | +32 476 98 76 54 | Limburg | Recruiter |
+| Emma Janssen | emma.janssen@taloo.be | +32 479 11 22 33 | Vlaams-Brabant | Junior Recruiter |
+| Pieter Wouters | pieter.wouters@taloo.be | +32 478 44 55 66 | Oost-Vlaanderen | Team Lead |
+| Lisa Maes | lisa.maes@taloo.be | +32 477 77 88 99 | Antwerpen | Senior Recruiter |
+
+> **Note:** API endpoints for recruiters (CRUD operations) are not yet implemented. Currently, recruiters are managed directly in the database.
+
+---
+
+## Agents
+
+Agent-centric views of vacancies, grouped by AI agent configuration status.
+
+### GET /agents/prescreening/vacancies
+
+List vacancies by pre-screening agent status.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `status` | string | Yes | - | Filter: `new`, `generated`, or `archived` |
+| `limit` | number | No | 50 | Results per page (1-100) |
+| `offset` | number | No | 0 | Pagination offset |
+
+**Status Definitions:**
+
+- `new`: No pre-screening record (questions not generated yet)
+- `generated`: Has pre-screening record (questions exist, can be online/offline)
+- `archived`: Vacancy status is 'closed' or 'filled'
+
+**Response:**
+
+```typescript
+interface AgentVacancyListResponse {
+  vacancies: VacancyResponse[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+```
+
+```json
+{
+  "vacancies": [
+    {
+      "id": "uuid",
+      "title": "Operator Mengafdeling",
+      "company": "Vandemoortele",
+      "location": "Gent",
+      "status": "open",
+      "created_at": "2025-01-15T10:00:00Z",
+      "has_screening": true,
+      "is_online": true,
+      "channels": { "voice": true, "whatsapp": true, "cv": false },
+      "agents": {
+        "prescreening": { "exists": true, "status": "online" },
+        "preonboarding": { "exists": false, "status": null },
+        "insights": { "exists": false, "status": null }
+      },
+      "recruiter": { "id": "uuid", "name": "Sarah De Vos" },
+      "client": { "id": "uuid", "name": "Vandemoortele" },
+      "candidates_count": 15,
+      "completed_count": 12,
+      "qualified_count": 8,
+      "last_activity_at": "2025-01-20T09:15:00Z"
+    }
+  ],
+  "total": 5,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
+### GET /agents/preonboarding/vacancies
+
+List vacancies by pre-onboarding agent status.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `status` | string | Yes | - | Filter: `new`, `generated`, or `archived` |
+| `limit` | number | No | 50 | Results per page (1-100) |
+| `offset` | number | No | 0 | Pagination offset |
+
+**Status Definitions:**
+
+- `new`: `preonboarding_agent_enabled` is false or NULL
+- `generated`: `preonboarding_agent_enabled` is true
+- `archived`: Vacancy status is 'closed' or 'filled'
+
+**Response:** Same structure as `/agents/prescreening/vacancies`
 
 ---
 
@@ -1630,6 +2073,220 @@ interface ElevenLabsWebhookResponse {
 |--------|-------|
 | 401 | Invalid signature |
 | 400 | Invalid webhook payload |
+
+---
+
+## Scheduling
+
+### POST /api/scheduling/get-time-slots
+
+Get available time slots for scheduling interviews.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface GetTimeSlotsRequest {
+  conversation_id?: string;
+  recruiter_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+interface TimeSlot {
+  date: string;        // YYYY-MM-DD
+  dutch_date: string;  // "vrijdag 13 februari"
+  morning: string[];   // ["10u", "11u"]
+  afternoon: string[]; // ["14u", "16u"]
+}
+
+interface GetTimeSlotsResponse {
+  slots: TimeSlot[];
+  formatted_text: string;
+}
+```
+
+---
+
+### POST /api/scheduling/save-slot
+
+Save a selected interview time slot and create a Google Calendar event.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface SaveSlotRequest {
+  conversation_id: string;  // ElevenLabs conversation_id
+  selected_date: string;    // YYYY-MM-DD
+  selected_time: string;    // e.g., "10u", "14u"
+  selected_slot_text?: string;
+  candidate_name?: string;
+  candidate_phone?: string;
+  candidate_email?: string; // If provided, candidate receives Google Calendar invite
+  notes?: string;
+  debug?: boolean;          // Skip DB lookup, just create calendar event
+}
+```
+
+**Response:**
+
+```typescript
+interface SaveSlotResponse {
+  success: boolean;
+  scheduled_interview_id?: string;
+  message: string;
+  vacancy_id?: string;
+  vacancy_title?: string;
+  selected_date: string;
+  selected_time: string;
+  selected_slot_text?: string;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Vacancy not found for conversation_id |
+| 500 | Failed to save scheduled slot |
+
+---
+
+### PATCH /api/scheduling/interviews/by-conversation/{conversation_id}/notes
+
+Update notes for a scheduled interview by ElevenLabs conversation_id.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `conversation_id` | string | ElevenLabs conversation_id |
+
+**Request Body:**
+
+```typescript
+interface UpdateNotesRequest {
+  notes: string;
+  append?: boolean;  // If true, append to existing notes. If false, replace.
+}
+```
+
+**Response:**
+
+```typescript
+interface UpdateNotesResponse {
+  success: boolean;
+  message: string;
+  conversation_id: string;
+  scheduled_interview_id?: string;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | No scheduled interview found for conversation_id |
+| 500 | Failed to update interview notes |
+
+---
+
+### POST /api/scheduling/interviews/by-conversation/{conversation_id}/reschedule
+
+Reschedule an existing interview to a new time slot.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `conversation_id` | string | ElevenLabs conversation_id |
+
+**Request Body:**
+
+```typescript
+interface RescheduleRequest {
+  new_date: string;          // YYYY-MM-DD
+  new_time: string;          // e.g., "10u", "14u"
+  new_slot_text?: string;    // Full Dutch text, e.g., "maandag 17 februari om 14u"
+  reason?: string;           // Reason for rescheduling
+}
+```
+
+**Response:**
+
+```typescript
+interface RescheduleResponse {
+  success: boolean;
+  message: string;
+  conversation_id: string;
+  previous_interview_id: string;
+  previous_status: string;   // Will be "rescheduled"
+  new_interview_id: string;
+  new_date: string;
+  new_time: string;
+  new_slot_text?: string;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | Cannot reschedule a cancelled interview |
+| 400 | Cannot reschedule a completed interview |
+| 404 | No active scheduled interview found for conversation_id |
+| 500 | Failed to reschedule interview |
+
+---
+
+### POST /api/scheduling/interviews/by-conversation/{conversation_id}/cancel
+
+Cancel a scheduled interview and its Google Calendar event.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `conversation_id` | string | ElevenLabs conversation_id |
+
+**Request Body:**
+
+```typescript
+interface CancelRequest {
+  reason?: string;  // Optional reason for cancellation
+}
+```
+
+**Response:**
+
+```typescript
+interface CancelResponse {
+  success: boolean;
+  message: string;
+  conversation_id: string;
+  interview_id: string;
+  previous_status: string;
+  calendar_event_cancelled: boolean;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | No active scheduled interview found for conversation_id |
+| 500 | Failed to cancel interview |
 
 ---
 

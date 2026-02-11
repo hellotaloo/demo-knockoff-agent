@@ -4,16 +4,17 @@ Application service - handles application listing, creation, and answer merging.
 import uuid
 from typing import Optional, Tuple
 import asyncpg
-from src.repositories import ApplicationRepository
+from src.repositories import ApplicationRepository, CandidateRepository
 from src.models import ApplicationResponse, QuestionAnswerResponse
 
 
 class ApplicationService:
     """Service for application operations."""
-    
+
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
         self.repo = ApplicationRepository(pool)
+        self.candidate_repo = CandidateRepository(pool)
     
     @staticmethod
     def build_application_response(
@@ -147,9 +148,22 @@ class ApplicationService:
         candidate_name: str,
         candidate_phone: Optional[str],
         channel: str,
-        is_test: bool = False
+        is_test: bool = False,
+        candidate_email: Optional[str] = None
     ) -> uuid.UUID:
-        """Create a new application."""
+        """Create a new application with linked candidate."""
+        # Find or create candidate in central candidates table
+        candidate_id = await self.candidate_repo.find_or_create(
+            full_name=candidate_name,
+            phone=candidate_phone,
+            email=candidate_email
+        )
+
         return await self.repo.create(
-            vacancy_id, candidate_name, candidate_phone, channel, is_test
+            vacancy_id=vacancy_id,
+            candidate_name=candidate_name,
+            candidate_phone=candidate_phone,
+            channel=channel,
+            is_test=is_test,
+            candidate_id=candidate_id
         )

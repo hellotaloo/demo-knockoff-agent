@@ -8,7 +8,6 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from google.adk.events import Event, EventActions
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
-from voice_agent import create_or_update_voice_agent
 from knockout_agent.agent import create_vacancy_whatsapp_agent
 
 from src.models.pre_screening import (
@@ -337,19 +336,11 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
     elevenlabs_agent_id = None
     whatsapp_agent_id = None
 
-    # Create or update ElevenLabs voice agent
+    # Voice agent: We now use a single master agent from ELEVENLABS_AGENT_ID env var
+    # No per-vacancy agent creation needed - just enable the voice channel
     if request.enable_voice:
-        try:
-            elevenlabs_agent_id = create_or_update_voice_agent(
-                vacancy_id, config,
-                existing_agent_id=existing_elevenlabs_id,
-                vacancy_title=vacancy_title
-            )
-            action = "Updated" if existing_elevenlabs_id else "Created"
-            logger.info(f"{action} ElevenLabs agent for vacancy {vacancy_id}: {elevenlabs_agent_id}")
-        except Exception as e:
-            logger.error(f"Failed to create/update ElevenLabs agent: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to create voice agent: {str(e)}")
+        logger.info(f"Voice enabled for vacancy {vacancy_id} (using master agent from ELEVENLABS_AGENT_ID)")
+        # elevenlabs_agent_id stays None - we use master agent from environment
 
     # Create WhatsApp agent
     if request.enable_whatsapp:
@@ -423,46 +414,10 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     elevenlabs_agent_id = ps_row["elevenlabs_agent_id"]
     whatsapp_agent_id = ps_row["whatsapp_agent_id"]
 
-    # If enabling voice and no agent exists, create one
-    if request.voice_enabled and not elevenlabs_agent_id:
-        # Build config for agent creation
-        question_rows = await ps_repo.get_questions(pre_screening_id)
-
-        knockout_questions = []
-        qualification_questions = []
-
-        for q in question_rows:
-            question_data = {
-                "question": q["question_text"],
-                "question_text": q["question_text"],
-                "ideal_answer": q["ideal_answer"]
-            }
-            if q["question_type"] == "knockout":
-                knockout_questions.append(question_data)
-            else:
-                qualification_questions.append(question_data)
-
-        config = {
-            "intro": ps_row["intro"] or "",
-            "knockout_questions": knockout_questions,
-            "knockout_failed_action": ps_row["knockout_failed_action"] or "",
-            "qualification_questions": qualification_questions,
-            "final_action": ps_row["final_action"] or ""
-        }
-
-        try:
-            elevenlabs_agent_id = create_or_update_voice_agent(
-                vacancy_id, config,
-                existing_agent_id=None,
-                vacancy_title=vacancy_title
-            )
-            logger.info(f"Created ElevenLabs agent for vacancy {vacancy_id}: {elevenlabs_agent_id}")
-
-            # Update the agent ID in database
-            await ps_repo.update_agent_id(pre_screening_id, "elevenlabs", elevenlabs_agent_id)
-        except Exception as e:
-            logger.error(f"Failed to create ElevenLabs agent: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to create voice agent: {str(e)}")
+    # Voice agent: We now use a single master agent from ELEVENLABS_AGENT_ID env var
+    # No per-vacancy agent creation needed
+    if request.voice_enabled:
+        logger.info(f"Voice enabled for vacancy {vacancy_id} (using master agent from ELEVENLABS_AGENT_ID)")
 
     # If enabling WhatsApp and no agent exists, create one
     if request.whatsapp_enabled and not whatsapp_agent_id:
@@ -527,9 +482,10 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     updated_row = await ps_repo.get_with_status(pre_screening_id)
 
     # Calculate effective channel states
-    voice_active = (updated_row["elevenlabs_agent_id"] is not None) and updated_row["voice_enabled"]
+    # Voice uses master agent from ELEVENLABS_AGENT_ID env var, no per-vacancy agent ID needed
+    voice_active = updated_row["voice_enabled"] or False
     whatsapp_active = (updated_row["whatsapp_agent_id"] is not None) and updated_row["whatsapp_enabled"]
-    cv_active = updated_row["cv_enabled"]
+    cv_active = updated_row["cv_enabled"] or False
 
     # Auto-sync is_online based on channel states
     any_channel_on = voice_active or whatsapp_active or cv_active

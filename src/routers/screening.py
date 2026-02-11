@@ -18,7 +18,7 @@ from knockout_agent.agent import (
 )
 from candidate_simulator.agent import SimulationPersona, create_simulator_agent, run_simulation
 from google.adk.agents.llm_agent import Agent
-from utils.random_candidate import generate_random_candidate
+from src.utils.random_candidate import generate_random_candidate
 from src.models.screening import ScreeningChatRequest, SimulateInterviewRequest
 from src.repositories import ConversationRepository
 from src.database import get_db_pool
@@ -58,7 +58,7 @@ async def stream_screening_chat(
 
     # Get vacancy
     vacancy = await pool.fetchrow(
-        "SELECT id, title FROM vacancies WHERE id = $1",
+        "SELECT id, title FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
     if not vacancy:
@@ -70,7 +70,7 @@ async def stream_screening_chat(
     ps_row = await pool.fetchrow(
         """
         SELECT id, intro, knockout_failed_action, final_action
-        FROM pre_screenings WHERE vacancy_id = $1
+        FROM ats.pre_screenings WHERE vacancy_id = $1
         """,
         vacancy_uuid
     )
@@ -83,7 +83,7 @@ async def stream_screening_chat(
     questions = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer
-        FROM pre_screening_questions
+        FROM ats.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -193,8 +193,12 @@ async def stream_screening_chat(
                             completion_outcome = args.get("outcome", "completed")
                             logger.info(f"🏁 conversation_complete tool called in chat: {completion_outcome}")
 
-                    if hasattr(part, 'text') and part.text and event.is_final_response():
-                        response_text = clean_response_text(part.text)
+                    # Capture text from any response (not just final)
+                    # because text may come alongside tool calls like schedule_interview
+                    if hasattr(part, 'text') and part.text:
+                        cleaned = clean_response_text(part.text)
+                        if cleaned:
+                            response_text = cleaned
 
         if response_text:
             logger.info(f"🤖 Agent response: {response_text[:100]}..." if len(response_text) > 100 else f"🤖 Agent response: {response_text}")
@@ -282,7 +286,7 @@ async def get_screening_conversation(conversation_id: str):
         events = await pool.fetch(
             """
             SELECT event_data, timestamp
-            FROM events
+            FROM adk.events
             WHERE app_name = 'screening_chat' AND session_id = $1
             ORDER BY timestamp ASC
             """,
@@ -359,7 +363,7 @@ async def complete_screening_conversation(conversation_id: str, qualified: bool 
             # Create application record
             app_row = await conn.fetchrow(
                 """
-                INSERT INTO applications
+                INSERT INTO ats.applications
                 (vacancy_id, pre_screening_id, candidate_name, channel, qualified, completed_at, status)
                 VALUES ($1, $2, $3, 'whatsapp', $4, NOW(), 'completed')
                 RETURNING id
@@ -403,31 +407,31 @@ async def stream_interview_simulation(
         return
     
     vacancy = await pool.fetchrow(
-        "SELECT id, title FROM vacancies WHERE id = $1",
+        "SELECT id, title FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
     if not vacancy:
         yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
         yield "data: [DONE]\n\n"
         return
-    
+
     vacancy_title = vacancy["title"]
-    
+
     # Get pre-screening config
     pre_screening = await pool.fetchrow(
-        "SELECT * FROM pre_screenings WHERE vacancy_id = $1",
+        "SELECT * FROM ats.pre_screenings WHERE vacancy_id = $1",
         vacancy_uuid
     )
     if not pre_screening:
         yield f"data: {json.dumps({'type': 'error', 'message': 'Pre-screening not configured for this vacancy'})}\n\n"
         yield "data: [DONE]\n\n"
         return
-    
+
     # Build pre-screening config dict
     questions = await pool.fetch(
-        """SELECT id, question_type, question_text, ideal_answer, position 
-           FROM pre_screening_questions 
-           WHERE pre_screening_id = $1 
+        """SELECT id, question_type, question_text, ideal_answer, position
+           FROM ats.pre_screening_questions
+           WHERE pre_screening_id = $1
            ORDER BY question_type DESC, position ASC""",
         pre_screening["id"]
     )

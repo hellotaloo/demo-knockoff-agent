@@ -44,7 +44,7 @@ class DocumentVerificationRepository:
         async with self.pool.acquire() as conn:
             result = await conn.fetchrow(
                 """
-                INSERT INTO document_verifications (
+                INSERT INTO ats.document_verifications (
                     application_id,
                     vacancy_id,
                     document_category,
@@ -94,7 +94,7 @@ class DocumentVerificationRepository:
         """Get a document verification by ID."""
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(
-                "SELECT * FROM document_verifications WHERE id = $1",
+                "SELECT * FROM ats.document_verifications WHERE id = $1",
                 verification_id
             )
 
@@ -109,7 +109,7 @@ class DocumentVerificationRepository:
             return await conn.fetch(
                 """
                 SELECT *
-                FROM document_verifications
+                FROM ats.document_verifications
                 WHERE application_id = $1
                 ORDER BY verified_at DESC
                 LIMIT $2 OFFSET $3
@@ -130,7 +130,7 @@ class DocumentVerificationRepository:
             return await conn.fetch(
                 """
                 SELECT *
-                FROM document_verifications
+                FROM ats.document_verifications
                 WHERE fraud_risk_level = $1
                 ORDER BY verified_at DESC
                 LIMIT $2 OFFSET $3

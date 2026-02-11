@@ -1,0 +1,44 @@
+[
+  {
+    "name": "Vandemoortele",
+    "location": "Gent, België",
+    "industry": "Voeding",
+    "logo": "/companies/vandmoortele.png"
+  },
+  {
+    "name": "Agristo",
+    "location": "Harelbeke, België",
+    "industry": "Voeding",
+    "logo": "/companies/agristo.png"
+  },
+  {
+    "name": "Colruyt Group",
+    "location": "Halle, België",
+    "industry": "Retail",
+    "logo": "/companies/colruyt_group.png"
+  },
+  {
+    "name": "Essers",
+    "location": "Genk, België",
+    "industry": "Logistiek",
+    "logo": "/companies/essers.png"
+  },
+  {
+    "name": "Nike Laakdal",
+    "location": "Laakdal, België",
+    "industry": "Logistiek",
+    "logo": null
+  },
+  {
+    "name": "McDonalds Genk",
+    "location": "Genk, België",
+    "industry": "Horeca",
+    "logo": "/companies/mcdonalds.png"
+  },
+  {
+    "name": "Intern",
+    "location": "België",
+    "industry": "Intern",
+    "logo": null
+  }
+]

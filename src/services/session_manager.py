@@ -10,6 +10,7 @@ from google.adk.runners import Runner
 from google.adk.agents.llm_agent import Agent
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 from knockout_agent.agent import build_screening_instruction, conversation_complete_tool
+from src.tools.calendar_tools import check_availability_tool, schedule_interview_tool
 
 logger = logging.getLogger(__name__)
 
@@ -213,13 +214,17 @@ class SessionManager:
             logger.info(line)
         logger.info("=" * 60)
 
-        # Create agent with conversation_complete tool
+        # Create agent with conversation_complete and calendar tools
         agent = Agent(
             name=f"screening_{vacancy_id[:8]}",
             model="gemini-2.5-flash",
             instruction=instruction,
             description=f"Screening agent for vacancy {vacancy_title}",
-            tools=[conversation_complete_tool],
+            tools=[
+                conversation_complete_tool,
+                check_availability_tool,
+                schedule_interview_tool,
+            ],
         )
 
         # Create runner
@@ -283,3 +288,27 @@ class SessionManager:
         if collection_id in self.document_runners:
             del self.document_runners[collection_id]
             logger.info(f"🔄 Cleared cached document runner for collection {collection_id[:8]}...")
+
+    async def delete_session(self, app_name: str, user_id: str, session_id: str):
+        """
+        Delete a specific ADK session from the database.
+
+        Args:
+            app_name: The ADK app name (e.g., "screening_chat", "document_collection")
+            user_id: The user ID (e.g., "whatsapp", "web")
+            session_id: The UUID session ID
+        """
+        try:
+            if app_name == "screening_chat" and self.screening_session_service:
+                await self.screening_session_service.delete_session(
+                    app_name=app_name, user_id=user_id, session_id=session_id
+                )
+                logger.info(f"🗑️ Deleted ADK session: {app_name}/{user_id}/{session_id[:8]}...")
+            elif app_name == "document_collection" and self.document_session_service:
+                await self.document_session_service.delete_session(
+                    app_name=app_name, user_id=user_id, session_id=session_id
+                )
+                logger.info(f"🗑️ Deleted ADK session: {app_name}/{user_id}/{session_id[:8]}...")
+        except Exception as e:
+            # Log but don't fail - session may already be deleted
+            logger.warning(f"Could not delete ADK session {session_id[:8]}: {e}")

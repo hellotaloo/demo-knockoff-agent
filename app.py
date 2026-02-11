@@ -25,7 +25,7 @@ from candidate_simulator.agent import SimulationPersona, create_simulator_agent,
 from data_query_agent.agent import set_db_pool as set_data_query_db_pool
 from recruiter_analyst.agent import root_agent as recruiter_analyst_agent
 from fixtures import load_vacancies, load_applications, load_pre_screenings
-from utils.random_candidate import generate_random_candidate
+from src.utils.random_candidate import generate_random_candidate
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 from google.adk.agents.llm_agent import Agent
 
@@ -102,7 +102,10 @@ from src.routers import (
     cv_router,
     demo_router,
     documents_router,
-    document_collection_router
+    document_collection_router,
+    scheduling_router,
+    candidates_router,
+    agents_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -221,6 +224,9 @@ app.include_router(cv_router)
 app.include_router(demo_router)
 app.include_router(documents_router)
 app.include_router(document_collection_router)
+app.include_router(scheduling_router)
+app.include_router(candidates_router)
+app.include_router(agents_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

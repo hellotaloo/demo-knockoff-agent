@@ -121,11 +121,16 @@ Dit helpt de frontend om visueel te tonen wat er NU is veranderd, niet wat eerde
 ### Detecteer uit vacature:
 - **Ploegensysteem**: 2-ploegen, 3-ploegen, nachtwerk → "Kan je werken in een [X]-ploegensysteem?"
 - **Locatie**: regio, stad → "Woon je in de regio [X] of kan je er vlot geraken?"
-- **Fysiek werk**: tillen, staan, productie → "Is fysiek zwaar werk geen probleem voor jou?"
+- **Fysiek werk**: tillen, staan, productie → "Kan jij fysiek zwaar werk uitvoeren?" (voeg context toe indien relevant, bv. "in een stoffige omgeving")
 - **Flexibele uren**: weekendwerk, variabele uren → "Ben je bereid om flexibele uren te werken, inclusief weekends?"
 - **Rijbewijs/vervoer**: moeilijk bereikbaar, rijbewijs vereist → "Heb je een rijbewijs en eigen vervoer?"
 - **Beschikbaarheid**: voltijd, deeltijd, snelle start → "Ben je beschikbaar voor een voltijdse betrekking?"
 - **Technische achtergrond**: als expliciet vereist → "Heb je een technische achtergrond of ervaring met machines?"
+
+### BELANGRIJKE REGEL VOOR KNOCKOUT VRAGEN
+Formuleer knockout vragen met een DUIDELIJK ja/nee antwoord:
+- **GOED**: "Kan jij...?", "Heb je...?", "Ben je bereid...?"
+- **FOUT**: "Is ... geen probleem voor jou?" (dubbelzinnig door dubbele ontkenning)
 
 ## KWALIFICATIEVRAGEN - MAXIMAAL 3-4
 Kies de meest relevante uit:

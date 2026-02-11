@@ -1,0 +1,19 @@
+{
+  "candidate_name": "Jan",
+  "vacancy_title": "Magazijnmedewerker",
+  "company_name": "ITZU",
+  "knockout_questions": [
+    {
+      "question": "Heb je een rijbewijs B?",
+      "requirement": "Kandidaat moet rijbewijs B hebben"
+    },
+    {
+      "question": "Ben je bereid om in shiften te werken, ook in het weekend?",
+      "requirement": "Kandidaat moet flexibel zijn qua werkuren en weekendwerk"
+    }
+  ],
+  "open_questions": [
+    "Kun je me vertellen over je ervaring met magazijnwerk of logistiek?",
+    "Waarom solliciteer je voor deze functie?"
+  ]
+}

@@ -44,34 +44,43 @@ class VacancyRepository:
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         # Get total count
-        count_query = f"SELECT COUNT(*) FROM vacancies {where_clause}"
+        count_query = f"SELECT COUNT(*) FROM ats.vacancies {where_clause}"
         total = await self.pool.fetchval(count_query, *params)
 
-        # Get vacancies with application stats
+        # Get vacancies with application stats, recruiter info, and client info
         query = f"""
             SELECT v.id, v.title, v.company, v.location, v.description, v.status,
                    v.created_at, v.archived_at, v.source, v.source_id,
+                   v.prescreening_agent_enabled, v.preonboarding_agent_enabled, v.insights_agent_enabled,
+                   v.recruiter_id,
+                   r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
+                   r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
+                   v.client_id,
+                   c.id as c_id, c.name as c_name, c.location as c_location,
+                   c.industry as c_industry, c.logo as c_logo,
                    (ps.id IS NOT NULL) as has_screening,
                    CASE
                        WHEN ps.published_at IS NULL THEN NULL
                        ELSE ps.is_online
                    END as is_online,
-                   (ps.voice_enabled AND ps.elevenlabs_agent_id IS NOT NULL) as voice_enabled,
-                   (ps.whatsapp_enabled AND ps.whatsapp_agent_id IS NOT NULL) as whatsapp_enabled,
-                   (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled,
+                   COALESCE(ps.voice_enabled, false) as voice_enabled,
+                   COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
+                   COALESCE(ps.cv_enabled, false) as cv_enabled,
                    COALESCE(app_stats.candidates_count, 0) as candidates_count,
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
                    app_stats.last_activity_at
-            FROM vacancies v
-            LEFT JOIN pre_screenings ps ON ps.vacancy_id = v.id
+            FROM ats.vacancies v
+            LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
+            LEFT JOIN ats.clients c ON c.id = v.client_id
+            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
                     COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
                     COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
                     MAX(COALESCE(completed_at, started_at)) as last_activity_at
-                FROM applications a
+                FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
             {where_clause}
@@ -85,31 +94,40 @@ class VacancyRepository:
         return rows, total
 
     async def get_by_id(self, vacancy_id: uuid.UUID) -> Optional[asyncpg.Record]:
-        """Get a single vacancy by ID with stats."""
+        """Get a single vacancy by ID with stats, recruiter info, and client info."""
         query = """
             SELECT v.id, v.title, v.company, v.location, v.description, v.status,
                    v.created_at, v.archived_at, v.source, v.source_id,
+                   v.prescreening_agent_enabled, v.preonboarding_agent_enabled, v.insights_agent_enabled,
+                   v.recruiter_id,
+                   r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
+                   r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
+                   v.client_id,
+                   c.id as c_id, c.name as c_name, c.location as c_location,
+                   c.industry as c_industry, c.logo as c_logo,
                    (ps.id IS NOT NULL) as has_screening,
                    CASE
                        WHEN ps.published_at IS NULL THEN NULL
                        ELSE ps.is_online
                    END as is_online,
-                   (ps.voice_enabled AND ps.elevenlabs_agent_id IS NOT NULL) as voice_enabled,
-                   (ps.whatsapp_enabled AND ps.whatsapp_agent_id IS NOT NULL) as whatsapp_enabled,
-                   (ps.cv_enabled AND ps.id IS NOT NULL) as cv_enabled,
+                   COALESCE(ps.voice_enabled, false) as voice_enabled,
+                   COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
+                   COALESCE(ps.cv_enabled, false) as cv_enabled,
                    COALESCE(app_stats.candidates_count, 0) as candidates_count,
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
                    app_stats.last_activity_at
-            FROM vacancies v
-            LEFT JOIN pre_screenings ps ON ps.vacancy_id = v.id
+            FROM ats.vacancies v
+            LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
+            LEFT JOIN ats.clients c ON c.id = v.client_id
+            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
                     COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
                     COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
                     MAX(COALESCE(completed_at, started_at)) as last_activity_at
-                FROM applications a
+                FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
             WHERE v.id = $1
@@ -120,7 +138,7 @@ class VacancyRepository:
     async def exists(self, vacancy_id: uuid.UUID) -> bool:
         """Check if a vacancy exists."""
         result = await self.pool.fetchval(
-            "SELECT 1 FROM vacancies WHERE id = $1",
+            "SELECT 1 FROM ats.vacancies WHERE id = $1",
             vacancy_id
         )
         return result is not None
@@ -131,7 +149,7 @@ class VacancyRepository:
             """
             SELECT id, title, company, location, description, status,
                    created_at, archived_at, source, source_id
-            FROM vacancies
+            FROM ats.vacancies
             WHERE id = $1
             """,
             vacancy_id
@@ -148,7 +166,7 @@ class VacancyRepository:
                 COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
                 COALESCE(AVG(interaction_seconds), 0) as avg_seconds,
                 MAX(started_at) as last_application
-            FROM applications
+            FROM ats.applications
             WHERE vacancy_id = $1
         """
 
@@ -165,7 +183,7 @@ class VacancyRepository:
                 COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
                 COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
                 COUNT(*) FILTER (WHERE channel = 'cv') as cv_count
-            FROM applications
+            FROM ats.applications
         """
 
         return await self.pool.fetchrow(stats_query)

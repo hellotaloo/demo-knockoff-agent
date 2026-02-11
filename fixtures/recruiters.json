@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Sarah De Vos",
+    "email": "sarah.devos@taloo.be",
+    "phone": "+32 473 12 34 56",
+    "team": "West-Vlaanderen",
+    "role": "Senior Recruiter",
+    "is_active": true
+  },
+  {
+    "name": "Thomas Peeters",
+    "email": "thomas.peeters@taloo.be",
+    "phone": "+32 476 98 76 54",
+    "team": "Limburg",
+    "role": "Recruiter",
+    "is_active": true
+  },
+  {
+    "name": "Emma Janssen",
+    "email": "emma.janssen@taloo.be",
+    "phone": "+32 479 11 22 33",
+    "team": "Vlaams-Brabant",
+    "role": "Junior Recruiter",
+    "is_active": true
+  },
+  {
+    "name": "Pieter Wouters",
+    "email": "pieter.wouters@taloo.be",
+    "phone": "+32 478 44 55 66",
+    "team": "Oost-Vlaanderen",
+    "role": "Team Lead",
+    "is_active": true
+  },
+  {
+    "name": "Lisa Maes",
+    "email": "lisa.maes@taloo.be",
+    "phone": "+32 477 77 88 99",
+    "team": "Antwerpen",
+    "role": "Senior Recruiter",
+    "is_active": true
+  }
+]

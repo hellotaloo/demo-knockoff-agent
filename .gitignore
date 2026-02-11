@@ -5,3 +5,15 @@ __pycache__/
 .env.*
 !.env.example
 *.db
+
+# IDE
+.adk/
+.cursor/
+
+# Runtime
+document_uploads/
+credentials/
+
+# Generated
+*.backup
+cv_analysis_result.md

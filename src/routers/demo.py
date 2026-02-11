@@ -6,10 +6,9 @@ Demo data is loaded from fixtures/ directory - edit JSON files there.
 """
 import uuid
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Query
-from voice_agent import list_voice_agents, delete_voice_agent
-from fixtures import load_vacancies, load_applications, load_pre_screenings
+from fixtures import load_candidates, load_vacancies, load_applications, load_pre_screenings, load_recruiters, load_clients
 
 from src.database import get_db_pool
 from src.services import DemoService
@@ -22,33 +21,115 @@ router = APIRouter(tags=["Demo Data"])
 
 @router.post("/demo/seed")
 async def seed_demo_data():
-    """Populate the database with demo vacancies, applications, and pre-screenings."""
+    """Populate the database with demo candidates, vacancies, applications, and pre-screenings."""
     pool = await get_db_pool()
 
     # Load fixtures from JSON files
+    candidates_data = load_candidates()
     vacancies_data = load_vacancies()
     applications_data = load_applications()
     pre_screenings_data = load_pre_screenings()
+    recruiters_data = load_recruiters()
+    clients_data = load_clients()
 
+    created_candidates = []
     created_vacancies = []
     created_applications = []
     created_pre_screenings = []
+    created_recruiters = []
+    created_clients = []
+    created_skills = 0
 
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Insert vacancies
-            for vac in vacancies_data:
+            # Insert recruiters first
+            recruiter_email_to_id = {}
+            for rec in recruiters_data:
                 row = await conn.fetchrow("""
-                    INSERT INTO vacancies (title, company, location, description, status, source, source_id)
+                    INSERT INTO ats.recruiters (name, email, phone, team, role, avatar_url, is_active)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     RETURNING id
+                """, rec["name"], rec.get("email"), rec.get("phone"),
+                    rec.get("team"), rec.get("role"), rec.get("avatar_url"),
+                    rec.get("is_active", True))
+                recruiter_id = row["id"]
+                created_recruiters.append({"id": str(recruiter_id), "name": rec["name"]})
+                if rec.get("email"):
+                    recruiter_email_to_id[rec["email"]] = recruiter_id
+
+            # Insert clients
+            client_name_to_id = {}
+            for cli in clients_data:
+                row = await conn.fetchrow("""
+                    INSERT INTO ats.clients (name, location, industry, logo)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING id
+                """, cli["name"], cli.get("location"), cli.get("industry"), cli.get("logo"))
+                client_id = row["id"]
+                created_clients.append({"id": str(client_id), "name": cli["name"]})
+                client_name_to_id[cli["name"]] = client_id
+
+            # Insert candidates (central registry)
+            for cand in candidates_data:
+                # Parse available_from date if present
+                available_from = None
+                if cand.get("available_from"):
+                    available_from = date.fromisoformat(cand["available_from"])
+
+                row = await conn.fetchrow("""
+                    INSERT INTO ats.candidates
+                    (phone, email, first_name, last_name, full_name, source,
+                     status, availability, available_from, rating)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING id
+                """, cand["phone"], cand.get("email"), cand.get("first_name"),
+                    cand.get("last_name"), cand["full_name"], cand.get("source", "application"),
+                    cand.get("status", "new"), cand.get("availability", "unknown"),
+                    available_from, cand.get("rating"))
+
+                candidate_id = row["id"]
+                created_candidates.append({
+                    "id": str(candidate_id),
+                    "full_name": cand["full_name"],
+                    "phone": cand["phone"]
+                })
+
+                # Insert skills for this candidate
+                for skill in cand.get("skills", []):
+                    await conn.execute("""
+                        INSERT INTO ats.candidate_skills
+                        (candidate_id, skill_name, skill_category, score, source)
+                        VALUES ($1, $2, $3, $4, $5)
+                    """, candidate_id, skill["skill_name"],
+                        skill.get("skill_category"), skill.get("score"), "import")
+                    created_skills += 1
+
+            # Insert vacancies (with optional recruiter and client links)
+            for vac in vacancies_data:
+                # Look up recruiter_id by email if present
+                recruiter_id = None
+                if vac.get("recruiter_email"):
+                    recruiter_id = recruiter_email_to_id.get(vac["recruiter_email"])
+
+                # Look up client_id by name if present
+                client_id = None
+                if vac.get("client_name"):
+                    client_id = client_name_to_id.get(vac["client_name"])
+
+                row = await conn.fetchrow("""
+                    INSERT INTO ats.vacancies (title, company, location, description, status, source, source_id, recruiter_id, client_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    RETURNING id
                 """, vac["title"], vac["company"], vac["location"], vac["description"],
-                    vac["status"], vac["source"], vac["source_id"])
+                    vac["status"], vac["source"], vac["source_id"], recruiter_id, client_id)
                 created_vacancies.append({"id": str(row["id"]), "title": vac["title"]})
 
-            # Insert applications
+            # Insert applications (with candidate_id linked)
             for app_data in applications_data:
                 vacancy_id = uuid.UUID(created_vacancies[app_data["vacancy_idx"]]["id"])
+                candidate_id = uuid.UUID(created_candidates[app_data["candidate_idx"]]["id"])
+                candidate_name = created_candidates[app_data["candidate_idx"]]["full_name"]
+                candidate_phone = created_candidates[app_data["candidate_idx"]]["phone"]
 
                 # Calculate completed_at if completed
                 completed_at = None
@@ -57,15 +138,15 @@ async def seed_demo_data():
                     completed_at = datetime.now() - timedelta(hours=len(created_applications) * 2)
 
                 # Convert completed boolean to status
-                status = 'completed' if app_data["completed"] else 'active'
+                status = "completed" if app_data["completed"] else "active"
 
                 row = await conn.fetchrow("""
-                    INSERT INTO applications
-                    (vacancy_id, candidate_name, channel, qualified,
+                    INSERT INTO ats.applications
+                    (vacancy_id, candidate_id, candidate_name, candidate_phone, channel, qualified,
                      interaction_seconds, completed_at, status)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     RETURNING id, started_at
-                """, vacancy_id, app_data["candidate_name"], app_data["channel"],
+                """, vacancy_id, candidate_id, candidate_name, candidate_phone, app_data["channel"],
                     app_data["qualified"],
                     app_data["interaction_seconds"], completed_at, status)
 
@@ -74,7 +155,7 @@ async def seed_demo_data():
                 # Insert answers
                 for answer in app_data["answers"]:
                     await conn.execute("""
-                        INSERT INTO application_answers
+                        INSERT INTO ats.application_answers
                         (application_id, question_id, question_text, answer, passed)
                         VALUES ($1, $2, $3, $4, $5)
                     """, application_id, answer["question_id"], answer["question_text"],
@@ -82,31 +163,26 @@ async def seed_demo_data():
 
                 created_applications.append({
                     "id": str(application_id),
-                    "candidate": app_data["candidate_name"]
+                    "candidate": candidate_name,
+                    "candidate_id": str(candidate_id)
                 })
 
             # Insert pre-screenings
             for ps_data in pre_screenings_data:
                 vacancy_id = uuid.UUID(created_vacancies[ps_data["vacancy_idx"]]["id"])
 
-                # Update vacancy status to match pre-screening status
-                vacancy_status = "draft" if ps_data["status"] == "draft" else "screening_active"
-                await conn.execute("""
-                    UPDATE vacancies SET status = $1 WHERE id = $2
-                """, vacancy_status, vacancy_id)
-
                 # Use fixed ID if provided, otherwise auto-generate
                 fixed_id = ps_data.get("id")
                 if fixed_id:
                     pre_screening_id = uuid.UUID(fixed_id)
                     await conn.execute("""
-                        INSERT INTO pre_screenings (id, vacancy_id, intro, knockout_failed_action, final_action, status)
+                        INSERT INTO ats.pre_screenings (id, vacancy_id, intro, knockout_failed_action, final_action, status)
                         VALUES ($1, $2, $3, $4, $5, $6)
                     """, pre_screening_id, vacancy_id, ps_data["intro"], ps_data["knockout_failed_action"],
                         ps_data["final_action"], ps_data["status"])
                 else:
                     row = await conn.fetchrow("""
-                        INSERT INTO pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
+                        INSERT INTO ats.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
                         VALUES ($1, $2, $3, $4, $5)
                         RETURNING id
                     """, vacancy_id, ps_data["intro"], ps_data["knockout_failed_action"],
@@ -116,7 +192,7 @@ async def seed_demo_data():
                 # Insert knockout questions
                 for position, q in enumerate(ps_data.get("knockout_questions", [])):
                     await conn.execute("""
-                        INSERT INTO pre_screening_questions
+                        INSERT INTO ats.pre_screening_questions
                         (pre_screening_id, question_type, position, question_text, is_approved)
                         VALUES ($1, $2, $3, $4, $5)
                     """, pre_screening_id, "knockout", position, q["question"], q.get("is_approved", False))
@@ -124,7 +200,7 @@ async def seed_demo_data():
                 # Insert qualification questions (with ideal_answer)
                 for position, q in enumerate(ps_data.get("qualification_questions", [])):
                     await conn.execute("""
-                        INSERT INTO pre_screening_questions
+                        INSERT INTO ats.pre_screening_questions
                         (pre_screening_id, question_type, position, question_text, ideal_answer, is_approved)
                         VALUES ($1, $2, $3, $4, $5, $6)
                     """, pre_screening_id, "qualification", position, q["question"], q.get("ideal_answer"), q.get("is_approved", False))
@@ -137,7 +213,11 @@ async def seed_demo_data():
 
     return {
         "status": "success",
-        "message": f"Created {len(created_vacancies)} vacancies, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings",
+        "message": f"Created {len(created_recruiters)} recruiters, {len(created_clients)} clients, {len(created_candidates)} candidates, {created_skills} skills, {len(created_vacancies)} vacancies, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings",
+        "recruiters_count": len(created_recruiters),
+        "clients_count": len(created_clients),
+        "candidates_count": len(created_candidates),
+        "skills_count": created_skills,
         "vacancies": created_vacancies,
         "applications_count": len(created_applications),
         "pre_screenings": created_pre_screenings
@@ -146,43 +226,49 @@ async def seed_demo_data():
 
 @router.post("/demo/reset")
 async def reset_demo_data(reseed: bool = Query(True, description="Reseed with demo data after reset")):
-    """Clear all vacancies, applications, and pre-screenings, optionally reseed with demo data."""
+    """Clear all vacancies, applications, candidates, and pre-screenings, optionally reseed with demo data."""
     pool = await get_db_pool()
 
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Delete in correct order respecting foreign key constraints
-            await conn.execute("DELETE FROM screening_conversations")
-            await conn.execute("DELETE FROM application_answers")
-            await conn.execute("DELETE FROM applications")
-            await conn.execute("DELETE FROM pre_screening_questions")
-            await conn.execute("DELETE FROM pre_screenings")
-            await conn.execute("DELETE FROM vacancies")
+            # First: tables that reference applications/candidates
+            await conn.execute("DELETE FROM ats.screening_conversations")
+            await conn.execute("DELETE FROM ats.application_answers")
+            await conn.execute("DELETE FROM ats.scheduled_interviews")
+            await conn.execute("DELETE FROM ats.document_collection_conversations")
 
-    # Clean up ElevenLabs voice agents (keep only the base agent)
-    KEEP_AGENT_ID = "agent_2101kg9wn4xbefbrbet9p5fqnncn"
-    deleted_agents = []
-    failed_agents = []
+            # Try to delete candidate_activities and candidate_skills if tables exist
+            try:
+                await conn.execute("DELETE FROM ats.candidate_activities")
+            except Exception:
+                pass  # Table may not exist yet
 
-    try:
-        agents = list_voice_agents()
-        for agent in agents:
-            if agent["agent_id"] != KEEP_AGENT_ID:
-                if delete_voice_agent(agent["agent_id"]):
-                    deleted_agents.append(agent["agent_id"])
-                else:
-                    failed_agents.append(agent["agent_id"])
-    except Exception as e:
-        logger.warning(f"Failed to clean up ElevenLabs agents: {e}")
+            try:
+                await conn.execute("DELETE FROM ats.candidate_skills")
+            except Exception:
+                pass  # Table may not exist yet
+
+            # Then: applications (references candidates and vacancies)
+            await conn.execute("DELETE FROM ats.applications")
+
+            # Then: candidates (now safe to delete)
+            await conn.execute("DELETE FROM ats.candidates")
+
+            # Then: pre-screening related
+            await conn.execute("DELETE FROM ats.pre_screening_questions")
+            await conn.execute("DELETE FROM ats.pre_screenings")
+
+            # Finally: vacancies (clear recruiter_id and client_id first for FK safety)
+            await conn.execute("DELETE FROM ats.vacancies")
+
+            # Delete recruiters and clients
+            await conn.execute("DELETE FROM ats.recruiters")
+            await conn.execute("DELETE FROM ats.clients")
 
     result = {
         "status": "success",
         "message": "All demo data cleared",
-        "elevenlabs_cleanup": {
-            "deleted": len(deleted_agents),
-            "failed": len(failed_agents),
-            "kept": KEEP_AGENT_ID
-        }
     }
 
     # Optionally reseed

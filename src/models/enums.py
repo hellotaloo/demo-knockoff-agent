@@ -5,10 +5,12 @@ from enum import Enum
 
 
 class VacancyStatus(str, Enum):
-    NEW = "new"
-    DRAFT = "draft"
-    SCREENING_ACTIVE = "screening_active"
-    ARCHIVED = "archived"
+    """Vacancy lifecycle status (independent of agent/screening config)."""
+    CONCEPT = "concept"
+    OPEN = "open"
+    ON_HOLD = "on_hold"
+    FILLED = "filled"
+    CLOSED = "closed"
 
 
 class VacancySource(str, Enum):

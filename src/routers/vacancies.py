@@ -9,10 +9,10 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from cv_analyzer import analyze_cv_base64
 from knockout_agent.agent import get_next_business_days, get_dutch_date
 
-from src.models.vacancy import VacancyStatsResponse, DashboardStatsResponse
+from src.models.vacancy import VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse
 from src.models.application import ApplicationResponse, QuestionAnswerResponse, CVApplicationRequest
 from src.repositories import VacancyRepository
-from src.services import VacancyService
+from src.services import VacancyService, ActivityService
 from src.database import get_db_pool
 from src.dependencies import get_vacancy_repo, get_vacancy_service
 from src.exceptions import parse_uuid
@@ -43,20 +43,30 @@ async def list_vacancies(
     }
 
 
-@router.get("/vacancies/{vacancy_id}")
+@router.get("/vacancies/{vacancy_id}", response_model=VacancyDetailResponse)
 async def get_vacancy(
     vacancy_id: str,
     repo: VacancyRepository = Depends(get_vacancy_repo),
     service: VacancyService = Depends(get_vacancy_service)
 ):
-    """Get a single vacancy by ID."""
+    """Get a single vacancy by ID with activity timeline."""
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     row = await repo.get_by_id(vacancy_uuid)
 
     if not row:
         raise HTTPException(status_code=404, detail="Vacancy not found")
 
-    return service.build_vacancy_response(row)
+    # Get activity timeline for this vacancy
+    pool = await get_db_pool()
+    activity_service = ActivityService(pool)
+    timeline = await activity_service.get_vacancy_activities(vacancy_id, limit=50)
+
+    # Build base response and add timeline
+    base_response = service.build_vacancy_response(row)
+    return VacancyDetailResponse(
+        **base_response.model_dump(),
+        timeline=timeline
+    )
 
 
 @router.post("/vacancies/{vacancy_id}/cv-application")
@@ -78,7 +88,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
 
     # Verify vacancy exists
     vacancy_row = await pool.fetchrow(
-        "SELECT id, title FROM vacancies WHERE id = $1",
+        "SELECT id, title FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
     if not vacancy_row:
@@ -88,7 +98,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     ps_row = await pool.fetchrow(
         """
         SELECT id, intro, knockout_failed_action, final_action
-        FROM pre_screenings
+        FROM ats.pre_screenings
         WHERE vacancy_id = $1
         """,
         vacancy_uuid
@@ -103,7 +113,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     question_rows = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer
-        FROM pre_screening_questions
+        FROM ats.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -164,7 +174,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
             if application_status == 'completed':
                 app_row = await conn.fetchrow(
                     """
-                    INSERT INTO applications
+                    INSERT INTO ats.applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
                      completed_at, summary, status, is_test)
                     VALUES ($1, $2, $3, 'cv', $4, NOW(), $5, $6, $7)
@@ -181,7 +191,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
             else:
                 app_row = await conn.fetchrow(
                     """
-                    INSERT INTO applications
+                    INSERT INTO ats.applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
                      summary, status, is_test)
                     VALUES ($1, $2, $3, 'cv', $4, $5, $6, $7)
@@ -205,7 +215,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
             for ka in result.knockout_analysis:
                 await conn.execute(
                     """
-                    INSERT INTO application_answers
+                    INSERT INTO ats.application_answers
                     (application_id, question_id, question_text, answer, passed, source)
                     VALUES ($1, $2, $3, $4, $5, 'cv')
                     """,
@@ -224,7 +234,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
 
                 await conn.execute(
                     """
-                    INSERT INTO application_answers
+                    INSERT INTO ats.application_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source)
                     VALUES ($1, $2, $3, $4, NULL, $5, $6, 'cv')
                     """,

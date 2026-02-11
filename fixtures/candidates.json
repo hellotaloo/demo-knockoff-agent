@@ -1,0 +1,38 @@
+[
+  {
+    "phone": "+32471234501",
+    "email": "jan.peeters@email.be",
+    "first_name": "Jan",
+    "last_name": "Peeters",
+    "full_name": "Jan Peeters",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  },
+  {
+    "phone": "+32472345602",
+    "email": "marie.claes@gmail.com",
+    "first_name": "Marie",
+    "last_name": "Claes",
+    "full_name": "Marie Claes",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  },
+  {
+    "phone": "+32473456703",
+    "email": "thomas.willems@outlook.be",
+    "first_name": "Thomas",
+    "last_name": "Willems",
+    "full_name": "Thomas Willems",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  }
+]

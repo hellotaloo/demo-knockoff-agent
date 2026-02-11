@@ -5,7 +5,8 @@ import uuid
 from typing import Optional, Tuple
 import asyncpg
 from src.repositories import VacancyRepository
-from src.models import VacancyResponse, ChannelsResponse, VacancyStatsResponse, DashboardStatsResponse
+from src.models import VacancyResponse, ChannelsResponse, AgentStatusResponse, AgentsResponse, VacancyStatsResponse, DashboardStatsResponse
+from src.models.vacancy import RecruiterSummary, ClientSummary
 
 
 class VacancyService:
@@ -19,7 +20,7 @@ class VacancyService:
     def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
         """
         Build a VacancyResponse model from a database row.
-        
+
         Calculates effective channel states and is_online status based on
         published state and active channels.
         """
@@ -27,11 +28,37 @@ class VacancyService:
         voice_active = row["voice_enabled"] or False
         whatsapp_active = row["whatsapp_enabled"] or False
         cv_active = row["cv_enabled"] or False
-        
+
         # is_online is only true if at least one channel is active
         any_channel_active = voice_active or whatsapp_active or cv_active
         effective_is_online = row["is_online"] and any_channel_active
-        
+
+        # Build recruiter info if present
+        recruiter = None
+        recruiter_id = row.get("recruiter_id")
+        if recruiter_id and row.get("r_id"):
+            recruiter = RecruiterSummary(
+                id=str(row["r_id"]),
+                name=row["r_name"],
+                email=row["r_email"],
+                phone=row["r_phone"],
+                team=row["r_team"],
+                role=row["r_role"],
+                avatar_url=row["r_avatar_url"]
+            )
+
+        # Build client info if present
+        client = None
+        client_id = row.get("client_id")
+        if client_id and row.get("c_id"):
+            client = ClientSummary(
+                id=str(row["c_id"]),
+                name=row["c_name"],
+                location=row["c_location"],
+                industry=row["c_industry"],
+                logo=row["c_logo"]
+            )
+
         return VacancyResponse(
             id=str(row["id"]),
             title=row["title"],
@@ -50,6 +77,24 @@ class VacancyService:
                 whatsapp=whatsapp_active,
                 cv=cv_active
             ),
+            agents=AgentsResponse(
+                prescreening=AgentStatusResponse(
+                    exists=row["has_screening"],
+                    status="online" if row["is_online"] else ("offline" if row["has_screening"] else None)
+                ),
+                preonboarding=AgentStatusResponse(
+                    exists=row["preonboarding_agent_enabled"] or False,
+                    status=None  # No online/offline concept for preonboarding yet
+                ),
+                insights=AgentStatusResponse(
+                    exists=row["insights_agent_enabled"] or False,
+                    status=None  # No online/offline concept for insights yet
+                )
+            ),
+            recruiter_id=str(recruiter_id) if recruiter_id else None,
+            recruiter=recruiter,
+            client_id=str(client_id) if client_id else None,
+            client=client,
             candidates_count=row["candidates_count"],
             completed_count=row["completed_count"],
             qualified_count=row["qualified_count"],

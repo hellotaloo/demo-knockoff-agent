@@ -29,48 +29,54 @@ class ApplicationRepository:
         Returns:
             Tuple of (application rows, total count)
         """
-        # Build query with filters
+        # Build query with filters (using table alias for joined query)
         conditions = [
-            "vacancy_id = $1"
+            "a.vacancy_id = $1"
         ]
         params = [vacancy_id]
         param_idx = 2
 
         if qualified is not None:
-            conditions.append(f"qualified = ${param_idx}")
+            conditions.append(f"a.qualified = ${param_idx}")
             params.append(qualified)
             param_idx += 1
 
         if completed is not None:
             # Translate completed boolean to status filter for backwards compatibility
             if completed:
-                conditions.append("status = 'completed'")
+                conditions.append("a.status = 'completed'")
             else:
-                conditions.append("status != 'completed'")
+                conditions.append("a.status != 'completed'")
 
         if synced is not None:
-            conditions.append(f"synced = ${param_idx}")
+            conditions.append(f"a.synced = ${param_idx}")
             params.append(synced)
             param_idx += 1
 
         if is_test is not None:
-            conditions.append(f"is_test = ${param_idx}")
+            conditions.append(f"a.is_test = ${param_idx}")
             params.append(is_test)
             param_idx += 1
 
         where_clause = f"WHERE {' AND '.join(conditions)}"
 
         # Get total count
-        count_query = f"SELECT COUNT(*) FROM applications {where_clause}"
+        count_query = f"SELECT COUNT(*) FROM ats.applications a {where_clause}"
         total = await self.pool.fetchval(count_query, *params)
 
-        # Get applications
+        # Get applications with candidate info from ats.candidates
         query = f"""
-            SELECT id, vacancy_id, candidate_name, channel, status, qualified,
-                   started_at, completed_at, interaction_seconds, synced, synced_at, summary, interview_slot, is_test
-            FROM applications
+            SELECT a.id, a.vacancy_id, a.candidate_id,
+                   COALESCE(c.full_name, a.candidate_name) as candidate_name,
+                   COALESCE(c.phone, a.candidate_phone) as candidate_phone,
+                   c.email as candidate_email,
+                   a.channel, a.status, a.qualified,
+                   a.started_at, a.completed_at, a.interaction_seconds,
+                   a.synced, a.synced_at, a.summary, a.interview_slot, a.is_test
+            FROM ats.applications a
+            LEFT JOIN ats.candidates c ON c.id = a.candidate_id
             {where_clause}
-            ORDER BY started_at DESC
+            ORDER BY a.started_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
         params.extend([limit, offset])
@@ -83,10 +89,16 @@ class ApplicationRepository:
         """Get a single application by ID."""
         return await self.pool.fetchrow(
             """
-            SELECT id, vacancy_id, candidate_name, channel, status, qualified,
-                   started_at, completed_at, interaction_seconds, synced, synced_at, summary, interview_slot, is_test
-            FROM applications
-            WHERE id = $1
+            SELECT a.id, a.vacancy_id, a.candidate_id,
+                   COALESCE(c.full_name, a.candidate_name) as candidate_name,
+                   COALESCE(c.phone, a.candidate_phone) as candidate_phone,
+                   c.email as candidate_email,
+                   a.channel, a.status, a.qualified,
+                   a.started_at, a.completed_at, a.interaction_seconds,
+                   a.synced, a.synced_at, a.summary, a.interview_slot, a.is_test
+            FROM ats.applications a
+            LEFT JOIN ats.candidates c ON c.id = a.candidate_id
+            WHERE a.id = $1
             """,
             application_id
         )
@@ -96,7 +108,7 @@ class ApplicationRepository:
         return await self.pool.fetch(
             """
             SELECT question_id, question_text, answer, passed, score, rating, motivation
-            FROM application_answers
+            FROM ats.application_answers
             WHERE application_id = $1
             ORDER BY id
             """,
@@ -108,8 +120,8 @@ class ApplicationRepository:
         return await self.pool.fetch(
             """
             SELECT psq.id, psq.question_type, psq.position, psq.question_text, psq.ideal_answer
-            FROM pre_screening_questions psq
-            JOIN pre_screenings ps ON ps.id = psq.pre_screening_id
+            FROM ats.pre_screening_questions psq
+            JOIN ats.pre_screenings ps ON ps.id = psq.pre_screening_id
             WHERE ps.vacancy_id = $1
             ORDER BY
                 CASE psq.question_type WHEN 'knockout' THEN 0 ELSE 1 END,
@@ -124,20 +136,21 @@ class ApplicationRepository:
         candidate_name: str,
         candidate_phone: Optional[str],
         channel: str,
-        is_test: bool = False
+        is_test: bool = False,
+        candidate_id: Optional[uuid.UUID] = None
     ) -> uuid.UUID:
         """Create a new application."""
         app_id = await self.pool.fetchval(
             """
-            INSERT INTO applications (
-                vacancy_id, candidate_name, candidate_phone, channel,
+            INSERT INTO ats.applications (
+                vacancy_id, candidate_id, candidate_name, candidate_phone, channel,
                 status, qualified, started_at, interaction_seconds,
                 synced, is_test
             )
-            VALUES ($1, $2, $3, $4, 'active', false, NOW(), 0, false, $5)
+            VALUES ($1, $2, $3, $4, $5, 'active', false, NOW(), 0, false, $6)
             RETURNING id
             """,
-            vacancy_id, candidate_name, candidate_phone, channel, is_test
+            vacancy_id, candidate_id, candidate_name, candidate_phone, channel, is_test
         )
         return app_id
 
@@ -152,7 +165,7 @@ class ApplicationRepository:
         """Mark an application as completed."""
         await self.pool.execute(
             """
-            UPDATE applications
+            UPDATE ats.applications
             SET status = 'completed',
                 qualified = $2,
                 completed_at = NOW(),
@@ -167,7 +180,7 @@ class ApplicationRepository:
     async def set_status(self, application_id: uuid.UUID, status: str):
         """Update application status."""
         await self.pool.execute(
-            "UPDATE applications SET status = $2 WHERE id = $1",
+            "UPDATE ats.applications SET status = $2 WHERE id = $1",
             application_id, status
         )
 
@@ -182,7 +195,7 @@ class ApplicationRepository:
         """Insert a knockout question answer."""
         await self.pool.execute(
             """
-            INSERT INTO application_answers (application_id, question_id, question_text, answer, passed)
+            INSERT INTO ats.application_answers (application_id, question_id, question_text, answer, passed)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (application_id, question_id) DO UPDATE
             SET answer = EXCLUDED.answer, passed = EXCLUDED.passed
@@ -203,7 +216,7 @@ class ApplicationRepository:
         """Insert a qualification question answer with scoring."""
         await self.pool.execute(
             """
-            INSERT INTO application_answers (
+            INSERT INTO ats.application_answers (
                 application_id, question_id, question_text, answer,
                 score, rating, motivation
             )
@@ -220,7 +233,7 @@ class ApplicationRepository:
     async def delete_answers(self, application_id: uuid.UUID):
         """Delete all answers for an application."""
         await self.pool.execute(
-            "DELETE FROM application_answers WHERE application_id = $1",
+            "DELETE FROM ats.application_answers WHERE application_id = $1",
             application_id
         )
 
@@ -230,23 +243,30 @@ class ApplicationRepository:
         phone: str,
         exclude_completed: bool = True
     ) -> Optional[asyncpg.Record]:
-        """Find an application by phone number."""
+        """Find an application by phone number (checks both candidate_phone and candidates table)."""
         if exclude_completed:
             return await self.pool.fetchrow(
                 """
-                SELECT id, vacancy_id, candidate_name, channel, status, qualified
-                FROM applications
-                WHERE vacancy_id = $1 AND candidate_phone = $2 AND status != 'completed'
+                SELECT a.id, a.vacancy_id, COALESCE(c.full_name, a.candidate_name) as candidate_name,
+                       a.channel, a.status, a.qualified, a.candidate_id
+                FROM ats.applications a
+                LEFT JOIN ats.candidates c ON c.id = a.candidate_id
+                WHERE a.vacancy_id = $1
+                  AND (a.candidate_phone = $2 OR c.phone = $2)
+                  AND a.status != 'completed'
                 """,
                 vacancy_id, phone
             )
         else:
             return await self.pool.fetchrow(
                 """
-                SELECT id, vacancy_id, candidate_name, channel, status, qualified
-                FROM applications
-                WHERE vacancy_id = $1 AND candidate_phone = $2
-                ORDER BY started_at DESC
+                SELECT a.id, a.vacancy_id, COALESCE(c.full_name, a.candidate_name) as candidate_name,
+                       a.channel, a.status, a.qualified, a.candidate_id
+                FROM ats.applications a
+                LEFT JOIN ats.candidates c ON c.id = a.candidate_id
+                WHERE a.vacancy_id = $1
+                  AND (a.candidate_phone = $2 OR c.phone = $2)
+                ORDER BY a.started_at DESC
                 LIMIT 1
                 """,
                 vacancy_id, phone
@@ -254,21 +274,25 @@ class ApplicationRepository:
 
     async def delete_for_phone(self, vacancy_id: uuid.UUID, phone: str):
         """Delete applications and conversations for a phone number."""
-        # Get application ID first
+        # Get application ID first (check both old column and candidates table)
         app_id = await self.pool.fetchval(
-            "SELECT id FROM applications WHERE vacancy_id = $1 AND candidate_phone = $2",
+            """
+            SELECT a.id FROM ats.applications a
+            LEFT JOIN ats.candidates c ON c.id = a.candidate_id
+            WHERE a.vacancy_id = $1 AND (a.candidate_phone = $2 OR c.phone = $2)
+            """,
             vacancy_id, phone
         )
 
         if app_id:
             # Delete answers
             await self.pool.execute(
-                "DELETE FROM application_answers WHERE application_id = $1",
+                "DELETE FROM ats.application_answers WHERE application_id = $1",
                 app_id
             )
             # Delete application
             await self.pool.execute(
-                "DELETE FROM applications WHERE id = $1",
+                "DELETE FROM ats.applications WHERE id = $1",
                 app_id
             )
 
@@ -276,8 +300,9 @@ class ApplicationRepository:
         """Find all test applications that need reprocessing."""
         return await self.pool.fetch(
             """
-            SELECT a.id, a.vacancy_id, a.candidate_name
-            FROM applications a
+            SELECT a.id, a.vacancy_id, COALESCE(c.full_name, a.candidate_name) as candidate_name
+            FROM ats.applications a
+            LEFT JOIN ats.candidates c ON c.id = a.candidate_id
             WHERE a.is_test = true
             ORDER BY a.started_at DESC
             """

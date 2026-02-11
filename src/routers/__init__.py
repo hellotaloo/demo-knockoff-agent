@@ -14,6 +14,9 @@ from .cv import router as cv_router
 from .demo import router as demo_router
 from .documents import router as documents_router
 from .document_collection import router as document_collection_router
+from .scheduling import router as scheduling_router
+from .candidates import router as candidates_router
+from .agents import router as agents_router
 
 __all__ = [
     "health_router",
@@ -28,5 +31,8 @@ __all__ = [
     "cv_router",
     "demo_router",
     "documents_router",
-    "document_collection_router"
+    "document_collection_router",
+    "scheduling_router",
+    "candidates_router",
+    "agents_router",
 ]

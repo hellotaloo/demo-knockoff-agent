@@ -42,7 +42,7 @@ class DemoService:
         
         # Delete test applications
         result = await self.pool.execute(
-            "DELETE FROM applications WHERE is_test = true"
+            "DELETE FROM ats.applications WHERE is_test = true"
         )
         
         return {

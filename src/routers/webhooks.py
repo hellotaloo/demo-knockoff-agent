@@ -21,6 +21,8 @@ from knockout_agent.agent import build_screening_instruction, is_closing_message
 from transcript_processor import process_transcript
 from src.config import ELEVENLABS_WEBHOOK_SECRET, logger
 from src.models.webhook import ElevenLabsWebhookPayload
+from src.models import ActivityEventType, ActorType, ActivityChannel
+from src.services import ActivityService
 from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ async def _process_whatsapp_conversation(
     messages = await pool.fetch(
         """
         SELECT role, message, created_at
-        FROM conversation_messages
+        FROM ats.conversation_messages
         WHERE conversation_id = $1
         ORDER BY created_at
         """,
@@ -121,7 +123,7 @@ async def _process_whatsapp_conversation(
     conv_row = await pool.fetchrow(
         """
         SELECT vacancy_id, candidate_name, candidate_phone, is_test
-        FROM screening_conversations
+        FROM ats.screening_conversations
         WHERE id = $1
         """,
         conversation_id
@@ -142,7 +144,7 @@ async def _process_whatsapp_conversation(
     if candidate_phone:
         existing_app = await pool.fetchrow(
             """
-            SELECT id FROM applications
+            SELECT id, candidate_id FROM ats.applications
             WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = 'whatsapp' AND status != 'completed'
             """,
             vacancy_uuid, candidate_phone
@@ -151,7 +153,7 @@ async def _process_whatsapp_conversation(
     if not existing_app:
         existing_app = await pool.fetchrow(
             """
-            SELECT id FROM applications
+            SELECT id, candidate_id FROM ats.applications
             WHERE vacancy_id = $1 AND candidate_name = $2 AND channel = 'whatsapp' AND status != 'completed'
             """,
             vacancy_uuid, candidate_name
@@ -160,7 +162,7 @@ async def _process_whatsapp_conversation(
     if existing_app:
         # Set status to 'processing' BEFORE transcript analysis (commits immediately)
         await pool.execute(
-            "UPDATE applications SET status = 'processing' WHERE id = $1",
+            "UPDATE ats.applications SET status = 'processing' WHERE id = $1",
             existing_app["id"]
         )
         logger.info(f"🔄 Application {existing_app['id']} status -> processing")
@@ -188,7 +190,7 @@ async def _process_whatsapp_conversation(
                 application_id = existing_app["id"]
                 await conn.execute(
                     """
-                    UPDATE applications
+                    UPDATE ats.applications
                     SET qualified = $1, interaction_seconds = $2,
                         completed_at = NOW(), channel = 'whatsapp',
                         summary = $3, interview_slot = $4, status = 'completed'
@@ -205,7 +207,7 @@ async def _process_whatsapp_conversation(
                 # Create new application (already completed)
                 app_row = await conn.fetchrow(
                     """
-                    INSERT INTO applications
+                    INSERT INTO ats.applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
                      interaction_seconds, completed_at, summary, interview_slot, is_test, status)
                     VALUES ($1, $2, $3, 'whatsapp', $4, $5, NOW(), $6, $7, $8, 'completed')
@@ -227,7 +229,7 @@ async def _process_whatsapp_conversation(
             for kr in result.knockout_results:
                 await conn.execute(
                     """
-                    INSERT INTO application_answers
+                    INSERT INTO ats.application_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp')
                     """,
@@ -244,7 +246,7 @@ async def _process_whatsapp_conversation(
             for qr in result.qualification_results:
                 await conn.execute(
                     """
-                    INSERT INTO application_answers
+                    INSERT INTO ats.application_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source, motivation)
                     VALUES ($1, $2, $3, $4, NULL, $5, $6, 'whatsapp', $7)
                     """,
@@ -260,7 +262,7 @@ async def _process_whatsapp_conversation(
             # Mark conversation as completed
             await conn.execute(
                 """
-                UPDATE screening_conversations
+                UPDATE ats.screening_conversations
                 SET status = 'completed', completed_at = NOW(), updated_at = NOW()
                 WHERE id = $1
                 """,
@@ -268,6 +270,28 @@ async def _process_whatsapp_conversation(
             )
 
     logger.info(f"✅ WhatsApp conversation {conversation_id} processed: application {application_id}")
+
+    # Log activity: screening completed + processed
+    candidate_id = existing_app["candidate_id"] if existing_app and existing_app.get("candidate_id") else None
+    if candidate_id:
+        activity_service = ActivityService(pool)
+
+        # Calculate overall score from qualification results
+        scores = [qr.score for qr in result.qualification_results if qr.score is not None]
+        avg_score = round(sum(scores) / len(scores)) if scores else None
+
+        # Log screening completed
+        event_type = ActivityEventType.QUALIFIED if result.overall_passed else ActivityEventType.DISQUALIFIED
+        await activity_service.log(
+            candidate_id=str(candidate_id),
+            event_type=event_type,
+            application_id=str(application_id),
+            vacancy_id=str(vacancy_uuid),
+            channel=ActivityChannel.WHATSAPP,
+            actor_type=ActorType.AGENT,
+            metadata={"qualified": result.overall_passed, "score": avg_score},
+            summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
+        )
 
 
 async def _webhook_impl_vacancy_specific(session_id: str, incoming_msg: str, vacancy_id: str, pre_screening: dict, vacancy_title: str) -> tuple[str, bool, str | None]:
@@ -354,10 +378,12 @@ async def _webhook_impl_vacancy_specific(session_id: str, incoming_msg: str, vac
                         completion_outcome = args.get("outcome", "completed")
                         logger.info(f"🏁 conversation_complete tool called: {completion_outcome}")
 
-                # Get response text
+                # Get response text - capture from any response with text
+                # (not just final response, because text may come alongside tool calls)
                 if hasattr(part, 'text') and part.text:
-                    if event.is_final_response():
-                        response_text = clean_response_text(part.text)
+                    cleaned = clean_response_text(part.text)
+                    if cleaned:
+                        response_text = cleaned
 
     # Fallback: Check for closing patterns if tool wasn't called
     is_complete = tool_called
@@ -471,7 +497,7 @@ async def webhook(
     doc_conv_row = await pool.fetchrow(
         """
         SELECT id, vacancy_id, session_id, candidate_name
-        FROM document_collection_conversations
+        FROM ats.document_collection_conversations
         WHERE candidate_phone = $1
         AND status = 'active'
         ORDER BY started_at DESC
@@ -500,8 +526,8 @@ async def webhook(
     conv_row = await pool.fetchrow(
         """
         SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, v.title as vacancy_title
-        FROM screening_conversations sc
-        JOIN vacancies v ON v.id = sc.vacancy_id
+        FROM ats.screening_conversations sc
+        JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.candidate_phone = $1
         AND sc.channel = 'whatsapp'
         AND sc.status = 'active'
@@ -536,7 +562,7 @@ async def webhook(
             ps_row = await pool.fetchrow(
                 """
                 SELECT intro, knockout_failed_action, final_action
-                FROM pre_screenings
+                FROM ats.pre_screenings
                 WHERE id = $1
                 """,
                 conv_row["pre_screening_id"]
@@ -545,7 +571,7 @@ async def webhook(
             questions = await pool.fetch(
                 """
                 SELECT id, question_type, position, question_text, ideal_answer
-                FROM pre_screening_questions
+                FROM ats.pre_screening_questions
                 WHERE pre_screening_id = $1
                 ORDER BY question_type, position
                 """,
@@ -570,7 +596,7 @@ async def webhook(
                 # Store user message
                 await pool.execute(
                     """
-                    INSERT INTO conversation_messages (conversation_id, role, message)
+                    INSERT INTO ats.conversation_messages (conversation_id, role, message)
                     VALUES ($1, 'user', $2)
                     """,
                     conversation_id, incoming_msg
@@ -579,7 +605,7 @@ async def webhook(
                 if response_text:
                     await pool.execute(
                         """
-                        INSERT INTO conversation_messages (conversation_id, role, message)
+                        INSERT INTO ats.conversation_messages (conversation_id, role, message)
                         VALUES ($1, 'agent', $2)
                         """,
                         conversation_id, response_text
@@ -645,41 +671,59 @@ async def elevenlabs_webhook(request: Request):
     data = payload.data
 
     logger.info(f"ElevenLabs webhook received: type={event_type}, agent_id={data.agent_id}, conversation_id={data.conversation_id}")
+    # Debug: log raw request body (truncated if large)
+    try:
+        body_preview = body.decode("utf-8", errors="replace")
+        if len(body_preview) > 2000:
+            body_preview = body_preview[:2000] + "... [truncated]"
+        logger.info(f"[webhook/elevenlabs] request body: {body_preview}")
+    except Exception:
+        logger.info(f"[webhook/elevenlabs] request body (raw bytes len={len(body)})")
 
     # Handle based on event type
     if event_type == "call_initiation_failure":
+        resp = {"status": "received", "action": "logged"}
         logger.warning(f"Call initiation failed for conversation {data.conversation_id}")
-        return {"status": "received", "action": "logged"}
+        logger.info(f"[webhook/elevenlabs] response: {resp}")
+        return resp
 
     if event_type == "post_call_audio":
+        resp = {"status": "received", "action": "ignored"}
         logger.info(f"Audio webhook received for conversation {data.conversation_id} (ignored)")
-        return {"status": "received", "action": "ignored"}
+        logger.info(f"[webhook/elevenlabs] response: {resp}")
+        return resp
 
     if event_type != "post_call_transcription":
+        resp = {"status": "received", "action": "unknown_type"}
         logger.warning(f"Unknown webhook type: {event_type}")
-        return {"status": "received", "action": "unknown_type"}
+        logger.info(f"[webhook/elevenlabs] response: {resp}")
+        return resp
 
     # Process transcription webhook
     pool = await get_db_pool()
 
-    # Look up pre-screening by ElevenLabs agent_id
-    ps_row = await pool.fetchrow(
+    # Look up screening conversation by ElevenLabs conversation_id
+    # This maps back to the pre-screening since we store conversation_id in session_id
+    screening_conv = await pool.fetchrow(
         """
-        SELECT ps.id as pre_screening_id, ps.vacancy_id, v.title as vacancy_title
-        FROM pre_screenings ps
-        JOIN vacancies v ON v.id = ps.vacancy_id
-        WHERE ps.elevenlabs_agent_id = $1
+        SELECT sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone, sc.candidate_name, sc.is_test,
+               v.title as vacancy_title
+        FROM ats.screening_conversations sc
+        JOIN ats.vacancies v ON v.id = sc.vacancy_id
+        WHERE sc.session_id = $1 AND sc.channel = 'voice'
         """,
-        data.agent_id
+        data.conversation_id
     )
 
-    if not ps_row:
-        logger.error(f"No pre-screening found for agent_id: {data.agent_id}")
-        raise HTTPException(status_code=404, detail=f"No pre-screening found for agent: {data.agent_id}")
+    if not screening_conv:
+        logger.error(f"No screening conversation found for conversation_id: {data.conversation_id}")
+        raise HTTPException(status_code=404, detail=f"No conversation found: {data.conversation_id}")
 
-    pre_screening_id = ps_row["pre_screening_id"]
-    vacancy_id = ps_row["vacancy_id"]
-    vacancy_title = ps_row["vacancy_title"]
+    pre_screening_id = screening_conv["pre_screening_id"]
+    vacancy_id = screening_conv["vacancy_id"]
+    vacancy_title = screening_conv["vacancy_title"]
+    candidate_phone = screening_conv["candidate_phone"]
+    candidate_name = screening_conv["candidate_name"] or "Voice Candidate"
 
     logger.info(f"Processing transcript for vacancy '{vacancy_title}' (pre-screening {pre_screening_id})")
 
@@ -687,7 +731,7 @@ async def elevenlabs_webhook(request: Request):
     questions = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer
-        FROM pre_screening_questions
+        FROM ats.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -723,18 +767,7 @@ async def elevenlabs_webhook(request: Request):
     metadata = data.metadata or {}
     call_duration = metadata.get("call_duration_secs", 0)
 
-    # Try to find registered candidate by phone number from screening_conversations
-    screening_conv = await pool.fetchrow(
-        """
-        SELECT candidate_phone, candidate_name
-        FROM screening_conversations
-        WHERE session_id = $1 AND channel = 'voice'
-        """,
-        data.conversation_id
-    )
-
-    candidate_phone = screening_conv["candidate_phone"] if screening_conv else None
-    candidate_name = screening_conv["candidate_name"] if screening_conv else "Voice Candidate"
+    # candidate_phone and candidate_name already retrieved from screening_conv above
 
     # Find existing application and set status to 'processing' BEFORE AI analysis
     # IMPORTANT: Only find applications for the VOICE channel to avoid race conditions with WhatsApp
@@ -742,7 +775,7 @@ async def elevenlabs_webhook(request: Request):
     if candidate_phone:
         existing_app = await pool.fetchrow(
             """
-            SELECT id FROM applications
+            SELECT id, candidate_id FROM ats.applications
             WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = 'voice' AND status != 'completed'
             """,
             vacancy_id,
@@ -752,7 +785,7 @@ async def elevenlabs_webhook(request: Request):
     if existing_app:
         # Set status to 'processing' BEFORE transcript analysis (commits immediately)
         await pool.execute(
-            "UPDATE applications SET status = 'processing' WHERE id = $1",
+            "UPDATE ats.applications SET status = 'processing' WHERE id = $1",
             existing_app["id"]
         )
         logger.info(f"🔄 Application {existing_app['id']} status -> processing")
@@ -773,7 +806,7 @@ async def elevenlabs_webhook(request: Request):
                 application_id = existing_app["id"]
                 await conn.execute(
                     """
-                    UPDATE applications
+                    UPDATE ats.applications
                     SET qualified = $1, interaction_seconds = $2,
                         completed_at = NOW(), conversation_id = $3, channel = 'voice',
                         summary = $4, interview_slot = $5, status = 'completed'
@@ -791,7 +824,7 @@ async def elevenlabs_webhook(request: Request):
                 # Create new application record
                 app_row = await conn.fetchrow(
                     """
-                    INSERT INTO applications
+                    INSERT INTO ats.applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
                      interaction_seconds, completed_at, conversation_id, summary, interview_slot, status)
                     VALUES ($1, $2, $3, 'voice', $4, $5, NOW(), $6, $7, $8, 'completed')
@@ -813,7 +846,7 @@ async def elevenlabs_webhook(request: Request):
             for kr in result.knockout_results:
                 await conn.execute(
                     """
-                    INSERT INTO application_answers
+                    INSERT INTO ats.application_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, 'voice')
                     """,
@@ -830,7 +863,7 @@ async def elevenlabs_webhook(request: Request):
             for qr in result.qualification_results:
                 await conn.execute(
                     """
-                    INSERT INTO application_answers
+                    INSERT INTO ats.application_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source, motivation)
                     VALUES ($1, $2, $3, $4, NULL, $5, $6, 'voice', $7)
                     """,
@@ -847,7 +880,7 @@ async def elevenlabs_webhook(request: Request):
             # The session_id in screening_conversations is the ElevenLabs conversation_id
             await conn.execute(
                 """
-                UPDATE screening_conversations
+                UPDATE ats.screening_conversations
                 SET status = 'completed', completed_at = NOW(), updated_at = NOW()
                 WHERE session_id = $1 AND channel = 'voice'
                 """,
@@ -858,7 +891,7 @@ async def elevenlabs_webhook(request: Request):
             # First, get the screening_conversation ID
             conv_id_row = await conn.fetchrow(
                 """
-                SELECT id FROM screening_conversations
+                SELECT id FROM ats.screening_conversations
                 WHERE session_id = $1 AND channel = 'voice'
                 """,
                 data.conversation_id
@@ -873,7 +906,7 @@ async def elevenlabs_webhook(request: Request):
                     if message_text:
                         await conn.execute(
                             """
-                            INSERT INTO conversation_messages (conversation_id, role, message)
+                            INSERT INTO ats.conversation_messages (conversation_id, role, message)
                             VALUES ($1, $2, $3)
                             """,
                             voice_conv_id, role, message_text
@@ -882,7 +915,29 @@ async def elevenlabs_webhook(request: Request):
 
     logger.info(f"Stored application {application_id} with {len(result.knockout_results)} knockout and {len(result.qualification_results)} qualification answers")
 
-    return {
+    # Log activity: screening completed
+    candidate_id = existing_app["candidate_id"] if existing_app and existing_app.get("candidate_id") else None
+    if candidate_id:
+        activity_service = ActivityService(pool)
+
+        # Calculate overall score from qualification results
+        scores = [qr.score for qr in result.qualification_results if qr.score is not None]
+        avg_score = round(sum(scores) / len(scores)) if scores else None
+
+        # Log screening completed
+        event_type = ActivityEventType.QUALIFIED if result.overall_passed else ActivityEventType.DISQUALIFIED
+        await activity_service.log(
+            candidate_id=str(candidate_id),
+            event_type=event_type,
+            application_id=str(application_id),
+            vacancy_id=str(vacancy_id),
+            channel=ActivityChannel.VOICE,
+            actor_type=ActorType.AGENT,
+            metadata={"qualified": result.overall_passed, "score": avg_score},
+            summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
+        )
+
+    response = {
         "status": "processed",
         "application_id": str(application_id),
         "overall_passed": result.overall_passed,
@@ -892,3 +947,5 @@ async def elevenlabs_webhook(request: Request):
         "summary": result.summary,
         "interview_slot": result.interview_slot
     }
+    logger.info(f"[webhook/elevenlabs] response: {response}")
+    return response

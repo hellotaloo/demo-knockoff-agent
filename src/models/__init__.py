@@ -13,6 +13,10 @@ from .enums import VacancyStatus, VacancySource, InterviewChannel
 # Vacancy models
 from .vacancy import (
     ChannelsResponse,
+    AgentStatusResponse,
+    AgentsResponse,
+    RecruiterSummary,
+    ClientSummary,
     VacancyResponse,
     VacancyStatsResponse,
     DashboardStatsResponse,
@@ -83,6 +87,25 @@ from .document_collection import (
     DocumentCollectionDebugResponse,
 )
 
+# Candidate models
+from .candidate import (
+    CandidateCreate,
+    CandidateUpdate,
+    CandidateResponse,
+    CandidateWithApplicationsResponse,
+    CandidateApplicationSummary,
+)
+
+# Activity models
+from .activity import (
+    ActivityEventType,
+    ActorType,
+    ActivityChannel,
+    ActivityCreate,
+    ActivityResponse,
+    TimelineResponse,
+)
+
 __all__ = [
     # Common
     "PaginatedResponse",
@@ -92,6 +115,10 @@ __all__ = [
     "InterviewChannel",
     # Vacancy
     "ChannelsResponse",
+    "AgentStatusResponse",
+    "AgentsResponse",
+    "RecruiterSummary",
+    "ClientSummary",
     "VacancyResponse",
     "VacancyStatsResponse",
     "DashboardStatsResponse",
@@ -135,4 +162,17 @@ __all__ = [
     "OutboundDocumentRequest",
     "OutboundDocumentResponse",
     "DocumentCollectionDebugResponse",
+    # Candidate
+    "CandidateCreate",
+    "CandidateUpdate",
+    "CandidateResponse",
+    "CandidateWithApplicationsResponse",
+    "CandidateApplicationSummary",
+    # Activity
+    "ActivityEventType",
+    "ActorType",
+    "ActivityChannel",
+    "ActivityCreate",
+    "ActivityResponse",
+    "TimelineResponse",
 ]

@@ -117,7 +117,7 @@ async def reprocess_test_applications():
             a.started_at,
             (
                 SELECT sc.id
-                FROM screening_conversations sc
+                FROM ats.screening_conversations sc
                 WHERE sc.vacancy_id = a.vacancy_id
                 AND sc.is_test = true
                 AND sc.status = 'completed'
@@ -128,7 +128,7 @@ async def reprocess_test_applications():
                 ORDER BY ABS(EXTRACT(EPOCH FROM (sc.created_at - a.started_at)))
                 LIMIT 1
             ) as conversation_id
-        FROM applications a
+        FROM ats.applications a
         WHERE a.is_test = true AND a.status = 'completed'
         ORDER BY a.started_at DESC
         """
@@ -190,7 +190,7 @@ async def reprocess_test_applications():
             # Fetch pre-screening for this vacancy
             ps_row = await pool.fetchrow(
                 """
-                SELECT id FROM pre_screenings WHERE vacancy_id = $1
+                SELECT id FROM ats.pre_screenings WHERE vacancy_id = $1
                 """,
                 vacancy_id
             )
@@ -206,7 +206,7 @@ async def reprocess_test_applications():
             questions = await pool.fetch(
                 """
                 SELECT id, question_type, question_text, ideal_answer
-                FROM pre_screening_questions
+                FROM ats.pre_screening_questions
                 WHERE pre_screening_id = $1
                 ORDER BY question_type, position
                 """,
@@ -249,7 +249,7 @@ async def reprocess_test_applications():
                     # Update application summary and qualified status
                     await conn.execute(
                         """
-                        UPDATE applications
+                        UPDATE ats.applications
                         SET qualified = $1, summary = $2, interview_slot = $3
                         WHERE id = $4
                         """,
@@ -261,7 +261,7 @@ async def reprocess_test_applications():
 
                     # Delete existing answers
                     await conn.execute(
-                        "DELETE FROM application_answers WHERE application_id = $1",
+                        "DELETE FROM ats.application_answers WHERE application_id = $1",
                         application_id
                     )
 
@@ -269,7 +269,7 @@ async def reprocess_test_applications():
                     for kr in result.knockout_results:
                         await conn.execute(
                             """
-                            INSERT INTO application_answers
+                            INSERT INTO ats.application_answers
                             (application_id, question_id, question_text, answer, passed, score, rating, source)
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                             """,
@@ -287,7 +287,7 @@ async def reprocess_test_applications():
                     for qr in result.qualification_results:
                         await conn.execute(
                             """
-                            INSERT INTO application_answers
+                            INSERT INTO ats.application_answers
                             (application_id, question_id, question_text, answer, passed, score, rating, source, motivation)
                             VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8)
                             """,

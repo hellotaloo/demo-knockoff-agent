@@ -40,7 +40,7 @@ class ConversationRepository:
 
         # Get total count
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM screening_conversations WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM ats.screening_conversations WHERE {where_clause}",
             *params
         )
 
@@ -48,7 +48,7 @@ class ConversationRepository:
         query = f"""
             SELECT id, vacancy_id, candidate_name, candidate_email, status,
                    started_at, completed_at, message_count
-            FROM screening_conversations
+            FROM ats.screening_conversations
             WHERE {where_clause}
             ORDER BY started_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -66,7 +66,7 @@ class ConversationRepository:
             SELECT id, vacancy_id, pre_screening_id, session_id, candidate_name,
                    candidate_email, candidate_phone, status, started_at, completed_at,
                    message_count, channel, is_test
-            FROM screening_conversations
+            FROM ats.screening_conversations
             WHERE id = $1
             """,
             conversation_id
@@ -77,7 +77,7 @@ class ConversationRepository:
         return await self.pool.fetch(
             """
             SELECT role, message, created_at
-            FROM conversation_messages
+            FROM ats.conversation_messages
             WHERE conversation_id = $1
             ORDER BY created_at ASC
             """,
@@ -97,7 +97,7 @@ class ConversationRepository:
         """Create a new screening conversation."""
         conv_id = await self.pool.fetchval(
             """
-            INSERT INTO screening_conversations
+            INSERT INTO ats.screening_conversations
             (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test)
             VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
             RETURNING id
@@ -115,7 +115,7 @@ class ConversationRepository:
         """Add a message to a conversation."""
         await self.pool.execute(
             """
-            INSERT INTO conversation_messages (conversation_id, role, message)
+            INSERT INTO ats.conversation_messages (conversation_id, role, message)
             VALUES ($1, $2, $3)
             """,
             conversation_id, role, message
@@ -125,7 +125,7 @@ class ConversationRepository:
         """Update the message count for a conversation."""
         await self.pool.execute(
             """
-            UPDATE screening_conversations
+            UPDATE ats.screening_conversations
             SET message_count = $2, updated_at = NOW()
             WHERE id = $1
             """,
@@ -142,7 +142,7 @@ class ConversationRepository:
         if completed_at:
             await self.pool.execute(
                 """
-                UPDATE screening_conversations
+                UPDATE ats.screening_conversations
                 SET status = $2, completed_at = $3, updated_at = NOW()
                 WHERE id = $1
                 """,
@@ -151,7 +151,7 @@ class ConversationRepository:
         else:
             await self.pool.execute(
                 """
-                UPDATE screening_conversations
+                UPDATE ats.screening_conversations
                 SET status = $2, updated_at = NOW()
                 WHERE id = $1
                 """,
@@ -162,7 +162,7 @@ class ConversationRepository:
         """Mark conversation as completed."""
         await self.pool.execute(
             """
-            UPDATE screening_conversations
+            UPDATE ats.screening_conversations
             SET status = 'completed', completed_at = NOW(), updated_at = NOW()
             WHERE id = $1
             """,
@@ -174,7 +174,7 @@ class ConversationRepository:
         return await self.pool.fetchrow(
             """
             SELECT id, vacancy_id, candidate_phone, status, channel
-            FROM screening_conversations
+            FROM ats.screening_conversations
             WHERE session_id = $1
             """,
             session_id
@@ -188,7 +188,7 @@ class ConversationRepository:
         """Find an active conversation for a phone number."""
         return await self.pool.fetchrow(
             """
-            SELECT id FROM screening_conversations
+            SELECT id FROM ats.screening_conversations
             WHERE vacancy_id = $1 AND candidate_phone = $2 AND status = 'active'
             ORDER BY started_at DESC
             LIMIT 1
@@ -200,7 +200,7 @@ class ConversationRepository:
         """Delete conversations and messages for a phone number."""
         # Get conversation IDs first
         conv_ids = await self.pool.fetch(
-            "SELECT id FROM screening_conversations WHERE vacancy_id = $1 AND candidate_phone = $2",
+            "SELECT id FROM ats.screening_conversations WHERE vacancy_id = $1 AND candidate_phone = $2",
             vacancy_id, phone
         )
 
@@ -211,14 +211,14 @@ class ConversationRepository:
                         conv_id = row["id"]
                         # Delete related conversation_messages first
                         await conn.execute(
-                            "DELETE FROM conversation_messages WHERE conversation_id = $1",
+                            "DELETE FROM ats.conversation_messages WHERE conversation_id = $1",
                             conv_id
                         )
 
                     # Delete all conversations for this phone
                     await conn.execute(
                         """
-                        DELETE FROM screening_conversations
+                        DELETE FROM ats.screening_conversations
                         WHERE vacancy_id = $1 AND candidate_phone = $2
                         """,
                         vacancy_id, phone
@@ -226,4 +226,4 @@ class ConversationRepository:
 
     async def delete_all(self):
         """Delete all conversations (for demo reset)."""
-        await self.pool.execute("DELETE FROM screening_conversations")
+        await self.pool.execute("DELETE FROM ats.screening_conversations")

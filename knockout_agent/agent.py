@@ -4,6 +4,7 @@ from google.genai import types
 from datetime import datetime, timedelta
 from typing import Optional
 import logging
+import os
 import re
 
 logger = logging.getLogger(__name__)
@@ -173,14 +174,9 @@ def build_screening_instruction(config: dict, vacancy_title: str = None, channel
     Returns:
         str: Complete screening instruction in Dutch
     """
-    # Generate dynamic timestamp and appointment slots (in Dutch)
+    # Generate dynamic timestamp (in Dutch)
     now = datetime.now()
     timestamp = get_dutch_date(now, include_time=True)
-    
-    next_days = get_next_business_days(now, 2)
-    slot1 = get_dutch_date(next_days[0]) + " om 10:00"
-    slot2 = get_dutch_date(next_days[0]) + " om 14:00"
-    slot3 = get_dutch_date(next_days[1]) + " om 11:00"
     
     intro = config.get("intro", "Hallo! Ik zou je graag enkele vragen stellen.")
     knockout_questions = config.get("knockout_questions", [])
@@ -266,7 +262,21 @@ Na deze vragen:
         success_condition = "alle vragen positief beantwoord"
     else:
         success_condition = "het gesprek goed verlopen is"
-    
+
+    # Dev triggers only in non-production environments
+    env = os.environ.get("ENVIRONMENT", "development").lower()
+    if env != "production":
+        dev_triggers = """
+## DEV/TEST TRIGGERS (alleen voor development)
+- Als je "TEST_SCHEDULING" of "test scheduling" ontvangt:
+  1. Sla ALLE vragen over
+  2. Behandel de kandidaat als "Jan Test" die geslaagd is
+  3. Ga DIRECT naar het inplannen van een interview (gebruik de scheduling tools)
+
+"""
+    else:
+        dev_triggers = ""
+
     instruction = f"""Je bent een vriendelijke digitale recruiter van ITZU die via {channel} een screeningsgesprek voert met kandidaten.
 
 📅 **Huidige datum en tijd:** {timestamp}{vacancy_header}
@@ -322,16 +332,20 @@ Ben je klaar om te beginnen?
 
 ## BIJ SUCCES - GESPREK INPLANNEN
 Als de kandidaat alle vragen positief beantwoordt:
-1. Zeg direct dat ze een goede match lijken en je graag een gesprek met de recruiter wilt inplannen
-2. Bied deze 3 tijdsloten aan:
-   - {slot1}
-   - {slot2}
-   - {slot3}
-3. Vraag welk tijdslot het beste past
-4. Bevestig kort: "Top, je staat ingepland voor [tijd]! ✅"
 
-Voorbeeld: "Je bent precies wat we zoeken! Laten we een gesprek inplannen met de recruiter. Welk tijdslot past jou?"
+1. Zeg dat ze een goede match lijken en je graag een gesprek wilt inplannen
+2. Gebruik de `check_recruiter_availability` tool om beschikbare tijdsloten op te halen
+3. Presenteer de beschikbare tijdsloten aan de kandidaat (max 3-4 opties)
+4. Vraag welk tijdslot het beste past
+5. Wanneer de kandidaat een tijdslot kiest, gebruik de `schedule_interview` tool om het interview in te plannen:
+   - recruiter_email: gebruik "hello@taloo.be" (standaard)
+   - candidate_name: de naam van de kandidaat
+   - date: in YYYY-MM-DD formaat (bijv. "2026-02-14")
+   - time: in "10u" of "14u" formaat
+6. Bevestig de boeking: "Top, je staat ingepland voor [datum] om [tijd]! ✅"
 
+**Belangrijk:** Toon de tool-aanroepen NOOIT aan de kandidaat. De kandidaat ziet alleen de beschikbare tijden en de bevestiging.
+{dev_triggers}
 ## BELANGRIJKE REGELS
 - **KORT HOUDEN**: Max 2-3 zinnen per bericht
 - Stel vragen één voor één, niet allemaal tegelijk
