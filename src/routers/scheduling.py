@@ -3,7 +3,7 @@ Scheduling Router - Endpoints for interview time slot management.
 
 This router provides endpoints used by:
 - ElevenLabs voice agents (via webhook)
-- knockout_agent (can also import service directly)
+- pre_screening_whatsapp_agent (for interview scheduling)
 - Frontend applications
 
 Supports Google Calendar integration when GOOGLE_SERVICE_ACCOUNT_FILE is configured.

@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends
 from cv_analyzer import analyze_cv_base64
-from knockout_agent.agent import get_next_business_days, get_dutch_date
+from src.utils.date_utils import get_next_business_days, get_dutch_date
 
 from src.models.vacancy import VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse
 from src.models.application import ApplicationResponse, QuestionAnswerResponse, CVApplicationRequest

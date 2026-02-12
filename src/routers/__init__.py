@@ -17,6 +17,8 @@ from .document_collection import router as document_collection_router
 from .scheduling import router as scheduling_router
 from .candidates import router as candidates_router
 from .agents import router as agents_router
+from .activities import router as activities_router
+from .elevenlabs import router as elevenlabs_router
 
 __all__ = [
     "health_router",
@@ -35,4 +37,6 @@ __all__ = [
     "scheduling_router",
     "candidates_router",
     "agents_router",
+    "activities_router",
+    "elevenlabs_router",
 ]

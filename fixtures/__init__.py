@@ -48,3 +48,9 @@ def load_clients() -> list[dict]:
     """Load demo clients from JSON file."""
     with open(FIXTURES_DIR / "clients.json", "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_activities() -> list[dict]:
+    """Load demo activities from JSON file."""
+    with open(FIXTURES_DIR / "activities.json", "r", encoding="utf-8") as f:
+        return json.load(f)

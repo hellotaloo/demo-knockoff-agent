@@ -1,0 +1,214 @@
+[
+  {
+    "candidate_idx": 0,
+    "vacancy_idx": 0,
+    "event_type": "screening_started",
+    "channel": "whatsapp",
+    "actor_type": "agent",
+    "summary": "Pre-screening gestart via WhatsApp",
+    "metadata": {
+      "first_message": "Hallo! Ik ben de digitale recruiter van Vandemoortele. Fijn dat je interesse hebt in de functie van Operator Mengafdeling!"
+    },
+    "minutes_ago": 2
+  },
+  {
+    "candidate_idx": 1,
+    "vacancy_idx": 1,
+    "event_type": "qualified",
+    "channel": "whatsapp",
+    "actor_type": "agent",
+    "summary": "Kandidaat gekwalificeerd na WhatsApp screening",
+    "metadata": {
+      "score": 85,
+      "knockout_passed": 3,
+      "knockout_total": 3,
+      "last_answer": "Ja, ik heb 5 jaar ervaring als magazijnmedewerker bij Colruyt."
+    },
+    "minutes_ago": 5
+  },
+  {
+    "candidate_idx": null,
+    "vacancy_idx": 2,
+    "event_type": "note_added",
+    "channel": "web",
+    "actor_type": "recruiter",
+    "summary": "2 knockout vragen toegevoegd",
+    "metadata": {
+      "questions_added": 2,
+      "questions": ["Heb je ervaring met heftrucks?", "Ben je bereid om in ploegensysteem te werken?"]
+    },
+    "minutes_ago": 8
+  },
+  {
+    "candidate_idx": 2,
+    "vacancy_idx": 0,
+    "event_type": "qualified",
+    "channel": "voice",
+    "actor_type": "agent",
+    "summary": "Gekwalificeerd na voice screening",
+    "metadata": {
+      "score": 92,
+      "duration_seconds": 245,
+      "knockout_passed": 3,
+      "knockout_total": 3,
+      "transcript_preview": "...ja absoluut, ik werk al 3 jaar met industriële mengmachines en ken alle veiligheidsprotocollen."
+    },
+    "minutes_ago": 12
+  },
+  {
+    "candidate_idx": 3,
+    "vacancy_idx": 1,
+    "event_type": "disqualified",
+    "channel": "whatsapp",
+    "actor_type": "agent",
+    "summary": "Beschikbaarheid matcht niet",
+    "metadata": {
+      "reason": "availability_mismatch",
+      "knockout_failed": "Beschikbaarheid",
+      "candidate_response": "Ik kan pas over 3 maanden beginnen omdat ik nog een opzegtermijn heb.",
+      "required": "Onmiddellijk beschikbaar"
+    },
+    "minutes_ago": 25
+  },
+  {
+    "candidate_idx": null,
+    "vacancy_idx": 3,
+    "event_type": "status_changed",
+    "channel": "web",
+    "actor_type": "recruiter",
+    "summary": "Agent online gezet",
+    "metadata": {
+      "is_online": true,
+      "channels_enabled": ["voice", "whatsapp"]
+    },
+    "minutes_ago": 55
+  },
+  {
+    "candidate_idx": 4,
+    "vacancy_idx": 2,
+    "event_type": "screening_started",
+    "channel": "voice",
+    "actor_type": "agent",
+    "summary": "Voice screening gestart",
+    "metadata": {
+      "phone_number": "+32 476 ** ** 89",
+      "call_initiated_by": "outbound"
+    },
+    "minutes_ago": 65
+  },
+  {
+    "candidate_idx": 5,
+    "vacancy_idx": 0,
+    "event_type": "document_verified",
+    "channel": "whatsapp",
+    "actor_type": "agent",
+    "summary": "ID-kaart ontvangen en geverifieerd",
+    "metadata": {
+      "document_type": "id_card",
+      "verification_status": "verified",
+      "name_match": "exact_match",
+      "fraud_risk": "low"
+    },
+    "minutes_ago": 70
+  },
+  {
+    "candidate_idx": 6,
+    "vacancy_idx": 1,
+    "event_type": "screening_completed",
+    "channel": "voice",
+    "actor_type": "agent",
+    "summary": "Voice screening afgerond",
+    "metadata": {
+      "duration_seconds": 312,
+      "questions_answered": 6,
+      "awaiting_processing": true
+    },
+    "minutes_ago": 120
+  },
+  {
+    "candidate_idx": 7,
+    "vacancy_idx": 2,
+    "event_type": "interview_scheduled",
+    "channel": "voice",
+    "actor_type": "agent",
+    "summary": "Interview ingepland voor maandag 14u",
+    "metadata": {
+      "scheduled_date": "2026-02-17",
+      "scheduled_time": "14u",
+      "slot_text": "maandag 17 februari om 14u",
+      "calendar_event_created": true
+    },
+    "minutes_ago": 180
+  },
+  {
+    "candidate_idx": 0,
+    "vacancy_idx": 0,
+    "event_type": "cv_uploaded",
+    "channel": "cv",
+    "actor_type": "candidate",
+    "summary": "CV geüpload via website",
+    "metadata": {
+      "file_name": "CV_Jan_Janssens_2026.pdf",
+      "file_size_kb": 245,
+      "pages": 2
+    },
+    "minutes_ago": 1440
+  },
+  {
+    "candidate_idx": 1,
+    "vacancy_idx": 1,
+    "event_type": "message_received",
+    "channel": "whatsapp",
+    "actor_type": "candidate",
+    "summary": "Antwoord ontvangen van kandidaat",
+    "metadata": {
+      "message_preview": "Ja, ik ben direct beschikbaar en kan flexibel werken.",
+      "response_time_seconds": 45
+    },
+    "minutes_ago": 1500
+  },
+  {
+    "candidate_idx": 2,
+    "vacancy_idx": 1,
+    "event_type": "call_completed",
+    "channel": "voice",
+    "actor_type": "agent",
+    "summary": "Telefoongesprek beëindigd",
+    "metadata": {
+      "duration_seconds": 287,
+      "call_status": "completed",
+      "transcript_available": true
+    },
+    "minutes_ago": 90
+  },
+  {
+    "candidate_idx": 3,
+    "vacancy_idx": 0,
+    "event_type": "interview_rescheduled",
+    "channel": "web",
+    "actor_type": "recruiter",
+    "summary": "Interview verplaatst naar dinsdag 10u",
+    "metadata": {
+      "previous_date": "2026-02-17",
+      "previous_time": "14u",
+      "new_date": "2026-02-18",
+      "new_time": "10u",
+      "reason": "Kandidaat had conflict"
+    },
+    "minutes_ago": 200
+  },
+  {
+    "candidate_idx": 4,
+    "vacancy_idx": 2,
+    "event_type": "cv_analyzed",
+    "channel": "cv",
+    "actor_type": "agent",
+    "summary": "CV automatisch geanalyseerd",
+    "metadata": {
+      "skills_extracted": ["Heftruck certificaat", "VCA", "Nederlands (moedertaal)"],
+      "experience_years": 5,
+      "match_score": 78
+    },
+    "minutes_ago": 1380
+  }
+]

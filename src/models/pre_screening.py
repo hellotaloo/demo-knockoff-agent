@@ -11,6 +11,7 @@ class PreScreeningQuestionRequest(BaseModel):
     id: str  # Client-provided ID (e.g., "ko_1", "qual_2")
     question: str
     ideal_answer: Optional[str] = None  # Scoring guidance for qualification questions
+    vacancy_snippet: Optional[str] = None  # Exact text from vacancy this question is based on
 
 
 class PreScreeningQuestionResponse(BaseModel):
@@ -20,6 +21,7 @@ class PreScreeningQuestionResponse(BaseModel):
     position: int
     question_text: str
     ideal_answer: Optional[str] = None  # Scoring guidance for qualification questions
+    vacancy_snippet: Optional[str] = None  # Exact text from vacancy this question is based on
     is_approved: bool
 
 

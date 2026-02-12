@@ -1,6 +1,8 @@
-"""Data Query Agent - Query Supabase data using natural language."""
+"""Data Query Agent - Smart Text-to-SQL agent for Taloo recruitment data."""
 
 import os
+import re
+import asyncio
 from google.adk.agents import Agent
 from google.adk.tools import ToolContext
 from typing import Optional
@@ -8,6 +10,11 @@ import asyncpg
 
 # Reference to the database pool - will be set by app.py or created lazily
 _db_pool: Optional[asyncpg.Pool] = None
+
+# SQL query timeout in seconds
+SQL_QUERY_TIMEOUT = 10
+# Maximum rows to return
+SQL_MAX_ROWS = 100
 
 
 def set_db_pool(pool: asyncpg.Pool):
@@ -20,590 +27,343 @@ async def get_pool() -> asyncpg.Pool:
     """Get the database pool, creating one lazily if not initialized."""
     global _db_pool
     if _db_pool is None:
-        # Lazily create pool if not set by app.py (e.g., when using adk web)
         database_url = os.environ.get("DATABASE_URL")
         if not database_url:
             raise RuntimeError("DATABASE_URL environment variable is required")
-        # Convert SQLAlchemy URL to asyncpg format if needed
         raw_url = database_url.replace("postgresql+asyncpg://", "postgresql://")
-        # Disable statement cache for Supabase transaction-level pooling compatibility
         _db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=5, statement_cache_size=0)
     return _db_pool
 
 
 # ============================================================================
-# Database Query Tools
+# Schema Discovery Tools
 # ============================================================================
 
-async def query_vacancies(
-    tool_context: ToolContext,
-    status: Optional[str] = None,
-    search: Optional[str] = None,
-    limit: int = 10
-) -> dict:
+async def discover_tables(tool_context: ToolContext) -> dict:
     """
-    Query vacancies from the database with optional filters.
-    
-    Args:
-        status: Filter by vacancy status (new, draft, screening_active, archived)
-        search: Search in title, company, or location (case-insensitive)
-        limit: Maximum number of results to return (default 10, max 50)
-    
+    Discover all available tables in the database.
+
+    Call this FIRST to understand what data is available before writing queries.
+    Returns tables from the 'ats' schema (main business data).
+
     Returns:
-        Dictionary with vacancies list and total count
+        Dictionary with table names and their descriptions
     """
     pool = await get_pool()
-    
-    # Cap limit at 50
-    limit = min(limit, 50)
-    
-    # Build query with optional filters
-    conditions = []
-    params = []
-    param_idx = 1
-    
-    if status:
-        conditions.append(f"status = ${param_idx}")
-        params.append(status)
-        param_idx += 1
-    
-    if search:
-        conditions.append(f"(title ILIKE ${param_idx} OR company ILIKE ${param_idx} OR location ILIKE ${param_idx})")
-        params.append(f"%{search}%")
-        param_idx += 1
-    
-    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    
-    # Get total count
-    count_query = f"SELECT COUNT(*) FROM vacancies {where_clause}"
-    total = await pool.fetchval(count_query, *params)
-    
-    # Get vacancies
-    query = f"""
-        SELECT id, title, company, location, status, 
-               created_at, source,
-               (SELECT EXISTS(SELECT 1 FROM pre_screenings ps WHERE ps.vacancy_id = vacancies.id)) as has_screening
-        FROM vacancies
-        {where_clause}
-        ORDER BY created_at DESC
-        LIMIT ${param_idx}
-    """
-    params.append(limit)
-    
-    rows = await pool.fetch(query, *params)
-    
-    vacancies = [
-        {
-            "id": str(row["id"]),
-            "title": row["title"],
-            "company": row["company"],
-            "location": row["location"],
-            "status": row["status"],
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "source": row["source"],
-            "has_screening": row["has_screening"]
-        }
-        for row in rows
-    ]
-    
+
+    rows = await pool.fetch("""
+        SELECT
+            t.table_name,
+            COALESCE(obj_description((t.table_schema || '.' || t.table_name)::regclass), '') as description
+        FROM information_schema.tables t
+        WHERE t.table_schema = 'ats'
+        AND t.table_type = 'BASE TABLE'
+        ORDER BY t.table_name
+    """)
+
+    tables = {}
+    for row in rows:
+        tables[row["table_name"]] = row["description"] or "No description"
+
     return {
-        "vacancies": vacancies,
-        "total": total,
-        "returned": len(vacancies)
+        "schema": "ats",
+        "tables": tables,
+        "hint": "Use discover_columns(table_name) to see columns for a specific table"
     }
 
 
-async def query_applications(
-    tool_context: ToolContext,
-    vacancy_id: Optional[str] = None,
-    qualified: Optional[bool] = None,
-    completed: Optional[bool] = None,
-    channel: Optional[str] = None,
-    limit: int = 20
-) -> dict:
+async def discover_columns(tool_context: ToolContext, table_name: str) -> dict:
     """
-    Query applications from the database with optional filters.
-    
+    Discover columns for a specific table.
+
+    Call this to understand the structure of a table before querying it.
+
     Args:
-        vacancy_id: Filter by specific vacancy ID (UUID)
-        qualified: Filter by qualification status (True/False)
-        completed: Filter by completion status (True=status='completed', False=status!='completed')
-        channel: Filter by channel (voice, whatsapp)
-        limit: Maximum number of results to return (default 20, max 100)
-    
+        table_name: Name of the table (e.g., 'vacancies', 'applications', 'agent_activities')
+
     Returns:
-        Dictionary with applications list and total count
+        Dictionary with column details including name, type, and if nullable
     """
     pool = await get_pool()
-    
-    import uuid as uuid_module
-    
-    # Cap limit at 100
-    limit = min(limit, 100)
-    
-    # Build query with optional filters
-    conditions = []
-    params = []
-    param_idx = 1
-    
-    if vacancy_id:
-        try:
-            vacancy_uuid = uuid_module.UUID(vacancy_id)
-            conditions.append(f"a.vacancy_id = ${param_idx}")
-            params.append(vacancy_uuid)
-            param_idx += 1
-        except ValueError:
-            return {"error": f"Invalid vacancy_id format: {vacancy_id}"}
-    
-    if qualified is not None:
-        conditions.append(f"a.qualified = ${param_idx}")
-        params.append(qualified)
-        param_idx += 1
-    
-    if completed is not None:
-        # Translate completed boolean to status filter for backwards compatibility
-        if completed:
-            conditions.append(f"a.status = 'completed'")
-        else:
-            conditions.append(f"a.status != 'completed'")
-    
-    if channel:
-        conditions.append(f"a.channel = ${param_idx}")
-        params.append(channel)
-        param_idx += 1
-    
-    where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    
-    # Get total count
-    count_query = f"SELECT COUNT(*) FROM applications a {where_clause}"
-    total = await pool.fetchval(count_query, *params)
-    
-    # Get applications with vacancy title
-    query = f"""
-        SELECT a.id, a.vacancy_id, v.title as vacancy_title,
-               a.candidate_name, a.channel, a.status, a.qualified,
-               a.started_at, a.completed_at, a.interaction_seconds
-        FROM applications a
-        LEFT JOIN vacancies v ON a.vacancy_id = v.id
-        {where_clause}
-        ORDER BY a.started_at DESC
-        LIMIT ${param_idx}
-    """
-    params.append(limit)
-    
-    rows = await pool.fetch(query, *params)
-    
-    applications = [
-        {
-            "id": str(row["id"]),
-            "vacancy_id": str(row["vacancy_id"]),
-            "vacancy_title": row["vacancy_title"],
-            "candidate_name": row["candidate_name"],
-            "channel": row["channel"],
-            "status": row["status"] or "completed",
-            "qualified": row["qualified"],
-            "started_at": row["started_at"].isoformat() if row["started_at"] else None,
-            "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
-            "interaction_seconds": row["interaction_seconds"]
-        }
-        for row in rows
-    ]
-    
+
+    rows = await pool.fetch("""
+        SELECT
+            column_name,
+            data_type,
+            is_nullable,
+            column_default,
+            COALESCE(col_description((table_schema || '.' || table_name)::regclass, ordinal_position), '') as description
+        FROM information_schema.columns
+        WHERE table_schema = 'ats' AND table_name = $1
+        ORDER BY ordinal_position
+    """, table_name)
+
+    if not rows:
+        return {"error": f"Table '{table_name}' not found in ats schema"}
+
+    columns = []
+    for row in rows:
+        columns.append({
+            "name": row["column_name"],
+            "type": row["data_type"],
+            "nullable": row["is_nullable"] == "YES",
+            "description": row["description"] or None
+        })
+
     return {
-        "applications": applications,
-        "total": total,
-        "returned": len(applications)
+        "table": table_name,
+        "columns": columns
     }
 
 
-async def get_statistics(
-    tool_context: ToolContext,
-    vacancy_id: Optional[str] = None
-) -> dict:
+async def discover_relationships(tool_context: ToolContext) -> dict:
     """
-    Get aggregated statistics for vacancies and applications.
-    
-    Args:
-        vacancy_id: Optional vacancy ID to get stats for a specific vacancy.
-                   If not provided, returns overall statistics.
-    
+    Discover foreign key relationships between tables.
+
+    Call this to understand how tables are connected (for JOINs).
+
     Returns:
-        Dictionary with statistics including totals, rates, and breakdowns
+        List of foreign key relationships showing how tables connect
     """
     pool = await get_pool()
-    
-    import uuid as uuid_module
-    
-    if vacancy_id:
-        # Stats for specific vacancy
-        try:
-            vacancy_uuid = uuid_module.UUID(vacancy_id)
-        except ValueError:
-            return {"error": f"Invalid vacancy_id format: {vacancy_id}"}
-        
-        # Get vacancy info
-        vacancy = await pool.fetchrow(
-            "SELECT title, company, status FROM vacancies WHERE id = $1",
-            vacancy_uuid
-        )
-        if not vacancy:
-            return {"error": "Vacancy not found"}
-        
-        # Get application stats
-        stats = await pool.fetchrow("""
-            SELECT 
-                COUNT(*) as total_applications,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed,
-                COUNT(*) FILTER (WHERE qualified = true) as qualified,
-                COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-                COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
-                COALESCE(AVG(interaction_seconds), 0) as avg_interaction_seconds,
-                MAX(started_at) as last_application_at
-            FROM applications
-            WHERE vacancy_id = $1
-        """, vacancy_uuid)
-        
-        total = stats["total_applications"]
-        completed = stats["completed"]
-        
-        return {
-            "vacancy": {
-                "id": vacancy_id,
-                "title": vacancy["title"],
-                "company": vacancy["company"],
-                "status": vacancy["status"]
-            },
-            "total_applications": total,
-            "completed": completed,
-            "completion_rate": round((completed / total * 100) if total > 0 else 0, 1),
-            "qualified": stats["qualified"],
-            "qualification_rate": round((stats["qualified"] / completed * 100) if completed > 0 else 0, 1),
-            "channel_breakdown": {
-                "voice": stats["voice_count"],
-                "whatsapp": stats["whatsapp_count"]
-            },
-            "avg_interaction_seconds": round(stats["avg_interaction_seconds"]),
-            "last_application_at": stats["last_application_at"].isoformat() if stats["last_application_at"] else None
-        }
-    
-    else:
-        # Overall statistics
-        vacancy_stats = await pool.fetchrow("""
-            SELECT 
-                COUNT(*) as total_vacancies,
-                COUNT(*) FILTER (WHERE status = 'new') as new_count,
-                COUNT(*) FILTER (WHERE status = 'draft') as draft_count,
-                COUNT(*) FILTER (WHERE status = 'screening_active') as screening_active_count,
-                COUNT(*) FILTER (WHERE status = 'archived') as archived_count,
-                (SELECT COUNT(*) FROM pre_screenings) as with_screening
-            FROM vacancies
-        """)
-        
-        app_stats = await pool.fetchrow("""
-            SELECT 
-                COUNT(*) as total_applications,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed,
-                COUNT(*) FILTER (WHERE qualified = true) as qualified,
-                COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-                COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
-                COALESCE(AVG(interaction_seconds), 0) as avg_interaction_seconds
-            FROM applications
-        """)
-        
-        total_apps = app_stats["total_applications"]
-        completed = app_stats["completed"]
-        
-        return {
-            "vacancies": {
-                "total": vacancy_stats["total_vacancies"],
-                "by_status": {
-                    "new": vacancy_stats["new_count"],
-                    "draft": vacancy_stats["draft_count"],
-                    "screening_active": vacancy_stats["screening_active_count"],
-                    "archived": vacancy_stats["archived_count"]
-                },
-                "with_screening": vacancy_stats["with_screening"]
-            },
-            "applications": {
-                "total": total_apps,
-                "completed": completed,
-                "completion_rate": round((completed / total_apps * 100) if total_apps > 0 else 0, 1),
-                "qualified": app_stats["qualified"],
-                "qualification_rate": round((app_stats["qualified"] / completed * 100) if completed > 0 else 0, 1),
-                "by_channel": {
-                    "voice": app_stats["voice_count"],
-                    "whatsapp": app_stats["whatsapp_count"]
-                },
-                "avg_interaction_seconds": round(app_stats["avg_interaction_seconds"])
-            }
-        }
+
+    rows = await pool.fetch("""
+        SELECT
+            tc.table_name as from_table,
+            kcu.column_name as from_column,
+            ccu.table_name as to_table,
+            ccu.column_name as to_column
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+            AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+            ON ccu.constraint_name = tc.constraint_name
+            AND ccu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND tc.table_schema = 'ats'
+        ORDER BY tc.table_name
+    """)
+
+    relationships = []
+    for row in rows:
+        relationships.append({
+            "from": f"{row['from_table']}.{row['from_column']}",
+            "to": f"{row['to_table']}.{row['to_column']}",
+            "join_hint": f"JOIN {row['to_table']} ON {row['from_table']}.{row['from_column']} = {row['to_table']}.{row['to_column']}"
+        })
+
+    return {
+        "relationships": relationships,
+        "hint": "Use these to write JOIN queries between related tables"
+    }
 
 
-async def execute_analytics_query(
-    tool_context: ToolContext,
-    query_type: str,
-    time_period: Optional[str] = None
-) -> dict:
+# ============================================================================
+# SQL Execution Tool
+# ============================================================================
+
+async def execute_sql(tool_context: ToolContext, query: str) -> dict:
     """
-    Execute predefined analytics queries for common insights.
-    
+    Execute a read-only SQL query against the database.
+
+    IMPORTANT:
+    - Use 'ats.' prefix for all tables (e.g., ats.vacancies, ats.applications)
+    - Only SELECT queries are allowed
+    - Results limited to 100 rows
+    - Timeout after 10 seconds
+
     Args:
-        query_type: Type of analytics query. Options:
-            - "top_vacancies": Top vacancies by application count
-            - "recent_applications": Most recent applications
-            - "daily_summary": Applications per day (requires time_period)
-            - "channel_performance": Comparison of voice vs whatsapp performance
-            - "qualification_trends": Qualification rates over time
-        time_period: Time filter like "today", "week", "month" (for daily_summary)
-    
+        query: A SELECT SQL query. Must start with SELECT or WITH.
+
     Returns:
-        Dictionary with the analytics results
+        Dictionary with rows, columns, and row count
     """
     pool = await get_pool()
-    
-    if query_type == "top_vacancies":
-        rows = await pool.fetch("""
-            SELECT v.id, v.title, v.company, 
-                   COUNT(a.id) as application_count,
-                   COUNT(a.id) FILTER (WHERE a.qualified = true) as qualified_count
-            FROM vacancies v
-            LEFT JOIN applications a ON v.id = a.vacancy_id
-            GROUP BY v.id, v.title, v.company
-            ORDER BY application_count DESC
-            LIMIT 10
-        """)
-        
+
+    # Normalize and validate
+    normalized = " ".join(query.split()).strip()
+    query_lower = normalized.lower()
+
+    # Security: Must be SELECT
+    if not (query_lower.startswith("select") or query_lower.startswith("with")):
         return {
-            "query": "top_vacancies",
-            "results": [
-                {
-                    "vacancy_id": str(row["id"]),
-                    "title": row["title"],
-                    "company": row["company"],
-                    "application_count": row["application_count"],
-                    "qualified_count": row["qualified_count"]
-                }
-                for row in rows
-            ]
+            "error": "Only SELECT queries allowed",
+            "hint": "Start your query with SELECT or WITH"
         }
-    
-    elif query_type == "recent_applications":
-        rows = await pool.fetch("""
-            SELECT a.id, a.candidate_name, a.channel, a.status, a.qualified,
-                   a.started_at, v.title as vacancy_title
-            FROM applications a
-            LEFT JOIN vacancies v ON a.vacancy_id = v.id
-            ORDER BY a.started_at DESC
-            LIMIT 20
-        """)
-        
+
+    # Security: Block dangerous keywords
+    blocked = ["insert", "update", "delete", "drop", "truncate", "alter", "create",
+               "grant", "revoke", "--", "/*", "*/"]
+    for word in blocked:
+        if word in query_lower:
+            return {"error": f"Forbidden keyword: {word}"}
+
+    # Security: No multiple statements
+    query_no_strings = re.sub(r"'[^']*'", "", query)
+    if ";" in query_no_strings.strip().rstrip(";"):
+        return {"error": "Multiple statements not allowed"}
+
+    # Add LIMIT if missing
+    if "limit" not in query_lower:
+        query = query.rstrip().rstrip(";") + f" LIMIT {SQL_MAX_ROWS}"
+
+    try:
+        async with asyncio.timeout(SQL_QUERY_TIMEOUT):
+            rows = await pool.fetch(query)
+
+        if not rows:
+            return {"rows": [], "row_count": 0, "columns": [], "message": "No results"}
+
+        columns = list(rows[0].keys())
+        result_rows = []
+
+        for row in rows[:SQL_MAX_ROWS]:
+            row_dict = {}
+            for key, value in row.items():
+                if hasattr(value, "isoformat"):
+                    row_dict[key] = value.isoformat()
+                elif isinstance(value, (dict, list)):
+                    row_dict[key] = value
+                elif value is not None:
+                    row_dict[key] = str(value) if not isinstance(value, (int, float, bool)) else value
+                else:
+                    row_dict[key] = None
+            result_rows.append(row_dict)
+
         return {
-            "query": "recent_applications",
-            "results": [
-                {
-                    "application_id": str(row["id"]),
-                    "candidate_name": row["candidate_name"],
-                    "vacancy_title": row["vacancy_title"],
-                    "channel": row["channel"],
-                    "status": row["status"] or "completed",
-                    "qualified": row["qualified"],
-                    "started_at": row["started_at"].isoformat() if row["started_at"] else None
-                }
-                for row in rows
-            ]
+            "rows": result_rows,
+            "row_count": len(result_rows),
+            "columns": columns,
+            "truncated": len(rows) >= SQL_MAX_ROWS
         }
-    
-    elif query_type == "daily_summary":
-        # Default to last 7 days
-        days = 7
-        if time_period == "today":
-            days = 1
-        elif time_period == "week":
-            days = 7
-        elif time_period == "month":
-            days = 30
-        
-        rows = await pool.fetch(f"""
-            SELECT DATE(started_at) as date,
-                   COUNT(*) as total,
-                   COUNT(*) FILTER (WHERE status = 'completed') as completed,
-                   COUNT(*) FILTER (WHERE qualified = true) as qualified
-            FROM applications
-            WHERE started_at >= CURRENT_DATE - INTERVAL '{days} days'
-            GROUP BY DATE(started_at)
-            ORDER BY date DESC
-        """)
-        
+
+    except asyncio.TimeoutError:
+        return {"error": "Query timed out (10s limit)", "hint": "Simplify query or add WHERE filters"}
+    except asyncpg.PostgresError as e:
+        return {"error": f"SQL error: {str(e)}", "hint": "Check table/column names with discover_columns"}
+    except Exception as e:
+        return {"error": f"Error: {str(e)}"}
+
+
+async def sample_data(tool_context: ToolContext, table_name: str, limit: int = 5) -> dict:
+    """
+    Get sample rows from a table to understand the data.
+
+    Useful to see actual values before writing complex queries.
+
+    Args:
+        table_name: Name of the table (e.g., 'vacancies', 'agent_activities')
+        limit: Number of sample rows (default 5, max 20)
+
+    Returns:
+        Sample rows from the table
+    """
+    pool = await get_pool()
+    limit = min(limit, 20)
+
+    try:
+        rows = await pool.fetch(f"SELECT * FROM ats.{table_name} ORDER BY created_at DESC LIMIT $1", limit)
+
+        if not rows:
+            return {"table": table_name, "rows": [], "message": "Table is empty"}
+
+        columns = list(rows[0].keys())
+        result_rows = []
+
+        for row in rows:
+            row_dict = {}
+            for key, value in row.items():
+                if hasattr(value, "isoformat"):
+                    row_dict[key] = value.isoformat()
+                elif isinstance(value, (dict, list)):
+                    row_dict[key] = value
+                elif value is not None:
+                    row_dict[key] = str(value) if not isinstance(value, (int, float, bool)) else value
+                else:
+                    row_dict[key] = None
+            result_rows.append(row_dict)
+
         return {
-            "query": "daily_summary",
-            "period": time_period or "week",
-            "results": [
-                {
-                    "date": row["date"].isoformat() if row["date"] else None,
-                    "total": row["total"],
-                    "completed": row["completed"],
-                    "qualified": row["qualified"]
-                }
-                for row in rows
-            ]
+            "table": table_name,
+            "columns": columns,
+            "rows": result_rows,
+            "row_count": len(result_rows)
         }
-    
-    elif query_type == "channel_performance":
-        rows = await pool.fetch("""
-            SELECT channel,
-                   COUNT(*) as total,
-                   COUNT(*) FILTER (WHERE status = 'completed') as completed,
-                   COUNT(*) FILTER (WHERE qualified = true) as qualified,
-                   COALESCE(AVG(interaction_seconds), 0) as avg_seconds
-            FROM applications
-            GROUP BY channel
-        """)
-        
-        return {
-            "query": "channel_performance",
-            "results": [
-                {
-                    "channel": row["channel"],
-                    "total": row["total"],
-                    "completed": row["completed"],
-                    "qualified": row["qualified"],
-                    "completion_rate": round((row["completed"] / row["total"] * 100) if row["total"] > 0 else 0, 1),
-                    "qualification_rate": round((row["qualified"] / row["completed"] * 100) if row["completed"] > 0 else 0, 1),
-                    "avg_interaction_seconds": round(row["avg_seconds"])
-                }
-                for row in rows
-            ]
-        }
-    
-    elif query_type == "qualification_trends":
-        rows = await pool.fetch("""
-            SELECT DATE(started_at) as date,
-                   COUNT(*) FILTER (WHERE status = 'completed') as completed,
-                   COUNT(*) FILTER (WHERE qualified = true) as qualified
-            FROM applications
-            WHERE started_at >= CURRENT_DATE - INTERVAL '30 days'
-            GROUP BY DATE(started_at)
-            HAVING COUNT(*) FILTER (WHERE status = 'completed') > 0
-            ORDER BY date DESC
-        """)
-        
-        return {
-            "query": "qualification_trends",
-            "results": [
-                {
-                    "date": row["date"].isoformat() if row["date"] else None,
-                    "completed": row["completed"],
-                    "qualified": row["qualified"],
-                    "qualification_rate": round((row["qualified"] / row["completed"] * 100) if row["completed"] > 0 else 0, 1)
-                }
-                for row in rows
-            ]
-        }
-    
-    else:
-        return {
-            "error": f"Unknown query_type: {query_type}",
-            "available_types": [
-                "top_vacancies",
-                "recent_applications", 
-                "daily_summary",
-                "channel_performance",
-                "qualification_trends"
-            ]
-        }
+    except asyncpg.PostgresError as e:
+        return {"error": f"Table error: {str(e)}", "hint": "Use discover_tables() to see available tables"}
 
 
 # ============================================================================
 # Agent Definition
 # ============================================================================
 
-instruction = """Je bent een data-analist assistent voor Taloo, een recruitment platform. 
-Je helpt gebruikers vragen te beantwoorden over vacatures, sollicitaties en statistieken in de database.
+instruction = """Je bent een data-analist voor Taloo met VOLLEDIGE TOEGANG tot de recruitment database.
+
+## KRITIEKE REGEL
+Je MOET ALTIJD je database tools gebruiken om vragen te beantwoorden.
+Zeg NOOIT "ik heb geen toegang" of "ik kan dat niet zien" - je HEBT toegang via je tools!
 
 ## TAAL
-Je antwoordt ALTIJD in het Nederlands (Vlaams nl-BE), ongeacht de taal van de vraag.
+Antwoord in het Nederlands (Vlaams nl-BE).
 
-## DATABASE SCHEMA
-Je hebt toegang tot de volgende tabellen:
+## JE TOOLS
 
-### vacancies (vacatures)
-- id: UUID - unieke identifier
-- title: titel van de vacature
-- company: bedrijfsnaam
-- location: locatie
-- status: new (nieuw), draft (in opzet), screening_active (screening actief), archived (gearchiveerd)
-- created_at: aanmaakdatum
-- source: bron (salesforce, bullhorn, manual)
-- has_screening: boolean - of er een pre-screening geconfigureerd is
+Je hebt 5 tools om de database te bevragen:
 
-### applications (sollicitaties)
-- id: UUID - unieke identifier
-- vacancy_id: verwijzing naar vacature
-- candidate_name: naam van de kandidaat
-- channel: voice of whatsapp
-- status: workflow status (active, processing, completed)
-- qualified: boolean - of de kandidaat is gekwalificeerd
-- started_at: starttijd
-- completed_at: eindtijd
-- interaction_seconds: duur van de interactie
+1. `discover_tables()` - Toon alle beschikbare tabellen
+2. `discover_columns(table_name)` - Toon kolommen van een tabel
+3. `discover_relationships()` - Toon hoe tabellen verbonden zijn
+4. `sample_data(table_name)` - Bekijk voorbeelddata
+5. `execute_sql(query)` - Voer een SQL query uit
 
-### application_answers (antwoorden)
-- application_id: verwijzing naar sollicitatie
-- question_id: vraag ID (ko_1, qual_2, etc.)
-- question_text: de gestelde vraag
-- answer: het antwoord van de kandidaat
-- passed: boolean - of de kandidaat slaagde voor deze vraag
+## WERKWIJZE
 
-## BESCHIKBARE TOOLS
+Bij ELKE vraag over data:
+1. EERST: Gebruik discover_tables() of discover_columns() om te begrijpen wat er is
+2. DAN: Schrijf een SQL query met execute_sql()
+3. TENSLOTTE: Geef een duidelijk antwoord met de resultaten
 
-1. **query_vacancies**: Zoek vacatures met filters (status, zoekterm, limiet)
-2. **query_applications**: Zoek sollicitaties met filters (vacancy_id, qualified, completed, channel)
-3. **get_statistics**: Haal statistieken op (algemeen of per vacature)
-4. **execute_analytics_query**: Voer voorgedefinieerde analytische queries uit:
-   - top_vacancies: Top vacatures op basis van aantal sollicitaties
-   - recent_applications: Meest recente sollicitaties
-   - daily_summary: Dagelijkse samenvatting (met time_period: today/week/month)
-   - channel_performance: Vergelijking voice vs whatsapp
-   - qualification_trends: Kwalificatietrends over tijd
+## SQL REGELS
 
-## RICHTLIJNEN
-
-1. **Begrijp de vraag**: Analyseer wat de gebruiker wil weten
-2. **Kies de juiste tool**: Gebruik de meest geschikte tool voor de vraag
-3. **Interpreteer resultaten**: Geef een duidelijke, menselijke samenvatting
-4. **Wees specifiek**: Noem concrete cijfers en percentages
-5. **Wees beknopt**: Geef een helder antwoord zonder overbodige informatie
+- Gebruik ALTIJD 'ats.' prefix: `SELECT * FROM ats.vacancies`
+- Alleen SELECT queries (read-only)
+- Max 100 rijen resultaat
 
 ## VOORBEELDEN
 
-**Vraag**: "Hoeveel sollicitaties zijn er vandaag?"
-**Actie**: Gebruik execute_analytics_query met query_type="daily_summary" en time_period="today"
+**Vraag: "Analyseer de pre-screening vragen"**
+→ discover_columns("pre_screenings") om structuur te zien
+→ discover_columns("pre_screening_questions") voor de vragen
+→ execute_sql("SELECT * FROM ats.pre_screening_questions LIMIT 20")
+→ Analyseer en geef feedback
 
-**Vraag**: "Wat is de kwalificatieratio voor de laatste vacature?"
-**Actie**: Eerst query_vacancies om de laatste vacature te vinden, dan get_statistics met dat vacancy_id
+**Vraag: "Hoeveel activiteiten zijn er?"**
+→ execute_sql("SELECT COUNT(*) FROM ats.agent_activities")
+→ Geef het aantal
 
-**Vraag**: "Toon me alle gekwalificeerde kandidaten"
-**Actie**: Gebruik query_applications met qualified=True
+**Vraag: "Welke vacatures hebben we?"**
+→ execute_sql("SELECT title, company, status FROM ats.vacancies")
+→ Toon overzicht
 
-**Vraag**: "Hoe presteert WhatsApp vergeleken met voice?"
-**Actie**: Gebruik execute_analytics_query met query_type="channel_performance"
+## RESPONSE STIJL
 
-## RESPONSE FORMAAT
-- Geef altijd een directe samenvatting
-- Gebruik opsommingen voor meerdere items
-- Toon percentages met 1 decimaal
-- Vermeld relevante context (bijv. "van de 50 totale sollicitaties")
+- Direct en beknopt
+- Concrete cijfers en data
+- Duidelijke samenvattingen
 """
 
 root_agent = Agent(
     name="data_analist",
-    model="gemini-2.5-flash",
+    model="gemini-3-pro-preview",
     instruction=instruction,
-    description="Data analist die vacatures, sollicitaties en statistieken ophaalt uit de database",
+    description="Intelligente data analist die SQL queries schrijft om recruitment vragen te beantwoorden",
     tools=[
-        query_vacancies,
-        query_applications,
-        get_statistics,
-        execute_analytics_query
+        discover_tables,
+        discover_columns,
+        discover_relationships,
+        sample_data,
+        execute_sql,
     ],
 )
+  

@@ -12,6 +12,8 @@ from src.models.activity import (
     ActivityChannel,
     ActivityResponse,
     TimelineResponse,
+    GlobalActivityResponse,
+    GlobalActivitiesResponse,
 )
 
 
@@ -154,6 +156,75 @@ class ActivityService:
         )
 
         return [self._row_to_response(row) for row in rows]
+
+    async def get_all_activities(
+        self,
+        actor_type: Optional[ActorType] = None,
+        event_types: Optional[list[ActivityEventType]] = None,
+        channel: Optional[ActivityChannel] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> GlobalActivitiesResponse:
+        """
+        Get all activities across the system with optional filtering.
+
+        Args:
+            actor_type: Optional filter by actor type (agent, recruiter, candidate, system)
+            event_types: Optional filter for specific event types
+            channel: Optional filter by channel (voice, whatsapp, cv, web)
+            limit: Max number of activities to return
+            offset: Pagination offset
+
+        Returns:
+            GlobalActivitiesResponse with enriched activities and total count
+        """
+        type_values = [t.value for t in event_types] if event_types else None
+
+        rows, total = await self.repo.list_all(
+            actor_type=actor_type.value if actor_type else None,
+            event_types=type_values,
+            channel=channel.value if channel else None,
+            limit=limit,
+            offset=offset
+        )
+
+        activities = [self._row_to_global_response(row) for row in rows]
+
+        return GlobalActivitiesResponse(
+            activities=activities,
+            total=total
+        )
+
+    @staticmethod
+    def _row_to_global_response(row: asyncpg.Record) -> GlobalActivityResponse:
+        """Convert a database row to a GlobalActivityResponse."""
+        metadata = row["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+
+        # Build candidate name from first/last name
+        candidate_name = None
+        if row.get("candidate_first_name") or row.get("candidate_last_name"):
+            first = row.get("candidate_first_name") or ""
+            last = row.get("candidate_last_name") or ""
+            candidate_name = f"{first} {last}".strip()
+
+        return GlobalActivityResponse(
+            id=str(row["id"]),
+            candidate_id=str(row["candidate_id"]),
+            candidate_name=candidate_name,
+            application_id=str(row["application_id"]) if row["application_id"] else None,
+            vacancy_id=str(row["vacancy_id"]) if row["vacancy_id"] else None,
+            vacancy_title=row.get("vacancy_title"),
+            vacancy_company=row.get("vacancy_company"),
+            event_type=row["event_type"],
+            channel=row["channel"],
+            actor_type=row["actor_type"],
+            actor_id=row["actor_id"],
+            metadata=metadata,
+            summary=row["summary"],
+            created_at=row["created_at"]
+        )
 
     @staticmethod
     def _row_to_response(row: asyncpg.Record) -> ActivityResponse:

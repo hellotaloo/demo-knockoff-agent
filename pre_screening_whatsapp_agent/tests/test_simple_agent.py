@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Test script for the simple pre-screening agent with code-controlled flow.
+Test script for the pre-screening agent.
 
-This tests the simpler approach where Python controls phase transitions
-and the LLM only generates conversational responses.
+Tests the code-controlled flow where Python manages phase transitions
+and the LLM generates conversational responses.
 
 Usage:
     cd taloo-backend
-    python -m pre_screening_whatsapp_agent.test_simple_agent
+    python -m pre_screening_whatsapp_agent.tests.test_simple_agent
 """
 import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from .simple_agent import create_simple_agent, Phase
+from ..agent import create_simple_agent, Phase
 
 
 # Test data - 5 knockout questions

@@ -1,7 +1,7 @@
 """
-ElevenLabs Voice Agent for outbound phone call screenings.
+Pre-screening Voice Agent for outbound phone call screenings.
 
-This module provides functionality to initiate outbound phone calls via Twilio integration.
+This module provides functionality to initiate outbound phone calls via ElevenLabs + Twilio.
 The agent is managed in the ElevenLabs dashboard - we only trigger calls and pass dynamic variables.
 """
 

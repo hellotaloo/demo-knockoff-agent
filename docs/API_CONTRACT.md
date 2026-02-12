@@ -4,6 +4,10 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-02-12** — Added GET/PUT `/elevenlabs/voice-config/{agent_id}` endpoints for storing/retrieving voice settings in database
+- **2026-02-12** — Added PATCH `/elevenlabs/agent/{agent_id}/config` endpoint for updating ElevenLabs agent voice configuration (voice_id, model_id, stability, similarity_boost)
+- **2026-02-12** — Changed `/interview/generate` to accept `vacancy_id` instead of `vacancy_text`; backend now fetches vacancy from database
+- **2026-02-12** — Added `vacancy_snippet` field to interview questions (knockout and qualification); links questions to source vacancy text for frontend highlighting
 - **2026-02-11** — Added `is_test` field to candidates table and API responses; added `is_test` filter to GET /candidates endpoint
 - **2026-02-11** — Added Agent endpoints for listing vacancies by agent status (GET /agents/prescreening/vacancies, GET /agents/preonboarding/vacancies)
 - **2026-02-11** — Added client_id to vacancies, VacancyResponse now includes client info (ClientSummary)
@@ -43,8 +47,9 @@ Complete API reference for the Taloo recruitment screening platform.
 17. [Document Collection](#document-collection)
 18. [Webhooks](#webhooks)
 19. [Scheduling](#scheduling)
-20. [Demo](#demo)
-21. [Error Reference](#error-reference)
+20. [ElevenLabs](#elevenlabs)
+21. [Demo](#demo)
+22. [Error Reference](#error-reference)
 
 ---
 
@@ -882,6 +887,7 @@ interface PreScreeningQuestionRequest {
   id: string;
   question: string;
   ideal_answer?: string;
+  vacancy_snippet?: string;  // Exact text from vacancy this question is based on
 }
 
 interface PreScreeningRequest {
@@ -936,6 +942,7 @@ interface PreScreeningQuestionResponse {
   position: number;
   question_text: string;
   ideal_answer?: string;
+  vacancy_snippet?: string;  // Exact text from vacancy this question is based on
   is_approved: boolean;
 }
 
@@ -1097,9 +1104,35 @@ interface StatusUpdateResponse {
 
 ## Interviews
 
+### Vacancy Snippet Linking
+
+All interview questions (knockout and qualification) include a `vacancy_snippet` field that contains the exact text from the vacancy that the question is based on. This enables the frontend to:
+
+- Visually highlight which part of the vacancy each question relates to
+- Show tooltips linking questions to their source text
+- Validate that questions are grounded in actual vacancy requirements
+
+**Example:**
+```json
+{
+  "id": "ko_2",
+  "question": "Kan je werken in een 2-ploegensysteem?",
+  "vacancy_snippet": "Je werkt in een 2-ploegensysteem (6u-14u / 14u-22u)"
+}
+```
+
+For standard questions not derived from specific vacancy text (e.g., work permit), the snippet indicates this:
+```json
+{
+  "vacancy_snippet": "Standaard knockout vraag - niet afgeleid van specifieke vacaturetekst"
+}
+```
+
+---
+
 ### POST /interview/generate
 
-Generate interview questions from vacancy text. Returns SSE stream.
+Generate interview questions from a vacancy. The backend fetches the vacancy text from the database. Returns SSE stream.
 
 **Auth:** None
 
@@ -1107,8 +1140,8 @@ Generate interview questions from vacancy text. Returns SSE stream.
 
 ```typescript
 interface GenerateInterviewRequest {
-  vacancy_text: string;
-  session_id?: string;
+  vacancy_id: string;   // UUID of the vacancy to generate questions for
+  session_id?: string;  // Optional: reuse session for feedback
 }
 ```
 
@@ -1140,12 +1173,14 @@ interface CompleteEvent {
     knockout_questions: Array<{
       id: string;
       question: string;
+      vacancy_snippet: string;  // Exact text from vacancy this question is based on
     }>;
     knockout_failed_action: string;
     qualification_questions: Array<{
       id: string;
       question: string;
       ideal_answer: string;
+      vacancy_snippet: string;  // Exact text from vacancy this question is based on
     }>;
     final_action: string;
   };
@@ -1162,7 +1197,9 @@ interface ErrorEvent {
 
 | Status | Error |
 |--------|-------|
-| 400 | vacancy_text required |
+| 400 | Invalid vacancy ID format |
+| 400 | Vacancy has no description text |
+| 404 | Vacancy not found |
 
 ---
 
@@ -1211,9 +1248,9 @@ interface SessionResponse {
   session_id: string;
   interview: {
     intro: string;
-    knockout_questions: Array<{ id: string; question: string }>;
+    knockout_questions: Array<{ id: string; question: string; vacancy_snippet: string }>;
     knockout_failed_action: string;
-    qualification_questions: Array<{ id: string; question: string; ideal_answer: string }>;
+    qualification_questions: Array<{ id: string; question: string; ideal_answer: string; vacancy_snippet: string }>;
     final_action: string;
   };
 }
@@ -1311,7 +1348,8 @@ interface AddQuestionRequest {
   session_id: string;
   question_type: QuestionType;
   question: string;
-  ideal_answer?: string;  // Required for qualification questions
+  ideal_answer?: string;       // Required for qualification questions
+  vacancy_snippet?: string;    // Text from vacancy this question relates to
 }
 ```
 
@@ -1325,6 +1363,7 @@ interface AddQuestionResponse {
     id: string;
     question: string;
     ideal_answer?: string;
+    vacancy_snippet?: string;  // Text from vacancy this question relates to
   };
   interview: { /* updated interview */ };
 }
@@ -2287,6 +2326,187 @@ interface CancelResponse {
 |--------|-------|
 | 404 | No active scheduled interview found for conversation_id |
 | 500 | Failed to cancel interview |
+
+---
+
+## ElevenLabs
+
+### PATCH /elevenlabs/agent/{agent_id}/config
+
+Update the voice and TTS model configuration for an ElevenLabs conversational AI agent.
+
+This endpoint calls the ElevenLabs API to update the agent's TTS settings, allowing users to change the voice, model, stability, and similarity boost before starting a conversation.
+
+**Auth:** None (requires ELEVENLABS_API_KEY in environment)
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `agent_id` | string | The ElevenLabs agent ID |
+
+**Request Body:**
+
+```typescript
+interface UpdateAgentVoiceConfigRequest {
+  voice_id: string;           // The ElevenLabs voice ID to use
+  model_id: string;           // TTS model (see available models below)
+  stability?: number;         // Voice stability 0-1 (higher = more consistent)
+  similarity_boost?: number;  // Similarity boost 0-1 (higher = more similar to original)
+}
+```
+
+**Available TTS Models:**
+
+| Model ID | Description |
+|----------|-------------|
+| `eleven_turbo_v2` | Fast, low-latency model |
+| `eleven_multilingual_v2` | Multilingual support |
+| `eleven_flash_v2_5` | Ultra-fast streaming |
+| `eleven_v3_conversational` | Latest conversational model (recommended) |
+
+**Response:**
+
+```typescript
+interface UpdateAgentVoiceConfigResponse {
+  success: boolean;
+  message: string;
+  agent_id: string;
+  voice_id: string;
+  model_id: string;
+  stability?: number;
+  similarity_boost?: number;
+}
+```
+
+**Example Request:**
+
+```json
+{
+  "voice_id": "cjVigY5qzO86Huf0OWal",
+  "model_id": "eleven_v3_conversational",
+  "stability": 0.5,
+  "similarity_boost": 0.8
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "success": true,
+  "message": "Agent voice configuration updated successfully",
+  "agent_id": "abc123",
+  "voice_id": "cjVigY5qzO86Huf0OWal",
+  "model_id": "eleven_v3_conversational",
+  "stability": 0.5,
+  "similarity_boost": 0.8
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Agent not found |
+| 422 | Validation error (invalid voice_id, model_id, etc.) |
+| 500 | ELEVENLABS_API_KEY not configured |
+| 502 | Error connecting to ElevenLabs API |
+| 504 | Timeout connecting to ElevenLabs API |
+
+---
+
+### GET /elevenlabs/voice-config/{agent_id}
+
+Retrieve the saved voice configuration settings for an ElevenLabs agent from the database.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `agent_id` | string | The ElevenLabs agent ID |
+
+**Response:**
+
+```typescript
+interface VoiceConfigResponse {
+  id: string;               // UUID of the config record
+  agent_id: string;         // ElevenLabs agent ID
+  voice_id: string;         // The voice ID
+  model_id: string;         // TTS model ID
+  stability?: number;       // Voice stability 0-1
+  similarity_boost?: number; // Similarity boost 0-1
+  created_at: string;       // ISO timestamp
+  updated_at: string;       // ISO timestamp
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "agent_id": "abc123",
+  "voice_id": "cjVigY5qzO86Huf0OWal",
+  "model_id": "eleven_v3_conversational",
+  "stability": 0.5,
+  "similarity_boost": 0.8,
+  "created_at": "2026-02-12T10:30:00Z",
+  "updated_at": "2026-02-12T10:30:00Z"
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Voice configuration not found for agent |
+
+---
+
+### PUT /elevenlabs/voice-config/{agent_id}
+
+Save or update the voice configuration settings for an ElevenLabs agent in the database.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `agent_id` | string | The ElevenLabs agent ID |
+
+**Request Body:**
+
+```typescript
+interface VoiceConfigRequest {
+  voice_id: string;           // The ElevenLabs voice ID to use
+  model_id?: string;          // TTS model (default: eleven_v3_conversational)
+  stability?: number;         // Voice stability 0-1
+  similarity_boost?: number;  // Similarity boost 0-1
+}
+```
+
+**Response:** `VoiceConfigResponse` (same as GET)
+
+**Example Request:**
+
+```json
+{
+  "voice_id": "cjVigY5qzO86Huf0OWal",
+  "model_id": "eleven_v3_conversational",
+  "stability": 0.5,
+  "similarity_boost": 0.8
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 422 | Validation error (invalid values) |
 
 ---
 

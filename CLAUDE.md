@@ -1,7 +1,7 @@
-# CLAUDE.md - Taloo Backend
+# CLAUDE.md - Taloo Backend (Staging)
 
 ## Project Overview
-
+This is the staging code for the Taloo Backend. Always update the staging branch of the DB!!!
 Taloo Backend is an AI-powered recruitment screening platform built with Python/FastAPI and Google ADK. It automates candidate screening through WhatsApp, voice calls, and CV analysis using Gemini 2.0 Flash LLM.
 
 ## Tech Stack

@@ -105,3 +105,30 @@ class TimelineResponse(BaseModel):
     candidate_id: str
     activities: list[ActivityResponse]
     total: int
+
+
+class GlobalActivityResponse(BaseModel):
+    """Response model for an activity in the global activities feed."""
+    id: str
+    candidate_id: str
+    candidate_name: Optional[str] = None
+    application_id: Optional[str] = None
+    vacancy_id: Optional[str] = None
+    vacancy_title: Optional[str] = None
+    vacancy_company: Optional[str] = None
+    event_type: str
+    channel: Optional[str] = None
+    actor_type: str
+    actor_id: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    summary: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class GlobalActivitiesResponse(BaseModel):
+    """Response model for the global activities feed."""
+    activities: list[GlobalActivityResponse]
+    total: int

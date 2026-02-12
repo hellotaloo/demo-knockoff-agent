@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Interactive console chat with the simple pre-screening agent.
+Interactive console chat with the pre-screening agent.
 
 Usage:
     cd taloo-backend
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from .simple_agent import create_simple_agent, Phase
+from .agent import create_simple_agent, Phase
 
 
 # Default test configuration - 5 knockout + 3 open questions

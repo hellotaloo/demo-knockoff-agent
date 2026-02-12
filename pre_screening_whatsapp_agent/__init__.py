@@ -1,53 +1,61 @@
 """
 Pre-screening WhatsApp Agent
 
-A multi-agent system for conducting candidate pre-screening conversations.
+A code-controlled agent for conducting candidate pre-screening conversations.
+Flow is managed by Python code, not LLM routing decisions.
 
-Usage with ADK Web:
-    cd taloo-backend
-    adk web . --port 8001
+Usage:
+    from pre_screening_whatsapp_agent import create_simple_agent, Phase
 
-Then select "pre_screening_whatsapp_agent" from the dropdown.
+    agent = create_simple_agent(
+        candidate_name="Jan",
+        vacancy_title="Magazijnmedewerker",
+        company_name="ITZU",
+        knockout_questions=[{"question": "...", "requirement": "..."}],
+        open_questions=["..."],
+    )
+
+    # Get initial welcome message
+    message = await agent.get_initial_message()
+
+    # Process user responses
+    response = await agent.process_message(user_input)
+
+    # Save state for persistence
+    state_json = agent.state.to_json()
+
+    # Restore agent from state
+    agent = restore_agent_from_state(state_json)
 """
 
 from .agent import (
-    root_agent,
-    create_pre_screening_agent,
-    get_test_state,
-    DEFAULT_TEST_STATE,
-)
-
-from .tools import (
-    evaluate_knockout_answer,
-    knockout_failed,
-    confirm_knockout_result,
-    evaluate_open_answer,
-    complete_alternate_intake,
-    exit_interview,
-    get_available_slots,
-    schedule_interview,
-    conversation_complete,
+    # Main classes
+    SimplePreScreeningAgent,
+    ConversationState,
+    AgentConfig,
+    Phase,
+    # Factory functions
+    create_simple_agent,
+    restore_agent_from_state,
+    # Helper functions
+    is_conversation_complete,
+    get_conversation_outcome,
+    # Default config
+    DEFAULT_CONFIG,
 )
 
 __all__ = [
-    # Main agent
-    "root_agent",
-
-    # Factory function
-    "create_pre_screening_agent",
-
-    # Test utilities
-    "get_test_state",
-    "DEFAULT_TEST_STATE",
-
-    # Tools (for custom implementations)
-    "evaluate_knockout_answer",
-    "knockout_failed",
-    "confirm_knockout_result",
-    "evaluate_open_answer",
-    "complete_alternate_intake",
-    "exit_interview",
-    "get_available_slots",
-    "schedule_interview",
-    "conversation_complete",
+    # Main classes
+    "SimplePreScreeningAgent",
+    "ConversationState",
+    "AgentConfig",
+    "Phase",
+    # Factory functions
+    "create_simple_agent",
+    "restore_agent_from_state",
+    # Helper functions
+    "is_conversation_complete",
+    "get_conversation_outcome",
+    # Default config
+    "DEFAULT_CONFIG",
 ]

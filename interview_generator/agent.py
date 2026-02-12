@@ -73,17 +73,35 @@ Voorbeeld: "Ik heb gefocust op het ploegensysteem en technische ervaring omdat d
 {
     "intro": "Begroet kandidaat en vraag of hij/zij nu wil starten met het interview. Geef aan hoelang het duurt.",
     "knockout_questions": [
-        {"id": "ko_1", "question": "Vraag", "change_status": "new"},
-        {"id": "ko_2", "question": "Vraag", "change_status": "new"}
+        {"id": "ko_1", "question": "Vraag", "vacancy_snippet": "Exacte tekst uit vacature...", "change_status": "new"},
+        {"id": "ko_2", "question": "Vraag", "vacancy_snippet": "Exacte tekst uit vacature...", "change_status": "new"}
     ],
     "knockout_failed_action": "Niet geslaagd: Interesse in andere matches?",
     "qualification_questions": [
-        {"id": "qual_1", "question": "Vraag", "ideal_answer": "Wat we willen horen...", "change_status": "new"},
-        {"id": "qual_2", "question": "Vraag", "ideal_answer": "Wat we willen horen...", "change_status": "new"}
+        {"id": "qual_1", "question": "Vraag", "ideal_answer": "Wat we willen horen...", "vacancy_snippet": "Exacte tekst uit vacature...", "change_status": "new"},
+        {"id": "qual_2", "question": "Vraag", "ideal_answer": "Wat we willen horen...", "vacancy_snippet": "Exacte tekst uit vacature...", "change_status": "new"}
     ],
     "final_action": "Plan interview met recruiter",
     "approved_ids": []
 }
+
+## VACANCY_SNIPPET VELD - VERPLICHT
+**KRITISCH**: Voor ELKE vraag (knockout én kwalificatie) MOET je een `vacancy_snippet` invullen!
+
+Dit is een EXACTE kopie van de tekst uit de vacature waarop de vraag is gebaseerd:
+- Kopieer de relevante zin of zinnen LETTERLIJK uit de vacature
+- Houd het kort maar informatief (1-2 zinnen max)
+- Dit wordt gebruikt in de frontend om visueel te linken naar de vacaturetekst
+
+**Voorbeelden:**
+- Vraag: "Kan je werken in een 2-ploegensysteem?"
+  vacancy_snippet: "Je werkt in een 2-ploegensysteem (6u-14u / 14u-22u)"
+
+- Vraag: "Heb je ervaring met CNC machines?"
+  vacancy_snippet: "Ervaring met CNC-gestuurde draai- en freesmachines is een must"
+
+- Vraag over werkvergunning (standaard vraag):
+  vacancy_snippet: "Standaard knockout vraag - niet afgeleid van specifieke vacaturetekst"
 
 ## IDEAL_ANSWER VELD - VERPLICHT
 **KRITISCH**: Voor ELKE kwalificatievraag MOET je een `ideal_answer` invullen. NOOIT leeg laten!
@@ -190,9 +208,9 @@ Toon NOOIT JSON in je chat response.
 ## TOOL FORMAAT
 {
     "intro": "...",
-    "knockout_questions": [{"id": "ko_1", "question": "...", "change_status": "new/updated/unchanged"}],
+    "knockout_questions": [{"id": "ko_1", "question": "...", "vacancy_snippet": "...", "change_status": "new/updated/unchanged"}],
     "knockout_failed_action": "...",
-    "qualification_questions": [{"id": "qual_1", "question": "...", "ideal_answer": "...", "change_status": "new/updated/unchanged"}],
+    "qualification_questions": [{"id": "qual_1", "question": "...", "ideal_answer": "...", "vacancy_snippet": "...", "change_status": "new/updated/unchanged"}],
     "final_action": "...",
     "approved_ids": []
 }

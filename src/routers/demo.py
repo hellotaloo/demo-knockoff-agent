@@ -8,7 +8,8 @@ import uuid
 import logging
 from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Query
-from fixtures import load_candidates, load_vacancies, load_applications, load_pre_screenings, load_recruiters, load_clients
+from fixtures import load_candidates, load_vacancies, load_applications, load_pre_screenings, load_recruiters, load_clients, load_activities
+import json
 
 from src.database import get_db_pool
 from src.services import DemoService
@@ -20,7 +21,7 @@ router = APIRouter(tags=["Demo Data"])
 
 
 @router.post("/demo/seed")
-async def seed_demo_data():
+async def seed_demo_data(activities: bool = Query(True, description="Include activities in seed")):
     """Populate the database with demo candidates, vacancies, applications, and pre-screenings."""
     pool = await get_db_pool()
 
@@ -31,6 +32,7 @@ async def seed_demo_data():
     pre_screenings_data = load_pre_screenings()
     recruiters_data = load_recruiters()
     clients_data = load_clients()
+    activities_data = load_activities() if activities else []
 
     created_candidates = []
     created_vacancies = []
@@ -39,6 +41,7 @@ async def seed_demo_data():
     created_recruiters = []
     created_clients = []
     created_skills = 0
+    created_activities = 0
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -211,21 +214,65 @@ async def seed_demo_data():
                     "vacancy_title": created_vacancies[ps_data["vacancy_idx"]]["title"]
                 })
 
+            # Insert activities (for the global activity feed)
+            for act_data in activities_data:
+                # Get candidate_id if specified (some activities don't have a candidate)
+                candidate_id = None
+                if act_data.get("candidate_idx") is not None:
+                    candidate_idx = act_data["candidate_idx"]
+                    if candidate_idx < len(created_candidates):
+                        candidate_id = uuid.UUID(created_candidates[candidate_idx]["id"])
+
+                # Get vacancy_id
+                vacancy_id = None
+                if act_data.get("vacancy_idx") is not None:
+                    vacancy_idx = act_data["vacancy_idx"]
+                    if vacancy_idx < len(created_vacancies):
+                        vacancy_id = uuid.UUID(created_vacancies[vacancy_idx]["id"])
+
+                # Skip if we don't have the required candidate (activities need a candidate_id)
+                if candidate_id is None and act_data.get("candidate_idx") is not None:
+                    continue
+
+                # Calculate created_at based on minutes_ago
+                minutes_ago = act_data.get("minutes_ago", 0)
+                created_at = datetime.now() - timedelta(minutes=minutes_ago)
+
+                # Get metadata as JSON
+                metadata = act_data.get("metadata", {})
+
+                # For activities without a candidate, we need to pick a random one (FK constraint)
+                if candidate_id is None and created_candidates:
+                    candidate_id = uuid.UUID(created_candidates[0]["id"])
+
+                await conn.execute("""
+                    INSERT INTO ats.agent_activities
+                    (candidate_id, vacancy_id, event_type, channel, actor_type, metadata, summary, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """, candidate_id, vacancy_id, act_data["event_type"], act_data.get("channel"),
+                    act_data["actor_type"], json.dumps(metadata), act_data.get("summary"), created_at)
+
+                created_activities += 1
+
     return {
         "status": "success",
-        "message": f"Created {len(created_recruiters)} recruiters, {len(created_clients)} clients, {len(created_candidates)} candidates, {created_skills} skills, {len(created_vacancies)} vacancies, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings",
+        "message": f"Created {len(created_recruiters)} recruiters, {len(created_clients)} clients, {len(created_candidates)} candidates, {created_skills} skills, {len(created_vacancies)} vacancies, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities",
         "recruiters_count": len(created_recruiters),
         "clients_count": len(created_clients),
         "candidates_count": len(created_candidates),
         "skills_count": created_skills,
         "vacancies": created_vacancies,
         "applications_count": len(created_applications),
-        "pre_screenings": created_pre_screenings
+        "pre_screenings": created_pre_screenings,
+        "activities_count": created_activities
     }
 
 
 @router.post("/demo/reset")
-async def reset_demo_data(reseed: bool = Query(True, description="Reseed with demo data after reset")):
+async def reset_demo_data(
+    reseed: bool = Query(True, description="Reseed with demo data after reset"),
+    activities: bool = Query(True, description="Include activities in reseed (only used if reseed=true)")
+):
     """Clear all vacancies, applications, candidates, and pre-screenings, optionally reseed with demo data."""
     pool = await get_db_pool()
 
@@ -238,9 +285,9 @@ async def reset_demo_data(reseed: bool = Query(True, description="Reseed with de
             await conn.execute("DELETE FROM ats.scheduled_interviews")
             await conn.execute("DELETE FROM ats.document_collection_conversations")
 
-            # Try to delete candidate_activities and candidate_skills if tables exist
+            # Try to delete agent_activities and candidate_skills if tables exist
             try:
-                await conn.execute("DELETE FROM ats.candidate_activities")
+                await conn.execute("DELETE FROM ats.agent_activities")
             except Exception:
                 pass  # Table may not exist yet
 
@@ -273,8 +320,8 @@ async def reset_demo_data(reseed: bool = Query(True, description="Reseed with de
 
     # Optionally reseed
     if reseed:
-        seed_result = await seed_demo_data()
-        result["message"] = "Demo data reset and reseeded"
+        seed_result = await seed_demo_data(activities=activities)
+        result["message"] = "Demo data reset and reseeded" + ("" if activities else " (without activities)")
         result["seed"] = seed_result
 
     return result

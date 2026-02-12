@@ -104,6 +104,16 @@ from .activity import (
     ActivityCreate,
     ActivityResponse,
     TimelineResponse,
+    GlobalActivityResponse,
+    GlobalActivitiesResponse,
+)
+
+# ElevenLabs models
+from .elevenlabs import (
+    VoiceConfigRequest,
+    VoiceConfigResponse,
+    UpdateAgentVoiceConfigRequest,
+    UpdateAgentVoiceConfigResponse,
 )
 
 __all__ = [
@@ -175,4 +185,11 @@ __all__ = [
     "ActivityCreate",
     "ActivityResponse",
     "TimelineResponse",
+    "GlobalActivityResponse",
+    "GlobalActivitiesResponse",
+    # ElevenLabs
+    "VoiceConfigRequest",
+    "VoiceConfigResponse",
+    "UpdateAgentVoiceConfigRequest",
+    "UpdateAgentVoiceConfigResponse",
 ]

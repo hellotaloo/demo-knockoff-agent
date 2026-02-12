@@ -325,6 +325,103 @@ class GoogleCalendarService:
             logger.error(f"Failed to delete event {event_id}: {e}")
             return False
 
+    async def add_attachment_to_event(
+        self,
+        calendar_email: str,
+        event_id: str,
+        file_url: str,
+        file_title: str,
+        mime_type: str = "application/vnd.google-apps.document",
+    ) -> bool:
+        """
+        Add an attachment (Google Drive link) to a calendar event.
+
+        Note: This updates the event description with a link to the document,
+        as true attachments require G Suite/Workspace conference settings.
+
+        Args:
+            calendar_email: The calendar owner's email
+            event_id: The calendar event ID
+            file_url: URL of the Google Drive file
+            file_title: Title/name of the file
+            mime_type: MIME type of the file
+
+        Returns:
+            True if updated successfully
+        """
+        service = self._get_service(impersonate_email=calendar_email)
+
+        try:
+            # Get current event
+            event = service.events().get(calendarId=calendar_email, eventId=event_id).execute()
+
+            # Build new description with document link
+            current_description = event.get("description", "")
+            doc_link = f"\n\n📄 Notule: {file_url}"
+
+            if current_description:
+                new_description = current_description + doc_link
+            else:
+                new_description = f"📄 Notule: {file_url}"
+
+            # Update the event
+            event["description"] = new_description
+
+            # Try to add as proper attachment (requires workspace setup)
+            # If it fails, the description update still works
+            try:
+                if "attachments" not in event:
+                    event["attachments"] = []
+
+                event["attachments"].append({
+                    "fileUrl": file_url,
+                    "title": file_title,
+                    "mimeType": mime_type,
+                })
+
+                updated_event = service.events().update(
+                    calendarId=calendar_email,
+                    eventId=event_id,
+                    body=event,
+                    supportsAttachments=True
+                ).execute()
+            except HttpError as attach_error:
+                # Fallback: update without attachments field
+                logger.warning(f"Could not add attachment, updating description only: {attach_error}")
+                del event["attachments"]
+                updated_event = service.events().update(
+                    calendarId=calendar_email,
+                    eventId=event_id,
+                    body=event
+                ).execute()
+
+            logger.info(f"Added document link to calendar event {event_id}")
+            return True
+
+        except HttpError as e:
+            logger.error(f"Failed to add attachment to event {event_id}: {e}")
+            return False
+
+    async def get_event(self, calendar_email: str, event_id: str) -> Optional[dict]:
+        """
+        Get a calendar event by ID.
+
+        Args:
+            calendar_email: The calendar owner's email
+            event_id: The event ID
+
+        Returns:
+            Event dict or None if not found
+        """
+        service = self._get_service(impersonate_email=calendar_email)
+
+        try:
+            event = service.events().get(calendarId=calendar_email, eventId=event_id).execute()
+            return event
+        except HttpError as e:
+            logger.error(f"Failed to get event {event_id}: {e}")
+            return None
+
 
 # Singleton instance
 calendar_service = GoogleCalendarService()

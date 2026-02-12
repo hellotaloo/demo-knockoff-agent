@@ -1,99 +1,58 @@
 """
 Outbound Screening Router - Voice & WhatsApp screening initiation.
 """
+import json
 import logging
 import uuid
 from typing import Optional
 from fastapi import APIRouter, HTTPException
-from google.genai import types
 
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
-from src.repositories import ConversationRepository, PreScreeningRepository, CandidateRepository
+from src.repositories import CandidateRepository
 from src.services import ActivityService
 from src.database import get_db_pool
 from src.config import TWILIO_WHATSAPP_NUMBER, ELEVENLABS_AGENT_ID, logger
-from voice_agent import initiate_outbound_call
-from knockout_agent.agent import get_vacancy_whatsapp_agent
+from pre_screening_voice_agent import initiate_outbound_call
+from pre_screening_whatsapp_agent import create_simple_agent
 
 router = APIRouter(tags=["Outbound Screening"])
-
-# Global session manager (set by main app)
-session_manager = None
-
-
-def set_session_manager(manager):
-    """Set the session manager instance."""
-    global session_manager
-    session_manager = manager
 
 
 async def _clear_all_sessions_for_phone(pool, phone_normalized: str):
     """
-    Clear ALL active conversations and ADK sessions for a phone number.
+    Clear ALL active conversations for a phone number.
 
     This ensures only one conversation is active at a time per candidate.
-    When a new outbound is triggered, we forget all previous conversations
+    When a new outbound is triggered, we abandon all previous conversations
     (screening, document collection, etc.) to prevent routing conflicts.
     """
-    global session_manager
-
-    # 1. Find and abandon all active screening conversations (any channel)
-    screening_convs = await pool.fetch(
+    # 1. Abandon all active screening conversations (any channel)
+    result = await pool.execute(
         """
-        SELECT id, session_id, channel
-        FROM ats.screening_conversations
+        UPDATE ats.screening_conversations
+        SET status = 'abandoned', updated_at = NOW()
         WHERE candidate_phone = $1 AND status = 'active'
         """,
         phone_normalized
     )
+    # Extract count from "UPDATE X" result
+    screening_count = int(result.split()[-1]) if result else 0
+    if screening_count > 0:
+        logger.info(f"🧹 Abandoned {screening_count} active screening conversation(s) for {phone_normalized}")
 
-    if screening_convs:
-        # Mark all as abandoned
-        await pool.execute(
-            """
-            UPDATE ats.screening_conversations
-            SET status = 'abandoned', updated_at = NOW()
-            WHERE candidate_phone = $1 AND status = 'active'
-            """,
-            phone_normalized
-        )
-        logger.info(f"🧹 Abandoned {len(screening_convs)} active screening conversation(s) for {phone_normalized}")
-
-        # Delete their ADK sessions
-        for conv in screening_convs:
-            if conv["session_id"]:
-                user_id = conv["channel"] if conv["channel"] in ["whatsapp", "voice"] else "whatsapp"
-                await session_manager.delete_session("screening_chat", user_id, conv["session_id"])
-
-    # 2. Find and abandon all active document collection conversations
-    doc_convs = await pool.fetch(
+    # 2. Abandon all active document collection conversations
+    result = await pool.execute(
         """
-        SELECT id, session_id
-        FROM ats.document_collection_conversations
+        UPDATE ats.document_collection_conversations
+        SET status = 'abandoned', updated_at = NOW()
         WHERE candidate_phone = $1 AND status = 'active'
         """,
         phone_normalized
     )
-
-    if doc_convs:
-        # Mark all as abandoned
-        await pool.execute(
-            """
-            UPDATE ats.document_collection_conversations
-            SET status = 'abandoned', updated_at = NOW()
-            WHERE candidate_phone = $1 AND status = 'active'
-            """,
-            phone_normalized
-        )
-        logger.info(f"🧹 Abandoned {len(doc_convs)} active document collection conversation(s) for {phone_normalized}")
-
-        # Delete their ADK sessions and invalidate runners
-        for conv in doc_convs:
-            if conv["session_id"]:
-                await session_manager.delete_session("document_collection", "whatsapp", conv["session_id"])
-            # Invalidate the cached runner
-            session_manager.invalidate_document_runner(str(conv["id"]))
+    doc_count = int(result.split()[-1]) if result else 0
+    if doc_count > 0:
+        logger.info(f"🧹 Abandoned {doc_count} active document collection conversation(s) for {phone_normalized}")
 
     # 3. Also abandon any non-completed applications (they'll get a new one)
     await pool.execute(
@@ -105,9 +64,9 @@ async def _clear_all_sessions_for_phone(pool, phone_normalized: str):
         phone_normalized
     )
 
-    total_cleared = len(screening_convs) + len(doc_convs)
+    total_cleared = screening_count + doc_count
     if total_cleared > 0:
-        logger.info(f"✅ Cleared {total_cleared} session(s) for {phone_normalized} - ready for new conversation")
+        logger.info(f"✅ Cleared {total_cleared} conversation(s) for {phone_normalized} - ready for new conversation")
 
 
 @router.post("/screening/outbound", response_model=OutboundScreeningResponse)
@@ -135,7 +94,6 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     from twilio.rest import Client
     from src.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
 
-    global session_manager
     pool = await get_db_pool()
 
     # Initialize Twilio client (needed for WhatsApp)
@@ -214,16 +172,24 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     application_id = app_row["id"]
     logger.info(f"📝 Created application {application_id} with status=active (is_test={request.is_test})")
 
-    # Log activity: screening started
+    # Log activity: screening started with rich metadata
     activity_service = ActivityService(pool)
     channel = ActivityChannel.VOICE if request.channel == InterviewChannel.VOICE else ActivityChannel.WHATSAPP
+
+    # Build metadata based on channel
+    activity_metadata = {
+        "phone_number": f"+{phone_normalized[:3]} *** ** {phone_normalized[-2:]}",  # Masked for privacy
+        "call_initiated_by": "outbound",
+    }
+
     await activity_service.log(
         candidate_id=str(candidate_id),
         event_type=ActivityEventType.SCREENING_STARTED,
         application_id=str(application_id),
         vacancy_id=str(vacancy_uuid),
         channel=channel,
-        actor_type=ActorType.SYSTEM,
+        actor_type=ActorType.AGENT,
+        metadata=activity_metadata,
         summary=f"Pre-screening gestart via {request.channel.value}"
     )
 
@@ -354,8 +320,7 @@ async def _initiate_whatsapp_screening(
     is_test: bool = False,
     twilio_client = None,
 ) -> OutboundScreeningResponse:
-    """Initiate a WhatsApp screening conversation."""
-    global session_manager
+    """Initiate a WhatsApp screening conversation using pre_screening_whatsapp_agent."""
 
     if not whatsapp_agent_id:
         raise HTTPException(
@@ -367,13 +332,10 @@ async def _initiate_whatsapp_screening(
         raise HTTPException(status_code=500, detail="TWILIO_WHATSAPP_NUMBER not configured")
 
     try:
-        # Normalize phone for session lookups
+        # Normalize phone for database storage
         phone_normalized = phone.lstrip("+")
 
-        # Note: Session cleanup is now handled by _clear_all_sessions_for_phone()
-        # called at the start of initiate_outbound_screening()
-
-        # Get pre-screening questions to build the same agent as chat widget
+        # Get pre-screening questions
         questions = await pool.fetch(
             """
             SELECT id, question_type, position, question_text, ideal_answer
@@ -394,38 +356,28 @@ async def _initiate_whatsapp_screening(
             uuid.UUID(pre_screening_id)
         )
 
-        # Build pre_screening dict (same format as chat widget)
-        pre_screening = {
-            "intro": ps_row["intro"],
-            "knockout_failed_action": ps_row["knockout_failed_action"],
-            "final_action": ps_row["final_action"],
-            "knockout_questions": [q for q in questions if q["question_type"] == "knockout"],
-            "qualification_questions": [q for q in questions if q["question_type"] == "qualification"],
-        }
+        # Build questions for the agent
+        knockout_questions = [
+            {"question": q["question_text"], "requirement": q["ideal_answer"] or ""}
+            for q in questions if q["question_type"] == "knockout"
+        ]
+        open_questions = [
+            q["question_text"]
+            for q in questions if q["question_type"] == "qualification"
+        ]
 
-        # Get or create the same screening runner as chat widget uses
-        runner = session_manager.get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
-
-        # Generate a unique session ID for this conversation (like webchat does)
-        adk_session_id = str(uuid.uuid4())
-        logger.info(f"📱 Creating new WhatsApp session: {adk_session_id}")
-
-        # Create fresh session for this conversation
-        await session_manager.screening_session_service.create_session(
-            app_name="screening_chat",
-            user_id="whatsapp",
-            session_id=adk_session_id
+        # Create the agent
+        agent = create_simple_agent(
+            candidate_name=candidate_name or "daar",
+            vacancy_title=vacancy_title,
+            company_name="",
+            knockout_questions=knockout_questions,
+            open_questions=open_questions,
         )
 
-        # Generate opening message using ADK agent (same as chat widget)
-        name = candidate_name or "daar"
-        trigger_message = f"START_SCREENING name={name}"
-        content = types.Content(role="user", parts=[types.Part(text=trigger_message)])
-
-        opening_message = ""
-        async for event in runner.run_async(user_id="whatsapp", session_id=adk_session_id, new_message=content):
-            if event.is_final_response() and event.content and event.content.parts:
-                opening_message = event.content.parts[0].text
+        # Generate opening message (greeting + "are you ready?")
+        opening_message = await agent.get_initial_message()
+        logger.info(f"📱 Generated opening message for {candidate_name}: {opening_message[:100]}...")
 
         if not opening_message:
             raise Exception("Agent did not generate opening message")
@@ -437,23 +389,38 @@ async def _initiate_whatsapp_screening(
             to=f"whatsapp:{phone}"
         )
 
-        # Create conversation record in database (store the session_id for webhook lookups)
+        # Create conversation record with agent state
+        # Generate a session_id for database compatibility (we use JSON state, not ADK sessions)
+        session_id = str(uuid.uuid4())
         conv_row = await pool.fetchrow(
             """
             INSERT INTO ats.screening_conversations
-            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test)
-            VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6)
+            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, agent_state)
+            VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6, $7)
             RETURNING id
             """,
             uuid.UUID(vacancy_id),
             uuid.UUID(pre_screening_id),
-            adk_session_id,  # Store the unique session ID
+            session_id,
             candidate_name,
             phone_normalized,
-            is_test
+            is_test,
+            json.dumps(agent.state.to_dict())  # Store initial agent state as JSON string
         )
 
         conversation_id = conv_row["id"]
+
+        # Update agent state with the conversation_id for scheduling linkage
+        agent.state.conversation_id = str(conversation_id)
+        await pool.execute(
+            """
+            UPDATE ats.screening_conversations
+            SET agent_state = $1
+            WHERE id = $2
+            """,
+            json.dumps(agent.state.to_dict()),
+            conversation_id
+        )
 
         # Store the opening message in conversation_messages table
         await pool.execute(

@@ -28,7 +28,7 @@ class ActivityRepository:
         """Create a new activity log entry."""
         activity_id = await self.pool.fetchval(
             """
-            INSERT INTO ats.candidate_activities
+            INSERT INTO ats.agent_activities
             (candidate_id, application_id, vacancy_id, event_type, channel, actor_type, actor_id, metadata, summary)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
@@ -51,7 +51,7 @@ class ActivityRepository:
             """
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.candidate_activities
+            FROM ats.agent_activities
             WHERE id = $1
             """,
             activity_id
@@ -83,7 +83,7 @@ class ActivityRepository:
 
         # Get total count
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.candidate_activities WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM ats.agent_activities WHERE {where_clause}",
             *params
         )
 
@@ -91,7 +91,7 @@ class ActivityRepository:
         query = f"""
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.candidate_activities
+            FROM ats.agent_activities
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -114,7 +114,7 @@ class ActivityRepository:
             Tuple of (activity rows, total count)
         """
         total = await self.pool.fetchval(
-            "SELECT COUNT(*) FROM ats.candidate_activities WHERE application_id = $1",
+            "SELECT COUNT(*) FROM ats.agent_activities WHERE application_id = $1",
             application_id
         )
 
@@ -122,7 +122,7 @@ class ActivityRepository:
             """
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.candidate_activities
+            FROM ats.agent_activities
             WHERE application_id = $1
             ORDER BY created_at DESC
             LIMIT $2 OFFSET $3
@@ -156,14 +156,14 @@ class ActivityRepository:
         where_clause = " AND ".join(conditions)
 
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.candidate_activities WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM ats.agent_activities WHERE {where_clause}",
             *params
         )
 
         query = f"""
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.candidate_activities
+            FROM ats.agent_activities
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -176,7 +176,7 @@ class ActivityRepository:
     async def delete_for_candidate(self, candidate_id: uuid.UUID) -> int:
         """Delete all activities for a candidate. Returns count deleted."""
         result = await self.pool.execute(
-            "DELETE FROM ats.candidate_activities WHERE candidate_id = $1",
+            "DELETE FROM ats.agent_activities WHERE candidate_id = $1",
             candidate_id
         )
         # Result format: "DELETE N"
@@ -185,7 +185,79 @@ class ActivityRepository:
     async def delete_for_application(self, application_id: uuid.UUID) -> int:
         """Delete all activities for an application. Returns count deleted."""
         result = await self.pool.execute(
-            "DELETE FROM ats.candidate_activities WHERE application_id = $1",
+            "DELETE FROM ats.agent_activities WHERE application_id = $1",
             application_id
         )
         return int(result.split()[-1])
+
+    async def list_all(
+        self,
+        actor_type: Optional[str] = None,
+        event_types: Optional[list[str]] = None,
+        channel: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Tuple[list[asyncpg.Record], int]:
+        """
+        List all activities across the system with optional filtering.
+        Includes candidate name and vacancy title for display context.
+
+        Returns:
+            Tuple of (activity rows with enriched data, total count)
+        """
+        conditions = []
+        params = []
+        param_idx = 1
+
+        if actor_type:
+            conditions.append(f"a.actor_type = ${param_idx}")
+            params.append(actor_type)
+            param_idx += 1
+
+        if event_types:
+            conditions.append(f"a.event_type = ANY(${param_idx})")
+            params.append(event_types)
+            param_idx += 1
+
+        if channel:
+            conditions.append(f"a.channel = ${param_idx}")
+            params.append(channel)
+            param_idx += 1
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Get total count
+        total = await self.pool.fetchval(
+            f"SELECT COUNT(*) FROM ats.agent_activities a WHERE {where_clause}",
+            *params
+        )
+
+        # Get activities with candidate and vacancy info
+        query = f"""
+            SELECT
+                a.id,
+                a.candidate_id,
+                a.application_id,
+                a.vacancy_id,
+                a.event_type,
+                a.channel,
+                a.actor_type,
+                a.actor_id,
+                a.metadata,
+                a.summary,
+                a.created_at,
+                c.first_name AS candidate_first_name,
+                c.last_name AS candidate_last_name,
+                v.title AS vacancy_title,
+                v.company AS vacancy_company
+            FROM ats.agent_activities a
+            LEFT JOIN ats.candidates c ON a.candidate_id = c.id
+            LEFT JOIN ats.vacancies v ON a.vacancy_id = v.id
+            WHERE {where_clause}
+            ORDER BY a.created_at DESC
+            LIMIT ${param_idx} OFFSET ${param_idx + 1}
+        """
+        params.extend([limit, offset])
+
+        rows = await self.pool.fetch(query, *params)
+        return rows, total

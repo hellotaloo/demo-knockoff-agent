@@ -312,7 +312,7 @@ async def run_simulation(
         
         if agent_response:
             # Clean up any tool call artifacts
-            from knockout_agent.agent import clean_response_text
+            from src.utils.text_utils import clean_response_text
             agent_response = clean_response_text(agent_response)
             
             yield {

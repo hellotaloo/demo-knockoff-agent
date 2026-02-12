@@ -9,8 +9,6 @@ from google.adk.events import Event, EventActions
 from google.adk.runners import Runner
 from google.adk.agents.llm_agent import Agent
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
-from knockout_agent.agent import build_screening_instruction, conversation_complete_tool
-from src.tools.calendar_tools import check_availability_tool, schedule_interview_tool
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +18,10 @@ class SessionManager:
     Centralized session management for all ADK services.
 
     Manages session service creation, event appending with retry logic,
-    and screening runner caching.
+    and document runner caching.
+
+    Note: Screening (WhatsApp/Web chat) now uses pre_screening_whatsapp_agent
+    with JSON state storage instead of ADK sessions.
     """
 
     def __init__(self, database_url: str):
@@ -31,16 +32,12 @@ class SessionManager:
         self.session_service: Optional[DatabaseSessionService] = None
         self.interview_session_service: Optional[DatabaseSessionService] = None
         self.analyst_session_service: Optional[DatabaseSessionService] = None
-        self.screening_session_service: Optional[DatabaseSessionService] = None
         self.document_session_service: Optional[DatabaseSessionService] = None
 
         # Runners (stateful)
         self.interview_runner: Optional[Runner] = None
         self.interview_editor_runner: Optional[Runner] = None
         self.analyst_runner: Optional[Runner] = None
-
-        # Screening runners cache (keyed by vacancy_id)
-        self.screening_runners: dict[str, Runner] = {}
 
         # Document collection runners cache (keyed by collection_id)
         self.document_runners: dict[str, Runner] = {}
@@ -98,15 +95,6 @@ class SessionManager:
         )
         logger.info("Created recruiter analyst session service and runner")
         return self.analyst_session_service
-
-    def create_screening_session_service(self) -> DatabaseSessionService:
-        """Create screening chat session service."""
-        self.screening_session_service = DatabaseSessionService(
-            db_url=self.database_url,
-            connect_args=self.connect_args
-        )
-        logger.info("Created screening chat session service")
-        return self.screening_session_service
 
     def create_document_session_service(self) -> DatabaseSessionService:
         """Create document collection session service."""
@@ -185,67 +173,6 @@ class SessionManager:
             recreate_service()
             return await operation()
 
-    def get_or_create_screening_runner(
-        self,
-        vacancy_id: str,
-        pre_screening: dict,
-        vacancy_title: str
-    ) -> Runner:
-        """
-        Get or create a screening runner for a specific vacancy.
-
-        Runners are cached per vacancy_id to avoid recreating them on every request.
-        """
-        # Check cache
-        if vacancy_id in self.screening_runners:
-            logger.info(f"Using cached screening runner for vacancy {vacancy_id[:8]}")
-            return self.screening_runners[vacancy_id]
-
-        # Build dynamic instruction
-        instruction = build_screening_instruction(pre_screening, vacancy_title)
-
-        # Log the full system prompt
-        logger.info("=" * 60)
-        logger.info(f"📋 SCREENING AGENT CREATED: screening_{vacancy_id[:8]}")
-        logger.info("=" * 60)
-        logger.info("FULL SYSTEM PROMPT:")
-        logger.info("=" * 60)
-        for line in instruction.split('\n'):
-            logger.info(line)
-        logger.info("=" * 60)
-
-        # Create agent with conversation_complete and calendar tools
-        agent = Agent(
-            name=f"screening_{vacancy_id[:8]}",
-            model="gemini-2.5-flash",
-            instruction=instruction,
-            description=f"Screening agent for vacancy {vacancy_title}",
-            tools=[
-                conversation_complete_tool,
-                check_availability_tool,
-                schedule_interview_tool,
-            ],
-        )
-
-        # Create runner
-        runner = Runner(
-            agent=agent,
-            app_name="screening_chat",
-            session_service=self.screening_session_service
-        )
-
-        # Cache it
-        self.screening_runners[vacancy_id] = runner
-        logger.info(f"✅ Screening runner ready: screening_{vacancy_id[:8]}")
-
-        return runner
-
-    def invalidate_screening_runner(self, vacancy_id: str):
-        """Remove a screening runner from cache (e.g., after pre-screening update)."""
-        if vacancy_id in self.screening_runners:
-            del self.screening_runners[vacancy_id]
-            logger.info(f"🔄 Cleared cached screening runner for vacancy {vacancy_id[:8]}...")
-
     def get_or_create_document_runner(
         self,
         collection_id: str,
@@ -294,17 +221,12 @@ class SessionManager:
         Delete a specific ADK session from the database.
 
         Args:
-            app_name: The ADK app name (e.g., "screening_chat", "document_collection")
+            app_name: The ADK app name (e.g., "document_collection")
             user_id: The user ID (e.g., "whatsapp", "web")
             session_id: The UUID session ID
         """
         try:
-            if app_name == "screening_chat" and self.screening_session_service:
-                await self.screening_session_service.delete_session(
-                    app_name=app_name, user_id=user_id, session_id=session_id
-                )
-                logger.info(f"🗑️ Deleted ADK session: {app_name}/{user_id}/{session_id[:8]}...")
-            elif app_name == "document_collection" and self.document_session_service:
+            if app_name == "document_collection" and self.document_session_service:
                 await self.document_session_service.delete_session(
                     app_name=app_name, user_id=user_id, session_id=session_id
                 )

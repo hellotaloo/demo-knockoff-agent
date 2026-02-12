@@ -1,0 +1,490 @@
+{
+  "sf-1633942": {
+    "vacancy_title": "Operator Mengafdeling",
+    "skills": [
+      {
+        "skill": "Machineoperator",
+        "score": 0.72,
+        "evidence": "Instellen en bedienen van mengmachines"
+      },
+      {
+        "skill": "Kwaliteitscontrole",
+        "score": 0.68,
+        "evidence": "Uitvoeren van kwaliteitscontroles tijdens het productieproces"
+      },
+      {
+        "skill": "Menginstallatie",
+        "score": 0.65,
+        "evidence": "Toevoegen van grondstoffen aan de menginstallatie"
+      },
+      {
+        "skill": "Nauwkeurig",
+        "score": 0.58,
+        "evidence": "Nauwkeurig en gestructureerd kunnen werken"
+      },
+      {
+        "skill": "Rekenvaardigheden",
+        "score": 0.55,
+        "evidence": "Sterke rekenvaardigheden"
+      }
+    ],
+    "certificates": [],
+    "languages": [
+      {
+        "language": "Nederlands",
+        "level": "goed",
+        "evidence": "Goede kennis Nederlands"
+      },
+      {
+        "language": "Frans",
+        "level": "basis",
+        "evidence": "basiskennis Frans"
+      }
+    ],
+    "knockout_criteria": [
+      {
+        "type": "physical_work",
+        "evidence": "Fysiek werk aankunnen",
+        "knockout_question": "Kan jij fysiek zwaar werk aan?"
+      },
+      {
+        "type": "work_environment",
+        "evidence": "Geen probleem met werken in een stoffige omgeving",
+        "knockout_question": "Heb je problemen met werken in een stoffige omgeving?"
+      },
+      {
+        "type": "language",
+        "evidence": "Goede kennis Nederlands",
+        "knockout_question": "Spreek je goed Nederlands?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "machine_experience",
+        "evidence": "Instellen en bedienen van mengmachines",
+        "suggested_question": "Heb je ervaring met het bedienen van mengmachines of soortgelijke productiemachines?"
+      },
+      {
+        "topic": "quality_control",
+        "evidence": "Uitvoeren van kwaliteitscontroles tijdens het productieproces",
+        "suggested_question": "Heb je ervaring met kwaliteitscontroles in een productieomgeving?"
+      },
+      {
+        "topic": "recipe_work",
+        "evidence": "Afwegen van grondstoffen volgens vastgelegde recepten",
+        "suggested_question": "Heb je ervaring met het nauwkeurig afwegen of doseren van materialen?"
+      }
+    ]
+  },
+  "sf-1263421": {
+    "vacancy_title": "Kassamedewerker",
+    "skills": [
+      {
+        "skill": "Kassawerk",
+        "score": 0.82,
+        "evidence": "Correct en vlot afrekenen aan de kassa"
+      },
+      {
+        "skill": "Klantenservice",
+        "score": 0.75,
+        "evidence": "Klanten vriendelijk verder helpen"
+      },
+      {
+        "skill": "Orderpicking",
+        "score": 0.62,
+        "evidence": "Producten picken, etiketten aanmaken en THT-datums controleren"
+      },
+      {
+        "skill": "Voorraadbeheer",
+        "score": 0.58,
+        "evidence": "Afboeken van drank en snoep voor andere winkels"
+      },
+      {
+        "skill": "Zelfstandig werken",
+        "score": 0.55,
+        "evidence": "Betrouwbaar en zelfstandig"
+      }
+    ],
+    "certificates": [],
+    "languages": [],
+    "knockout_criteria": [
+      {
+        "type": "flexibility",
+        "evidence": "Flexibel inzetbaar",
+        "knockout_question": "Ben je flexibel inzetbaar qua uren?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "cash_register_experience",
+        "evidence": "Correct en vlot afrekenen aan de kassa",
+        "suggested_question": "Heb je ervaring met kassawerk?"
+      },
+      {
+        "topic": "retail_experience",
+        "evidence": "Ervaring in retail of kassawerk is een pluspunt",
+        "suggested_question": "Kan je jouw ervaring in de retail beschrijven?"
+      },
+      {
+        "topic": "accuracy",
+        "evidence": "Nauwkeurig en georganiseerd",
+        "suggested_question": "Hoe zorg je ervoor dat je nauwkeurig werkt bij routinetaken?"
+      }
+    ]
+  },
+  "sf-1263721": {
+    "vacancy_title": "Productieoperator (2 ploegen)",
+    "skills": [
+      {
+        "skill": "Machineoperator",
+        "score": 0.78,
+        "evidence": "Instellen en bedienen van productiemachines"
+      },
+      {
+        "skill": "Kwaliteitscontrole",
+        "score": 0.72,
+        "evidence": "Uitvoeren van kwaliteitscontroles"
+      },
+      {
+        "skill": "Technisch inzicht",
+        "score": 0.68,
+        "evidence": "Technische achtergrond"
+      },
+      {
+        "skill": "Probleemoplossend",
+        "score": 0.62,
+        "evidence": "Oplossen van kleine storingen"
+      },
+      {
+        "skill": "Leidinggeven",
+        "score": 0.55,
+        "evidence": "Aansturen van collega's waar nodig"
+      },
+      {
+        "skill": "Teamwork",
+        "score": 0.52,
+        "evidence": "Teamgericht en mensgericht kunnen samenwerken"
+      }
+    ],
+    "certificates": [],
+    "languages": [],
+    "knockout_criteria": [
+      {
+        "type": "shift_work",
+        "evidence": "werken in een 2-ploegensysteem",
+        "knockout_question": "Kan je werken in een 2-ploegensysteem?"
+      },
+      {
+        "type": "location",
+        "evidence": "regio Diest",
+        "knockout_question": "Woon je in de regio Diest of kan je er vlot geraken?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "technical_background",
+        "evidence": "Technische achtergrond",
+        "suggested_question": "Wat is jouw technische achtergrond of opleiding?"
+      },
+      {
+        "topic": "machine_operation",
+        "evidence": "Instellen en bedienen van productiemachines",
+        "suggested_question": "Heb je ervaring met het bedienen van productiemachines?"
+      },
+      {
+        "topic": "troubleshooting",
+        "evidence": "Oplossen van kleine storingen",
+        "suggested_question": "Heb je ervaring met het oplossen van technische storingen?"
+      },
+      {
+        "topic": "leadership",
+        "evidence": "Aansturen van collega's waar nodig",
+        "suggested_question": "Heb je ervaring met het aansturen of begeleiden van collega's?"
+      }
+    ]
+  },
+  "sf-1263237": {
+    "vacancy_title": "Winkelmedewerker Bakkerij",
+    "skills": [
+      {
+        "skill": "Klantenservice",
+        "score": 0.75,
+        "evidence": "Klanten bedienen aan de toog"
+      },
+      {
+        "skill": "Horeca",
+        "score": 0.68,
+        "evidence": "Bediening in de tearoom"
+      },
+      {
+        "skill": "Bakkerij",
+        "score": 0.65,
+        "evidence": "Bereiden van broodjes, croques en pannenkoeken"
+      },
+      {
+        "skill": "Teamwork",
+        "score": 0.58,
+        "evidence": "Teamplayer met een hands-on mentaliteit"
+      },
+      {
+        "skill": "Flexibiliteit",
+        "score": 0.55,
+        "evidence": "Flexibel en geen probleem met zaterdagwerk"
+      }
+    ],
+    "certificates": [],
+    "languages": [
+      {
+        "language": "Nederlands",
+        "level": "vlot",
+        "evidence": "Vlot Nederlands spreken"
+      }
+    ],
+    "knockout_criteria": [
+      {
+        "type": "weekend_work",
+        "evidence": "geen probleem met zaterdagwerk",
+        "knockout_question": "Kan je ook op zaterdag werken?"
+      },
+      {
+        "type": "language",
+        "evidence": "Vlot Nederlands spreken",
+        "knockout_question": "Spreek je vlot Nederlands?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "customer_service",
+        "evidence": "Klanten bedienen aan de toog",
+        "suggested_question": "Heb je ervaring met klanten bedienen?"
+      },
+      {
+        "topic": "food_preparation",
+        "evidence": "Bereiden van broodjes, croques en pannenkoeken",
+        "suggested_question": "Heb je ervaring met het bereiden van eenvoudige gerechten?"
+      },
+      {
+        "topic": "hospitality",
+        "evidence": "Bediening in de tearoom",
+        "suggested_question": "Heb je ervaring in de horeca of bediening?"
+      }
+    ]
+  },
+  "sf-1262413": {
+    "vacancy_title": "Technisch commercieel binnendienst medewerker",
+    "skills": [
+      {
+        "skill": "Technisch commercieel",
+        "score": 0.82,
+        "evidence": "technisch commercieel medewerker binnendienst"
+      },
+      {
+        "skill": "Offertes",
+        "score": 0.72,
+        "evidence": "Offertes opmaken"
+      },
+      {
+        "skill": "B2B verkoop",
+        "score": 0.68,
+        "evidence": "Onderhandelen en afsluiten van verkoop"
+      },
+      {
+        "skill": "Technisch inzicht",
+        "score": 0.65,
+        "evidence": "Technische bagage (automotive/autotechnologie/elektromechanica)"
+      },
+      {
+        "skill": "Communicatie",
+        "score": 0.58,
+        "evidence": "Commercieel en communicatief sterk"
+      }
+    ],
+    "certificates": [],
+    "languages": [
+      {
+        "language": "Nederlands",
+        "level": "goed",
+        "evidence": "Goede kennis Nederlands"
+      },
+      {
+        "language": "Engels",
+        "level": "goed",
+        "evidence": "Goede kennis Engels"
+      },
+      {
+        "language": "Frans",
+        "level": "goed",
+        "evidence": "Goede kennis Frans"
+      }
+    ],
+    "knockout_criteria": [
+      {
+        "type": "technical_background",
+        "evidence": "Technische bagage (automotive/autotechnologie/elektromechanica)",
+        "knockout_question": "Heb je een technische achtergrond in automotive, autotechnologie of elektromechanica?"
+      },
+      {
+        "type": "languages",
+        "evidence": "Goede kennis Nederlands, Engels en Frans",
+        "knockout_question": "Spreek je goed Nederlands, Engels én Frans?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "technical_knowledge",
+        "evidence": "Klanten technisch advies geven",
+        "suggested_question": "Kan je een voorbeeld geven van hoe je technisch advies hebt gegeven aan klanten?"
+      },
+      {
+        "topic": "sales_experience",
+        "evidence": "Onderhandelen en afsluiten van verkoop",
+        "suggested_question": "Heb je ervaring met commerciële onderhandelingen en verkoop?"
+      },
+      {
+        "topic": "automotive_knowledge",
+        "evidence": "sterke technische kennis in de automotive sector",
+        "suggested_question": "Wat is jouw ervaring in de automotive sector?"
+      }
+    ]
+  },
+  "sf-1234249": {
+    "vacancy_title": "Logistiek Supervisor",
+    "skills": [
+      {
+        "skill": "Logistiek supervisor",
+        "score": 0.85,
+        "evidence": "logistiek supervisor die de dagelijkse logistieke activiteiten coördineert"
+      },
+      {
+        "skill": "Planning",
+        "score": 0.72,
+        "evidence": "Plannen en organiseren van werkzaamheden"
+      },
+      {
+        "skill": "Leidinggeven",
+        "score": 0.68,
+        "evidence": "Ervaring als teamleider is een meerwaarde"
+      },
+      {
+        "skill": "Coachen",
+        "score": 0.62,
+        "evidence": "Stressbestendig en coachend"
+      },
+      {
+        "skill": "Stressbestendigheid",
+        "score": 0.58,
+        "evidence": "Stressbestendig en coachend"
+      }
+    ],
+    "certificates": [
+      {
+        "certificate": "Bachelor diploma",
+        "score": 0.65,
+        "evidence": "Bachelor diploma of gelijkwaardige ervaring"
+      }
+    ],
+    "languages": [],
+    "knockout_criteria": [
+      {
+        "type": "education_experience",
+        "evidence": "Bachelor diploma of gelijkwaardige ervaring",
+        "knockout_question": "Heb je een bachelor diploma of gelijkwaardige werkervaring?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "team_leadership",
+        "evidence": "Ervaring als teamleider is een meerwaarde",
+        "suggested_question": "Heb je ervaring als teamleider? Zo ja, hoeveel mensen heb je aangestuurd?"
+      },
+      {
+        "topic": "logistics_experience",
+        "evidence": "Kennis van logistieke planning en processen",
+        "suggested_question": "Wat is jouw ervaring met logistieke planning en processen?"
+      },
+      {
+        "topic": "process_management",
+        "evidence": "Opvolgen van logistieke processen",
+        "suggested_question": "Hoe pak je het opvolgen en optimaliseren van processen aan?"
+      }
+    ]
+  },
+  "sf-1223424": {
+    "vacancy_title": "Customer Service Medewerker Portugal",
+    "skills": [
+      {
+        "skill": "Customer service",
+        "score": 0.85,
+        "evidence": "customer service medewerker"
+      },
+      {
+        "skill": "Klantencontact",
+        "score": 0.78,
+        "evidence": "Helpen van klanten via verschillende communicatiekanalen"
+      },
+      {
+        "skill": "Communicatie",
+        "score": 0.72,
+        "evidence": "Communicatief sterk en flexibel"
+      },
+      {
+        "skill": "Flexibiliteit",
+        "score": 0.58,
+        "evidence": "Communicatief sterk en flexibel"
+      }
+    ],
+    "certificates": [
+      {
+        "certificate": "A2 diploma",
+        "score": 0.65,
+        "evidence": "A2 diploma (middelbaar onderwijs)"
+      }
+    ],
+    "languages": [
+      {
+        "language": "Nederlands",
+        "level": "perfect",
+        "evidence": "Perfect Nederlands"
+      },
+      {
+        "language": "Engels",
+        "level": "goed",
+        "evidence": "goede basis Engels"
+      }
+    ],
+    "knockout_criteria": [
+      {
+        "type": "relocation",
+        "evidence": "Bereid om minimaal 6 maanden in Lissabon te werken en wonen",
+        "knockout_question": "Ben je bereid om minimaal 6 maanden in Lissabon te wonen en werken?"
+      },
+      {
+        "type": "language",
+        "evidence": "Perfect Nederlands en goede basis Engels",
+        "knockout_question": "Spreek je perfect Nederlands en heb je een goede basis Engels?"
+      },
+      {
+        "type": "education",
+        "evidence": "A2 diploma (middelbaar onderwijs)",
+        "knockout_question": "Heb je minstens een A2 diploma (middelbaar onderwijs)?"
+      }
+    ],
+    "qualification_topics": [
+      {
+        "topic": "customer_service_experience",
+        "evidence": "Helpen van klanten via verschillende communicatiekanalen",
+        "suggested_question": "Heb je ervaring met klantenservice via telefoon, chat of email?"
+      },
+      {
+        "topic": "motivation_relocation",
+        "evidence": "Bereid om minimaal 6 maanden in Lissabon te werken en wonen",
+        "suggested_question": "Wat trekt je aan om in Lissabon te gaan werken?"
+      },
+      {
+        "topic": "communication_skills",
+        "evidence": "Communicatief sterk en flexibel",
+        "suggested_question": "Kan je een voorbeeld geven van hoe je een moeilijke klant hebt geholpen?"
+      }
+    ]
+  }
+}

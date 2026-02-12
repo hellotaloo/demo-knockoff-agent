@@ -19,7 +19,6 @@ from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.events import Event, EventActions
 from google.genai import types
 import time
-from knockout_agent.agent import build_screening_instruction, is_closing_message, clean_response_text, conversation_complete_tool
 from interview_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
 from candidate_simulator.agent import SimulationPersona, create_simulator_agent, run_simulation
 from data_query_agent.agent import set_db_pool as set_data_query_db_pool
@@ -106,13 +105,12 @@ from src.routers import (
     scheduling_router,
     candidates_router,
     agents_router,
+    activities_router,
+    elevenlabs_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
-import src.routers.screening as screening_router_module
-import src.routers.webhooks as webhooks_router_module
 import src.routers.data_query as data_query_router_module
-import src.routers.outbound as outbound_router_module
 import src.routers.document_collection as document_collection_router_module
 
 
@@ -137,10 +135,10 @@ async def lifespan(app: FastAPI):
     session_manager = SessionManager(DATABASE_URL)
 
     # Create all session services
+    # Note: Screening now uses pre_screening_whatsapp_agent with JSON state, not ADK sessions
     session_manager.create_session_service()
     session_manager.create_interview_session_service(interview_agent, interview_editor_agent)
     session_manager.create_analyst_session_service(recruiter_analyst_agent)
-    session_manager.create_screening_session_service()
     session_manager.create_document_session_service()
 
     pool = await get_db_pool()  # Initialize database pool
@@ -182,10 +180,7 @@ async def lifespan(app: FastAPI):
     # Set session_manager in routers that need it (for backwards compatibility)
     pre_screenings_router_module.set_session_manager(session_manager)
     interviews_router_module.set_session_manager(session_manager)
-    screening_router_module.set_session_manager(session_manager)
-    webhooks_router_module.set_session_manager(session_manager)
     data_query_router_module.set_session_manager(session_manager)
-    outbound_router_module.set_session_manager(session_manager)
     document_collection_router_module.set_session_manager(session_manager)
 
     yield
@@ -227,6 +222,8 @@ app.include_router(document_collection_router)
 app.include_router(scheduling_router)
 app.include_router(candidates_router)
 app.include_router(agents_router)
+app.include_router(activities_router)
+app.include_router(elevenlabs_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

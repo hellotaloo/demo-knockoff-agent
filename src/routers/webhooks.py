@@ -13,11 +13,15 @@ from typing import Optional
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client
-from google.genai import types
-from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
+from sqlalchemy.exc import InterfaceError, OperationalError
 
-from knockout_agent.agent import build_screening_instruction, is_closing_message, clean_response_text, conversation_complete_tool
+from pre_screening_whatsapp_agent import (
+    create_simple_agent,
+    restore_agent_from_state,
+    is_conversation_complete,
+    get_conversation_outcome,
+    Phase,
+)
 from transcript_processor import process_transcript
 from src.config import ELEVENLABS_WEBHOOK_SECRET, logger
 from src.models.webhook import ElevenLabsWebhookPayload
@@ -28,15 +32,6 @@ from src.database import get_db_pool
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Webhooks"])
-
-# Global session_manager will be set by main app
-session_manager = None
-
-
-def set_session_manager(manager):
-    """Set the session manager instance."""
-    global session_manager
-    session_manager = manager
 
 # ============================================================================
 # Helper Functions
@@ -271,7 +266,7 @@ async def _process_whatsapp_conversation(
 
     logger.info(f"✅ WhatsApp conversation {conversation_id} processed: application {application_id}")
 
-    # Log activity: screening completed + processed
+    # Log activity: screening completed + processed with rich metadata
     candidate_id = existing_app["candidate_id"] if existing_app and existing_app.get("candidate_id") else None
     if candidate_id:
         activity_service = ActivityService(pool)
@@ -279,6 +274,33 @@ async def _process_whatsapp_conversation(
         # Calculate overall score from qualification results
         scores = [qr.score for qr in result.qualification_results if qr.score is not None]
         avg_score = round(sum(scores) / len(scores)) if scores else None
+
+        # Calculate knockout stats
+        knockout_passed = sum(1 for kr in result.knockout_results if kr.passed)
+        knockout_total = len(result.knockout_results)
+
+        # Get last answer from messages for context
+        last_user_answer = None
+        for msg in reversed(messages):
+            if msg["role"] == "user":
+                last_user_answer = msg["message"][:100] + "..." if len(msg["message"]) > 100 else msg["message"]
+                break
+
+        # Build rich metadata
+        activity_metadata = {
+            "score": avg_score,
+            "knockout_passed": knockout_passed,
+            "knockout_total": knockout_total,
+            "duration_seconds": duration_seconds,
+        }
+        if last_user_answer:
+            activity_metadata["last_answer"] = last_user_answer
+
+        # If disqualified, add reason
+        if not result.overall_passed:
+            failed_knockouts = [kr.question_text for kr in result.knockout_results if not kr.passed]
+            if failed_knockouts:
+                activity_metadata["knockout_failed"] = failed_knockouts[0][:50]
 
         # Log screening completed
         event_type = ActivityEventType.QUALIFIED if result.overall_passed else ActivityEventType.DISQUALIFIED
@@ -289,110 +311,219 @@ async def _process_whatsapp_conversation(
             vacancy_id=str(vacancy_uuid),
             channel=ActivityChannel.WHATSAPP,
             actor_type=ActorType.AGENT,
-            metadata={"qualified": result.overall_passed, "score": avg_score},
+            metadata=activity_metadata,
             summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
         )
 
 
-async def _webhook_impl_vacancy_specific(session_id: str, incoming_msg: str, vacancy_id: str, pre_screening: dict, vacancy_title: str) -> tuple[str, bool, str | None]:
+async def _save_whatsapp_scheduled_interview(
+    pool,
+    conversation_id: uuid.UUID,
+    selected_date: str,
+    selected_time: str,
+    selected_slot_text: str,
+    candidate_name: str,
+):
     """
-    Handle webhook using vacancy-specific agent (for outbound screenings).
+    Save a scheduled interview from the WhatsApp agent.
+
+    Looks up vacancy info from the conversation and creates a scheduled_interview record.
+    Also creates a Google Calendar event.
+    Idempotent - checks if already scheduled to avoid duplicates.
+    """
+    import os
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.repositories.scheduled_interview_repo import ScheduledInterviewRepository
+    from src.services.google_calendar_service import calendar_service
+
+    try:
+        # Check if already scheduled (avoid duplicates on message retries)
+        existing = await pool.fetchrow(
+            """
+            SELECT id FROM ats.scheduled_interviews
+            WHERE conversation_id = $1
+            """,
+            str(conversation_id)
+        )
+        if existing:
+            logger.info(f"📅 Interview already scheduled for conversation {conversation_id}")
+            return
+
+        # Look up vacancy info from conversation
+        conv_info = await pool.fetchrow(
+            """
+            SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone,
+                   v.title as vacancy_title
+            FROM ats.screening_conversations sc
+            JOIN ats.vacancies v ON v.id = sc.vacancy_id
+            WHERE sc.id = $1
+            """,
+            conversation_id
+        )
+
+        if not conv_info:
+            logger.error(f"No conversation found for {conversation_id}")
+            return
+
+        # Parse date
+        try:
+            date_obj = datetime.strptime(selected_date, "%Y-%m-%d").date()
+        except ValueError:
+            logger.error(f"Invalid date format: {selected_date}")
+            return
+
+        # Create scheduled interview record
+        repo = ScheduledInterviewRepository(pool)
+        interview_id = await repo.create(
+            vacancy_id=conv_info["vacancy_id"],
+            conversation_id=str(conversation_id),
+            selected_date=date_obj,
+            selected_time=selected_time,
+            selected_slot_text=selected_slot_text,
+            candidate_name=candidate_name or conv_info["candidate_name"],
+            candidate_phone=conv_info["candidate_phone"],
+            channel="whatsapp",
+        )
+
+        logger.info(
+            f"📅 Scheduled interview {interview_id} for conversation {conversation_id}: "
+            f"{selected_date} at {selected_time}"
+        )
+
+        # Create Google Calendar event
+        calendar_email = os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
+        if calendar_email:
+            try:
+                # Parse time from "14u" format to hour
+                hour = int(selected_time.replace("u", "").replace("h", ""))
+                tz = ZoneInfo("Europe/Brussels")
+                start_time = datetime.combine(date_obj, datetime.min.time(), tzinfo=tz).replace(hour=hour)
+
+                # Create event
+                name = candidate_name or conv_info["candidate_name"]
+                vacancy_title = conv_info["vacancy_title"]
+                event = await calendar_service.create_event(
+                    calendar_email=calendar_email,
+                    summary=f"Interview - {name} ({vacancy_title})",
+                    start_time=start_time,
+                    description=f"WhatsApp pre-screening interview\nKandidaat: {name}\nVacature: {vacancy_title}",
+                )
+
+                # Update scheduled interview with calendar event ID
+                if event and event.get("id"):
+                    await repo.update_calendar_event_id(interview_id, event["id"])
+                    logger.info(f"📅 Created calendar event {event['id']} for interview {interview_id}")
+
+            except Exception as cal_error:
+                logger.error(f"Failed to create calendar event: {cal_error}")
+                # Don't fail the whole operation if calendar creation fails
+
+    except Exception as e:
+        logger.error(f"Failed to save scheduled interview for {conversation_id}: {e}")
+        # Don't re-raise - scheduling failure shouldn't break the conversation
+
+
+async def _webhook_impl_vacancy_specific(
+    pool,
+    conversation_id: uuid.UUID,
+    incoming_msg: str,
+    candidate_name: str,
+) -> tuple[str, bool, str | None]:
+    """
+    Handle webhook using pre-screening WhatsApp agent.
 
     Args:
-        session_id: The ADK session ID (stored in screening_conversations.session_id)
+        pool: Database connection pool
+        conversation_id: The conversation UUID
         incoming_msg: The user's message
-        vacancy_id: The vacancy UUID
-        pre_screening: Pre-screening configuration dict
-        vacancy_title: The vacancy title
+        candidate_name: The candidate's name
 
     Returns:
         tuple: (response_text, is_complete, completion_outcome)
         - response_text: The agent's response message
-        - is_complete: True if conversation is complete (tool called or closing pattern)
-        - completion_outcome: The outcome string if tool was called, None otherwise
+        - is_complete: True if conversation is in terminal state (DONE or FAILED)
+        - completion_outcome: The outcome description if complete, None otherwise
     """
-    global session_manager
+    # Load agent state from database
+    row = await pool.fetchrow(
+        """
+        SELECT agent_state FROM ats.screening_conversations WHERE id = $1
+        """,
+        conversation_id
+    )
 
-    # Get or create the same screening runner as was used for outbound
-    runner = session_manager.get_or_create_screening_runner(vacancy_id, pre_screening, vacancy_title)
-
-    # CRITICAL: Verify session exists before running agent
-    # The session should have been created during _initiate_whatsapp_screening
-    # If it doesn't exist (e.g., DB connection issue), the agent would start fresh without history
-    async def verify_or_create_session():
-        session = await session_manager.screening_session_service.get_session(
-            app_name="screening_chat",
-            user_id="whatsapp",
-            session_id=session_id
-        )
-        if not session:
-            logger.warning(f"⚠️ Session not found for session_id={session_id}, creating new one (history may be lost!)")
-            try:
-                await session_manager.screening_session_service.create_session(
-                    app_name="screening_chat",
-                    user_id="whatsapp",
-                    session_id=session_id
-                )
-            except IntegrityError:
-                # Session was created by another concurrent request, that's fine
-                pass
-        else:
-            # Log session details for debugging
-            num_events = len(session.events) if session.events else 0
-            logger.info(f"✅ Found existing session session_id={session_id} with {num_events} events")
+    if not row or not row["agent_state"]:
+        logger.error(f"No agent state found for conversation {conversation_id}")
+        return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
 
     try:
-        await verify_or_create_session()
-    except (InterfaceError, OperationalError) as e:
-        logger.warning(f"Database connection error during session check, recreating screening session service: {e}")
-        session_manager.create_screening_session_service()
-        # Retry after recreating service
-        await verify_or_create_session()
+        # Restore agent from saved state
+        # Handle multiple levels of JSON encoding from legacy data
+        agent_state = row["agent_state"]
 
-    # Run agent and get response
-    content = types.Content(role="user", parts=[types.Part(text=incoming_msg)])
-    response_text = ""
-    completion_outcome = None
-    tool_called = False
+        # Unwrap any string encoding until we get a dict
+        # This handles double/triple-encoded JSON from before the fix
+        max_unwrap = 3  # Safety limit
+        for _ in range(max_unwrap):
+            if isinstance(agent_state, dict):
+                break
+            if isinstance(agent_state, str):
+                try:
+                    agent_state = json.loads(agent_state)
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse agent_state JSON: {agent_state[:100]}...")
+                    return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
 
-    async for event in runner.run_async(user_id="whatsapp", session_id=session_id, new_message=content):
-        # Check for conversation_complete tool call
-        if event.actions and event.actions.requested_auth_configs:
-            pass  # Not a tool call we care about
+        if not isinstance(agent_state, dict):
+            logger.error(f"agent_state is not a dict after unwrapping: {type(agent_state)}")
+            return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
 
-        # Check for function call events (tool calls)
-        if hasattr(event, 'actions') and event.actions:
-            # Check if there are function calls in the response
-            if hasattr(event.actions, 'state_delta') and event.actions.state_delta:
-                # Tool might update state
-                pass
+        # Now convert dict to JSON string for restore_agent_from_state
+        state_json = json.dumps(agent_state)
+        agent = restore_agent_from_state(state_json)
+        logger.info(f"📱 Restored agent for conversation {conversation_id}, phase={agent.state.phase.value}")
 
-        # Check for tool call in content
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                # Check for function call
-                if hasattr(part, 'function_call') and part.function_call:
-                    if part.function_call.name == "conversation_complete":
-                        tool_called = True
-                        args = part.function_call.args or {}
-                        completion_outcome = args.get("outcome", "completed")
-                        logger.info(f"🏁 conversation_complete tool called: {completion_outcome}")
+        # Process the message
+        response_text = await agent.process_message(incoming_msg)
+        logger.info(f"📱 Agent response: phase={agent.state.phase.value}, response={response_text[:100]}...")
 
-                # Get response text - capture from any response with text
-                # (not just final response, because text may come alongside tool calls)
-                if hasattr(part, 'text') and part.text:
-                    cleaned = clean_response_text(part.text)
-                    if cleaned:
-                        response_text = cleaned
+        # Save updated state back to database
+        updated_state = agent.state.to_dict()
+        await pool.execute(
+            """
+            UPDATE ats.screening_conversations
+            SET agent_state = $1, updated_at = NOW()
+            WHERE id = $2
+            """,
+            json.dumps(updated_state),  # Serialize to JSON string for JSONB column
+            conversation_id
+        )
 
-    # Fallback: Check for closing patterns if tool wasn't called
-    is_complete = tool_called
-    if not tool_called and response_text and is_closing_message(response_text):
-        is_complete = True
-        completion_outcome = "detected via closing pattern"
-        logger.info(f"🏁 Closing pattern detected in response")
+        # Save scheduled interview if agent has scheduling info
+        if agent.state.selected_date and agent.state.selected_time:
+            await _save_whatsapp_scheduled_interview(
+                pool=pool,
+                conversation_id=conversation_id,
+                selected_date=agent.state.selected_date,
+                selected_time=agent.state.selected_time,
+                selected_slot_text=agent.state.scheduled_time,
+                candidate_name=candidate_name,
+            )
 
-    return response_text, is_complete, completion_outcome
+        # Check if conversation is complete
+        complete = is_conversation_complete(agent)
+        completion_outcome = None
+        if complete:
+            outcome = get_conversation_outcome(agent)
+            completion_outcome = outcome.get("outcome", "completed")
+            logger.info(f"🏁 Conversation complete: phase={agent.state.phase.value}, outcome={completion_outcome}")
+
+        return response_text, complete, completion_outcome
+
+    except Exception as e:
+        logger.error(f"Error processing message for conversation {conversation_id}: {e}")
+        return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
 
 
 async def _webhook_impl_generic(user_id: str, incoming_msg: str) -> str:
@@ -525,7 +656,8 @@ async def webhook(
     # Check for active WhatsApp SCREENING conversation
     conv_row = await pool.fetchrow(
         """
-        SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, v.title as vacancy_title
+        SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, sc.candidate_name,
+               v.title as vacancy_title
         FROM ats.screening_conversations sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.candidate_phone = $1
@@ -554,42 +686,44 @@ async def webhook(
             pre_screening_id = str(conv_row["pre_screening_id"])
             vacancy_title = conv_row["vacancy_title"]
             conversation_id = conv_row["id"]
-            adk_session_id = conv_row["session_id"]  # Use the stored session_id, not phone!
+            candidate_name = conv_row["candidate_name"] or "Kandidaat"
 
-            logger.info(f"📱 WhatsApp webhook: Found active conversation {conversation_id}, session_id={adk_session_id}")
+            logger.info(f"📱 WhatsApp webhook: Found active conversation {conversation_id}")
 
-            # Get pre-screening config to build the agent
-            ps_row = await pool.fetchrow(
-                """
-                SELECT intro, knockout_failed_action, final_action
-                FROM ats.pre_screenings
-                WHERE id = $1
-                """,
-                conv_row["pre_screening_id"]
-            )
-
-            questions = await pool.fetch(
-                """
-                SELECT id, question_type, position, question_text, ideal_answer
-                FROM ats.pre_screening_questions
-                WHERE pre_screening_id = $1
-                ORDER BY question_type, position
-                """,
-                conv_row["pre_screening_id"]
-            )
-
-            pre_screening = {
-                "intro": ps_row["intro"],
-                "knockout_failed_action": ps_row["knockout_failed_action"],
-                "final_action": ps_row["final_action"],
-                "knockout_questions": [dict(q) for q in questions if q["question_type"] == "knockout"],
-                "qualification_questions": [dict(q) for q in questions if q["question_type"] == "qualification"],
-            }
-
-            logger.info(f"WhatsApp webhook routing to vacancy-specific agent for {vacancy_id[:8]}")
+            # Process message with the pre-screening agent
             response_text, is_complete, completion_outcome = await _webhook_impl_vacancy_specific(
-                adk_session_id, incoming_msg, vacancy_id, pre_screening, vacancy_title
+                pool, conversation_id, incoming_msg, candidate_name
             )
+
+            # Get pre-screening config for transcript processing (only needed if conversation completes)
+            pre_screening = None
+            if is_complete:
+                ps_row = await pool.fetchrow(
+                    """
+                    SELECT intro, knockout_failed_action, final_action
+                    FROM ats.pre_screenings
+                    WHERE id = $1
+                    """,
+                    conv_row["pre_screening_id"]
+                )
+
+                questions = await pool.fetch(
+                    """
+                    SELECT id, question_type, position, question_text, ideal_answer
+                    FROM ats.pre_screening_questions
+                    WHERE pre_screening_id = $1
+                    ORDER BY question_type, position
+                    """,
+                    conv_row["pre_screening_id"]
+                )
+
+                pre_screening = {
+                    "intro": ps_row["intro"],
+                    "knockout_failed_action": ps_row["knockout_failed_action"],
+                    "final_action": ps_row["final_action"],
+                    "knockout_questions": [dict(q) for q in questions if q["question_type"] == "knockout"],
+                    "qualification_questions": [dict(q) for q in questions if q["question_type"] == "qualification"],
+                }
 
             # Store messages in conversation_messages table
             if conversation_id:
@@ -623,9 +757,7 @@ async def webhook(
             response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
 
     except (InterfaceError, OperationalError) as e:
-        logger.warning(f"Database connection error, recreating services and retrying: {e}")
-        session_manager.create_session_service()
-        session_manager.create_screening_session_service()
+        logger.warning(f"Database connection error: {e}")
         # Retry with generic agent on connection error
         response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
 
@@ -915,7 +1047,7 @@ async def elevenlabs_webhook(request: Request):
 
     logger.info(f"Stored application {application_id} with {len(result.knockout_results)} knockout and {len(result.qualification_results)} qualification answers")
 
-    # Log activity: screening completed
+    # Log activity: screening completed with rich metadata
     candidate_id = existing_app["candidate_id"] if existing_app and existing_app.get("candidate_id") else None
     if candidate_id:
         activity_service = ActivityService(pool)
@@ -923,6 +1055,33 @@ async def elevenlabs_webhook(request: Request):
         # Calculate overall score from qualification results
         scores = [qr.score for qr in result.qualification_results if qr.score is not None]
         avg_score = round(sum(scores) / len(scores)) if scores else None
+
+        # Calculate knockout stats
+        knockout_passed = sum(1 for kr in result.knockout_results if kr.passed)
+        knockout_total = len(result.knockout_results)
+
+        # Get transcript preview (last user message for context)
+        transcript_preview = None
+        for msg in reversed(data.transcript):
+            if msg.get("role") == "user" and msg.get("message"):
+                transcript_preview = msg["message"][:100] + "..." if len(msg["message"]) > 100 else msg["message"]
+                break
+
+        # Build rich metadata
+        activity_metadata = {
+            "score": avg_score,
+            "knockout_passed": knockout_passed,
+            "knockout_total": knockout_total,
+            "duration_seconds": call_duration,
+        }
+        if transcript_preview:
+            activity_metadata["transcript_preview"] = transcript_preview
+
+        # If disqualified, add reason
+        if not result.overall_passed:
+            failed_knockouts = [kr.question_text for kr in result.knockout_results if not kr.passed]
+            if failed_knockouts:
+                activity_metadata["knockout_failed"] = failed_knockouts[0][:50]
 
         # Log screening completed
         event_type = ActivityEventType.QUALIFIED if result.overall_passed else ActivityEventType.DISQUALIFIED
@@ -933,7 +1092,7 @@ async def elevenlabs_webhook(request: Request):
             vacancy_id=str(vacancy_id),
             channel=ActivityChannel.VOICE,
             actor_type=ActorType.AGENT,
-            metadata={"qualified": result.overall_passed, "score": avg_score},
+            metadata=activity_metadata,
             summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
         )
 

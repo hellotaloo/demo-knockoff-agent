@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Stability test for the simple pre-screening agent.
+Stability test for the pre-screening agent.
 
 Runs multiple conversations to verify reliability.
 
 Usage:
     cd taloo-backend
-    python -m pre_screening_whatsapp_agent.test_simple_stability --runs 10
+    python -m pre_screening_whatsapp_agent.tests.test_simple_stability --runs 10
 """
 import asyncio
 import argparse
@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from .simple_agent import create_simple_agent, Phase
+from ..agent import create_simple_agent, Phase
 
 
 # Test data

@@ -252,7 +252,7 @@ class CandidateRepository:
             ) app_stats ON app_stats.candidate_id = c.id
             LEFT JOIN (
                 SELECT candidate_id, MAX(created_at) as last_activity
-                FROM ats.candidate_activities
+                FROM ats.agent_activities
                 GROUP BY candidate_id
             ) activity ON activity.candidate_id = c.id
             {where_clause}

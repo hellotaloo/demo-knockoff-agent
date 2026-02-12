@@ -279,6 +279,12 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
 
                 interview = get_interview_from_session(session)
 
+                # Debug: Log vacancy_snippet values
+                for q in interview.get("knockout_questions", []):
+                    print(f"[DEBUG] KO {q.get('id')}: vacancy_snippet = {q.get('vacancy_snippet', 'MISSING')}")
+                for q in interview.get("qualification_questions", []):
+                    print(f"[DEBUG] QUAL {q.get('id')}: vacancy_snippet = {q.get('vacancy_snippet', 'MISSING')}")
+
                 total_time = time.time() - total_start
                 print(f"[TIMING] === TOTAL GENERATION TIME: {total_time:.2f}s ===")
 
@@ -482,10 +488,37 @@ Gebruiker: {message}"""
 @router.post("/interview/generate")
 async def generate_interview(request: GenerateInterviewRequest):
     """Generate interview questions from vacancy text with SSE streaming."""
-    session_id = request.session_id or str(uuid.uuid4())
+    # Validate vacancy_id format
+    try:
+        vacancy_uuid = uuid.UUID(request.vacancy_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {request.vacancy_id}")
+
+    # Fetch vacancy from database
+    pool = await get_db_pool()
+    vacancy_row = await pool.fetchrow(
+        """
+        SELECT id, title, description
+        FROM ats.vacancies
+        WHERE id = $1
+        """,
+        vacancy_uuid
+    )
+
+    if not vacancy_row:
+        raise HTTPException(status_code=404, detail=f"Vacancy not found: {request.vacancy_id}")
+
+    vacancy_text = vacancy_row["description"]
+    if not vacancy_text:
+        raise HTTPException(status_code=400, detail="Vacancy has no description text")
+
+    # Use vacancy_id as session_id for consistency (allows restore later)
+    session_id = request.session_id or request.vacancy_id
+
+    logger.info(f"[GENERATE] Fetched vacancy '{vacancy_row['title']}' ({len(vacancy_text)} chars)")
 
     return StreamingResponse(
-        stream_interview_generation(request.vacancy_text, session_id),
+        stream_interview_generation(vacancy_text, session_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -655,11 +688,11 @@ async def restore_session_from_db(request: RestoreSessionRequest):
 
     pre_screening_id = ps_row["id"]
 
-    # Get questions (including ideal_answer for qualification questions)
+    # Get questions (including ideal_answer and vacancy_snippet)
     question_rows = await pool.fetch(
         """
-        SELECT id, question_type, position, question_text, ideal_answer, is_approved
-        FROM pre_screening_questions
+        SELECT id, question_type, position, question_text, ideal_answer, vacancy_snippet, is_approved
+        FROM ats.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -680,7 +713,8 @@ async def restore_session_from_db(request: RestoreSessionRequest):
             ko_counter += 1
             knockout_questions.append({
                 "id": q_id,
-                "question": q["question_text"]
+                "question": q["question_text"],
+                "vacancy_snippet": q["vacancy_snippet"]
             })
         else:
             q_id = f"qual_{qual_counter}"
@@ -688,7 +722,8 @@ async def restore_session_from_db(request: RestoreSessionRequest):
             qualification_questions.append({
                 "id": q_id,
                 "question": q["question_text"],
-                "ideal_answer": q["ideal_answer"] or ""
+                "ideal_answer": q["ideal_answer"] or "",
+                "vacancy_snippet": q["vacancy_snippet"]
             })
 
         if q["is_approved"]:
@@ -880,6 +915,7 @@ async def add_question(request: AddQuestionRequest):
         new_question = {
             "id": new_id,
             "question": request.question,
+            "vacancy_snippet": request.vacancy_snippet,
             "change_status": "new"
         }
         interview.setdefault("knockout_questions", []).append(new_question)
@@ -895,6 +931,7 @@ async def add_question(request: AddQuestionRequest):
             "id": new_id,
             "question": request.question,
             "ideal_answer": request.ideal_answer,
+            "vacancy_snippet": request.vacancy_snippet,
             "change_status": "new"
         }
         interview.setdefault("qualification_questions", []).append(new_question)

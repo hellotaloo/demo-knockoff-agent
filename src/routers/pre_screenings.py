@@ -8,7 +8,6 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from google.adk.events import Event, EventActions
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
-from knockout_agent.agent import create_vacancy_whatsapp_agent
 
 from src.models.pre_screening import (
     PreScreeningRequest,
@@ -54,11 +53,18 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
         raise HTTPException(status_code=404, detail="Vacancy not found")
 
     # Prepare question lists
-    knockout_questions = [{"id": q.id, "question": q.question} for q in config.knockout_questions]
+    knockout_questions = [
+        {"id": q.id, "question": q.question, "vacancy_snippet": q.vacancy_snippet}
+        for q in config.knockout_questions
+    ]
     qualification_questions = [
-        {"id": q.id, "question": q.question, "ideal_answer": q.ideal_answer}
+        {"id": q.id, "question": q.question, "ideal_answer": q.ideal_answer, "vacancy_snippet": q.vacancy_snippet}
         for q in config.qualification_questions
     ]
+
+    # Debug: Log what we're receiving
+    logger.info(f"[SAVE PRE-SCREENING] Knockout questions: {knockout_questions}")
+    logger.info(f"[SAVE PRE-SCREENING] Qualification questions: {qualification_questions}")
 
     # Save pre-screening
     ps_repo = PreScreeningRepository(pool)
@@ -71,10 +77,6 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
         qualification_questions,
         config.approved_ids
     )
-
-    # Invalidate cached screening runner so next chat uses updated questions
-    global session_manager
-    session_manager.invalidate_screening_runner(vacancy_id)
 
     return {
         "status": "success",
@@ -129,13 +131,18 @@ async def get_pre_screening(vacancy_id: str):
         if q["question_type"] == "knockout":
             q_id = f"ko_{ko_counter}"
             ko_counter += 1
-            ko_questions.append({"id": q_id, "question": q["question_text"]})
+            ko_questions.append({
+                "id": q_id,
+                "question": q["question_text"],
+                "vacancy_snippet": q["vacancy_snippet"]
+            })
             # Use ko_1 style ID instead of database UUID for consistency
             knockout_questions.append(PreScreeningQuestionResponse(
                 id=q_id,
                 question_type=q["question_type"],
                 position=q["position"],
                 question_text=q["question_text"],
+                vacancy_snippet=q["vacancy_snippet"],
                 is_approved=q["is_approved"]
             ))
         else:
@@ -145,7 +152,8 @@ async def get_pre_screening(vacancy_id: str):
             qual_questions.append({
                 "id": q_id,
                 "question": q["question_text"],
-                "ideal_answer": q["ideal_answer"] or ""
+                "ideal_answer": q["ideal_answer"] or "",
+                "vacancy_snippet": q["vacancy_snippet"]
             })
             # Use qual_1 style ID instead of database UUID for consistency
             qualification_questions.append(PreScreeningQuestionResponse(
@@ -154,6 +162,7 @@ async def get_pre_screening(vacancy_id: str):
                 position=q["position"],
                 question_text=q["question_text"],
                 ideal_answer=q["ideal_answer"],
+                vacancy_snippet=q["vacancy_snippet"],
                 is_approved=q["is_approved"]
             ))
 
@@ -254,10 +263,6 @@ async def delete_pre_screening(vacancy_id: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
 
-    # Invalidate cached screening runner
-    global session_manager
-    session_manager.invalidate_screening_runner(vacancy_id)
-
     return {
         "status": "success",
         "message": "Pre-screening configuration deleted",
@@ -342,14 +347,10 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
         logger.info(f"Voice enabled for vacancy {vacancy_id} (using master agent from ELEVENLABS_AGENT_ID)")
         # elevenlabs_agent_id stays None - we use master agent from environment
 
-    # Create WhatsApp agent
+    # Enable WhatsApp agent (uses pre_screening_whatsapp_agent with state stored per conversation)
     if request.enable_whatsapp:
-        try:
-            whatsapp_agent_id = create_vacancy_whatsapp_agent(vacancy_id, config)
-            logger.info(f"Created WhatsApp agent for vacancy {vacancy_id}: {whatsapp_agent_id}")
-        except Exception as e:
-            logger.error(f"Failed to create WhatsApp agent: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to create WhatsApp agent: {str(e)}")
+        whatsapp_agent_id = vacancy_id  # Agent ID is the vacancy ID for lookup
+        logger.info(f"WhatsApp enabled for vacancy {vacancy_id}")
 
     # Update database with agent IDs and published_at, set online
     published_at = datetime.utcnow()
@@ -447,15 +448,12 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
                 "final_action": ps_row["final_action"] or ""
             }
 
-        try:
-            whatsapp_agent_id = create_vacancy_whatsapp_agent(vacancy_id, config)
-            logger.info(f"Created WhatsApp agent for vacancy {vacancy_id}: {whatsapp_agent_id}")
+        # WhatsApp agent uses vacancy_id as identifier
+        whatsapp_agent_id = vacancy_id
+        logger.info(f"WhatsApp enabled for vacancy {vacancy_id}")
 
-            # Update the agent ID in database
-            await ps_repo.update_agent_id(pre_screening_id, "whatsapp", whatsapp_agent_id)
-        except Exception as e:
-            logger.error(f"Failed to create WhatsApp agent: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to create WhatsApp agent: {str(e)}")
+        # Update the agent ID in database
+        await ps_repo.update_agent_id(pre_screening_id, "whatsapp", whatsapp_agent_id)
 
     # Validate is_online requires published pre-screening
     if request.is_online is not None and not ps_row["published_at"]:

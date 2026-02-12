@@ -30,7 +30,7 @@ class PreScreeningRepository:
         """Get all questions for a pre-screening."""
         return await self.pool.fetch(
             """
-            SELECT id, question_type, position, question_text, ideal_answer, is_approved
+            SELECT id, question_type, position, question_text, ideal_answer, vacancy_snippet, is_approved
             FROM ats.pre_screening_questions
             WHERE pre_screening_id = $1
             ORDER BY question_type, position
@@ -97,10 +97,10 @@ class PreScreeningRepository:
                     await conn.execute(
                         """
                         INSERT INTO ats.pre_screening_questions
-                        (pre_screening_id, question_type, position, question_text, is_approved)
-                        VALUES ($1, 'knockout', $2, $3, $4)
+                        (pre_screening_id, question_type, position, question_text, vacancy_snippet, is_approved)
+                        VALUES ($1, 'knockout', $2, $3, $4, $5)
                         """,
-                        pre_screening_id, position, q["question"], is_approved
+                        pre_screening_id, position, q["question"], q.get("vacancy_snippet"), is_approved
                     )
 
                 # Insert qualification questions (with ideal_answer)
@@ -109,10 +109,10 @@ class PreScreeningRepository:
                     await conn.execute(
                         """
                         INSERT INTO ats.pre_screening_questions
-                        (pre_screening_id, question_type, position, question_text, ideal_answer, is_approved)
-                        VALUES ($1, 'qualification', $2, $3, $4, $5)
+                        (pre_screening_id, question_type, position, question_text, ideal_answer, vacancy_snippet, is_approved)
+                        VALUES ($1, 'qualification', $2, $3, $4, $5, $6)
                         """,
-                        pre_screening_id, position, q["question"], q.get("ideal_answer", ""), is_approved
+                        pre_screening_id, position, q["question"], q.get("ideal_answer", ""), q.get("vacancy_snippet"), is_approved
                     )
 
         return pre_screening_id
