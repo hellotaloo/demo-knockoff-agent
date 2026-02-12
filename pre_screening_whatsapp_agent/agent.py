@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentConfig:
     """Configuration settings for the pre-screening agent."""
-    # Models
-    model_generate: str = "gemini-2.5-flash"  # For response generation
-    model_evaluate: str = "gemini-2.0-flash-lite"  # Fast model for JSON evaluations
+    # Models - gemini-2.5-flash-lite is fastest based on testing
+    model_generate: str = "gemini-2.5-flash-lite"  # Fast model for response generation
+    model_evaluate: str = "gemini-2.5-flash-lite"  # Fast model for JSON evaluations
 
     # Exit thresholds
     max_unrelated_answers: int = 2  # Exit after this many irrelevant answers
@@ -254,18 +254,22 @@ Antwoord ALLEEN met een JSON object:
 - ready=true als de kandidaat instemt, bevestigt, of aangeeft klaar te zijn (ja, ok, yes, sure, prima, etc.)
 - ready=false als de kandidaat twijfelt, een vraag stelt, of nog niet wil beginnen"""
 
-READY_START_PROMPT = """De kandidaat is klaar om te beginnen. Reageer positief en stel direct de eerste vraag.
+READY_START_PROMPT = """Reageer positief op de kandidaat en stel direct de eerste vraag.
 
-Kandidaat: {candidate_name}
-Hun antwoord: "{answer}"
-Eerste vraag: "{first_question}"
+Context (niet herhalen in je antwoord):
+- Kandidaat zei: "{answer}"
+- Eerste vraag om te stellen: {first_question}
 
-Pas je reactie aan op hun antwoord:
-- Kort antwoord ("ja", "ok") → gewoon doorgaan: "Oke, dan beginnen we!" / "Prima, hier komt de eerste vraag:"
-- Normaal antwoord → positief: "Fijn! Laten we beginnen." / "Mooi, daar gaan we!"
-- Enthousiast antwoord → enthousiast terug: "Top! 🚀 Daar gaan we!" / "Geweldig, laten we starten!"
+Schrijf een natuurlijk WhatsApp bericht:
+1. Korte positieve reactie (1 zin, bijv. "Top! Daar gaan we." of "Prima, laten we beginnen!")
+2. Stel de eerste vraag
 
-Varieer je woordkeuze. Houd het kort. Max 2 zinnen."""
+Voorbeeld output:
+Top! 🚀 Daar gaan we!
+
+Mag je wettelijk werken in België?
+
+BELANGRIJK: Geef ALLEEN het bericht, geen labels zoals "Reactie:" of "Vraag:"."""
 
 KNOCKOUT_ASK_PROMPT = """Je bent een recruiter. Stel deze vraag op een vriendelijke, directe manier:
 
@@ -286,27 +290,34 @@ passed=false ALLEEN als de kandidaat expliciet ontkent of aangeeft NIET te voldo
 
 Bij twijfel: passed=true."""
 
-KNOCKOUT_PASS_NEXT_PROMPT = """Je bent een recruiter in een WhatsApp chat. Reageer kort op het antwoord en stel de volgende vraag.
+KNOCKOUT_PASS_NEXT_PROMPT = """Reageer kort en stel de volgende vraag.
 
-Antwoord van kandidaat: "{answer}"
-Volgende vraag: "{next_question}"
+Context (niet herhalen):
+- Kandidaat zei: "{answer}"
+- Volgende vraag: {next_question}
 
-VARIATIE IN REACTIES - pas je enthousiasme aan op basis van het antwoord:
-- Kort/basic antwoord ("ja", "ok") → neutrale reactie: "Oke, noted!" / "Check!" / "Begrepen."
-- Normaal antwoord → positieve reactie: "Fijn!" / "Mooi!" / "Prima!"
-- Uitgebreid/enthousiast antwoord → enthousiaste reactie: "Top!" / "Geweldig!" / "Helemaal goed!"
+Schrijf een natuurlijk WhatsApp bericht:
+1. Korte reactie (bijv. "Oke!" / "Check!" / "Fijn!" / "Top!")
+2. Stel de vraag
 
-BELANGRIJK: Varieer je woordkeuze! Gebruik NIET steeds dezelfde woorden. Wees creatief en natuurlijk.
-Geef EEN kort bericht. Max 2 zinnen."""
+Voorbeeld:
+Check! ✓
 
-KNOCKOUT_PASS_DONE_PROMPT = """Alle basisvragen zijn gecheckt! Nu een vervolgvraag.
+Heb je ervaring met X?
 
-Antwoord van kandidaat: "{answer}"
-Volgende vraag: "{next_question}"
+GEEN labels zoals "Reactie:" of "Vraag:". Max 2 zinnen."""
 
-Reageer kort positief (aangepast aan hun antwoord - zie hierboven) en stel de open vraag.
-Varieer je woordkeuze, gebruik niet steeds "Super" of "Top".
-Max 2 zinnen."""
+KNOCKOUT_PASS_DONE_PROMPT = """Basisvragen zijn klaar! Nu een open vraag.
+
+Context (niet herhalen):
+- Kandidaat zei: "{answer}"
+- Volgende vraag: {next_question}
+
+Schrijf een natuurlijk WhatsApp bericht:
+1. Korte positieve reactie (bijv. "Prima!" / "Mooi!" / "Top!")
+2. Stel de open vraag
+
+GEEN labels. Max 2 zinnen."""
 
 KNOCKOUT_FAIL_PROMPT = """De kandidaat voldoet niet aan een vereiste voor deze specifieke vacature.
 
@@ -452,6 +463,9 @@ class SimplePreScreeningAgent:
 
         The phase logic is handled here in Python, not by the LLM.
         """
+        import time
+        t0 = time.perf_counter()
+
         # Check for forbidden content FIRST (swear words, hate speech, etc.)
         has_forbidden, matched_term = contains_forbidden_content(user_message)
         if has_forbidden:
@@ -459,21 +473,26 @@ class SimplePreScreeningAgent:
             return await self._handle_inappropriate_exit()
 
         phase = self.state.phase
+        logger.info(f"🔄 Processing message in phase: {phase.value}")
 
         if phase == Phase.HELLO:
-            return await self._handle_hello(user_message)
+            result = await self._handle_hello(user_message)
         elif phase == Phase.KNOCKOUT:
-            return await self._handle_knockout(user_message)
+            result = await self._handle_knockout(user_message)
         elif phase == Phase.CONFIRM_FAIL:
-            return await self._handle_confirm_fail(user_message)
+            result = await self._handle_confirm_fail(user_message)
         elif phase == Phase.ALTERNATE:
-            return await self._handle_alternate(user_message)
+            result = await self._handle_alternate(user_message)
         elif phase == Phase.OPEN:
-            return await self._handle_open(user_message)
+            result = await self._handle_open(user_message)
         elif phase == Phase.SCHEDULE:
-            return await self._handle_schedule(user_message)
+            result = await self._handle_schedule(user_message)
         else:
-            return "Bedankt voor je tijd!"
+            result = "Bedankt voor je tijd!"
+
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(f"⏱️ process_message total: {elapsed:.0f}ms (phase: {phase.value})")
+        return result
 
     async def get_initial_message(self) -> str:
         """Get the initial welcome message."""
@@ -492,16 +511,29 @@ class SimplePreScreeningAgent:
         """Handle hello phase - wait for confirmation to start."""
         question = f"Ben je klaar om te beginnen met de screening voor {self.state.vacancy_title}?"
 
-        # Check regex first - if it matches, we can skip the unrelated check entirely
-        is_ready, regex_matched = await self._evaluate_ready(user_message)
+        # Check regex first - if it matches, we can skip the LLM calls entirely
+        is_ready, regex_matched = self._evaluate_ready_regex(user_message)
 
         if regex_matched:
-            # Clear yes/no is obviously related, skip LLM unrelated check
+            # Clear yes/no is obviously related, skip LLM checks
             is_unrelated = False
-            logger.debug(f"Regex matched, skipping _is_unrelated check")
+            speculative_response = None
+            logger.info(f"✅ HELLO: Regex matched, skipping LLM checks")
         else:
-            # Ambiguous answer - need to check if it's related
-            is_unrelated = await self._is_unrelated(question, user_message)
+            # Ambiguous answer - run eval + speculative response generation in parallel
+            import time
+            t_parallel = time.perf_counter()
+            logger.info(f"🔀 HELLO: No regex match, running PARALLEL eval + speculative generation...")
+
+            ready_task = self._evaluate_ready_llm(user_message)
+            unrelated_task = self._is_unrelated(question, user_message)
+            speculative_task = self._generate_speculative_hello_ready(user_message)
+
+            is_ready, is_unrelated, speculative_response = await asyncio.gather(
+                ready_task, unrelated_task, speculative_task
+            )
+            parallel_ms = (time.perf_counter() - t_parallel) * 1000
+            logger.info(f"⏱️ HELLO parallel (eval + generate): {parallel_ms:.0f}ms")
 
         # Check for unrelated answer first
         if is_unrelated:
@@ -518,16 +550,21 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
         if is_ready:
             self.state.unrelated_count = 0  # Reset on valid answer
             self.state.phase = Phase.KNOCKOUT
-            # Use a special prompt that acknowledges readiness AND asks first question
+            # Use speculative response if available
+            if speculative_response:
+                logger.info(f"✅ HELLO: Using speculative response (saved ~2s)")
+                return speculative_response
+            # Fallback: generate response
             first_q = self.state.knockout_questions[self.state.knockout_index]
             prompt = READY_START_PROMPT.format(
                 candidate_name=self.state.candidate_name,
-                answer=user_message,  # Pass actual answer for response variation
+                answer=user_message,
                 first_question=first_q["question"],
             )
             return await self._generate(prompt)
         else:
-            # Ask again with a friendly prompt
+            # Not ready - speculative response is discarded
+            logger.info(f"⚠️ HELLO: Not ready, discarding speculative response")
             prompt = f"""De kandidaat heeft geantwoord: "{user_message}"
 
 Ze zijn nog niet klaar om te beginnen of hadden een vraag.
@@ -539,16 +576,30 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
         """Handle knockout phase - evaluate answer, move to next or fail."""
         current_q = self.state.knockout_questions[self.state.knockout_index]
 
-        # Check regex first - if it matches, we can skip the unrelated check entirely
-        eval_result, regex_matched = await self._evaluate_knockout(user_message, current_q)
+        # Check regex first - if it matches, we can skip the LLM calls entirely
+        eval_result, regex_matched = self._evaluate_knockout_regex(user_message)
 
         if regex_matched:
-            # Clear yes/no is obviously related, skip LLM unrelated check
+            # Clear yes/no is obviously related, skip LLM checks
             is_unrelated = False
-            logger.debug(f"Knockout regex matched, skipping _is_unrelated check")
+            speculative_response = None
+            logger.info(f"✅ KNOCKOUT: Regex matched, skipping LLM checks")
         else:
-            # Ambiguous answer - need to check if it's related
-            is_unrelated = await self._is_unrelated(current_q["question"], user_message)
+            # Ambiguous answer - run eval + speculative response generation in parallel
+            # This is the key optimization: we generate the "pass" response while evaluating
+            import time
+            t_parallel = time.perf_counter()
+            logger.info(f"🔀 KNOCKOUT: No regex match, running PARALLEL eval + speculative generation...")
+
+            eval_task = self._evaluate_knockout_llm(user_message, current_q)
+            unrelated_task = self._is_unrelated(current_q["question"], user_message)
+            speculative_task = self._generate_speculative_knockout_pass(user_message)
+
+            eval_result, is_unrelated, speculative_response = await asyncio.gather(
+                eval_task, unrelated_task, speculative_task
+            )
+            parallel_ms = (time.perf_counter() - t_parallel) * 1000
+            logger.info(f"⏱️ KNOCKOUT parallel (eval + generate): {parallel_ms:.0f}ms")
 
         # Check for unrelated answer
         if is_unrelated:
@@ -579,24 +630,33 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
             if self.state.knockout_index >= len(self.state.knockout_questions):
                 # All knockout questions passed - move to open questions
                 self.state.phase = Phase.OPEN
+                # Use speculative response if available, otherwise generate
+                if speculative_response:
+                    logger.info(f"✅ KNOCKOUT: Using speculative response (saved ~2s)")
+                    return speculative_response
                 next_q = self.state.open_questions[self.state.open_index]
                 prompt = KNOCKOUT_PASS_DONE_PROMPT.format(
                     candidate_name=self.state.candidate_name,
-                    answer=user_message,  # Use actual user message for response variation
+                    answer=user_message,
                     next_question=next_q,
                 )
                 return await self._generate(prompt)
             else:
-                # More knockout questions - combined positive + next question
+                # More knockout questions - use speculative or generate
+                if speculative_response:
+                    logger.info(f"✅ KNOCKOUT: Using speculative response (saved ~2s)")
+                    return speculative_response
                 next_q = self.state.knockout_questions[self.state.knockout_index]
                 prompt = KNOCKOUT_PASS_NEXT_PROMPT.format(
                     candidate_name=self.state.candidate_name,
-                    answer=user_message,  # Use actual user message for response variation
+                    answer=user_message,
                     next_question=next_q["question"],
                 )
                 return await self._generate(prompt)
         else:
             # Knockout failed - ask about alternative opportunities
+            # Speculative response is discarded
+            logger.info(f"⚠️ KNOCKOUT: Failed, discarding speculative response")
             self.state.phase = Phase.CONFIRM_FAIL
             self.state.failed_requirement = current_q["requirement"]
             return await self._generate_fail_response(current_q, user_message)
@@ -802,26 +862,22 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
         )
         return await self._generate(prompt)
 
-    async def _evaluate_ready(self, message: str) -> tuple[bool, bool]:
+    def _evaluate_ready_regex(self, message: str) -> tuple[bool, bool]:
         """
-        Check if user is ready to start. Uses regex for obvious patterns, LLM for ambiguous.
+        Check if user is ready to start using regex only (no LLM).
 
         Returns:
             tuple: (is_ready, regex_matched)
-            - is_ready: True if user wants to start, False if not
-            - regex_matched: True if regex matched (can skip _is_unrelated check)
+            - is_ready: True if user wants to start, False if not (only valid if regex_matched=True)
+            - regex_matched: True if regex matched a clear yes/no pattern
         """
         import re
         msg = message.lower().strip()
 
         # Obvious YES patterns (Dutch + English)
-        # Match exact short answers OR sentences starting with clear yes-indicators
         yes_patterns = [
-            # Exact short answers
             r"^(ja|yes|yep|yeah|ok|oké|oke|prima|sure|zeker|absoluut|natuurlijk|tuurlijk|graag|goed|top|perfect|laten we|let'?s go|go|start|begin|ready|klaar)[\s!.]*$",
-            # Sentences starting with yes-indicators (followed by comma, space, or punctuation)
             r"^(ja|yes|ok|oké|prima|zeker|absoluut|natuurlijk|tuurlijk|graag|goed|top|perfect)[,!\s]",
-            # Common phrases
             r"^(ja\s*(hoor|graag|zeker|prima)|yes\s*(please|sure))",
             r"^(ik ben (er\s*)?(klaar|ready)|i'?m ready)",
             r"^(geen probleem|no problem)",
@@ -829,11 +885,8 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
 
         # Obvious NO patterns (Dutch + English)
         no_patterns = [
-            # Exact short answers
             r"^(nee|no|nope|niet nu|later|nog niet|wacht|wait|stop|cancel|annuleer)[\s!.]*$",
-            # Sentences starting with no-indicators
             r"^(nee|no|nope)[,!\s]",
-            # Common negative phrases
             r"^(ik (heb|kan) (geen|niet)|i (don'?t|can'?t))",
             r"^(helaas|sorry).*(niet|no|kan niet|lukt niet)",
         ]
@@ -841,19 +894,26 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
         for pattern in yes_patterns:
             if re.match(pattern, msg):
                 logger.debug(f"Regex match YES: '{msg}'")
-                return True, True  # is_ready=True, regex_matched=True
+                return True, True
 
         for pattern in no_patterns:
             if re.match(pattern, msg):
                 logger.debug(f"Regex match NO: '{msg}'")
-                return False, True  # is_ready=False, regex_matched=True
+                return False, True
 
-        # Ambiguous - use LLM
-        logger.debug(f"No regex match, using LLM for: '{msg}'")
+        return False, False  # No regex match
+
+    async def _evaluate_ready_llm(self, message: str) -> bool:
+        """
+        Check if user is ready to start using LLM (called when regex doesn't match).
+
+        Returns:
+            bool: True if user wants to start
+        """
         prompt = INTENT_READY_PROMPT.format(message=message)
         response = await self._evaluate(prompt)
         result = self._parse_json_response(response, {"ready": True})
-        return result.get("ready", True), False  # regex_matched=False
+        return result.get("ready", True)
 
     async def _evaluate_interest(self, message: str) -> tuple[bool, bool]:
         """
@@ -933,26 +993,22 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
         )
         return await self._generate(prompt)
 
-    async def _evaluate_knockout(self, answer: str, question: dict) -> tuple[dict, bool]:
+    def _evaluate_knockout_regex(self, answer: str) -> tuple[dict, bool]:
         """
-        Evaluate if knockout answer passes. Uses regex for clear yes/no, LLM for ambiguous.
+        Evaluate if knockout answer passes using regex only (no LLM).
 
         Returns:
             tuple: (eval_result, regex_matched)
-            - eval_result: {"passed": bool, "summary": str}
-            - regex_matched: True if regex matched (can skip _is_unrelated check)
+            - eval_result: {"passed": bool, "summary": str} (only valid if regex_matched=True)
+            - regex_matched: True if regex matched a clear yes/no pattern
         """
         import re
         msg = answer.lower().strip()
 
         # Clear YES patterns - candidate confirms they meet requirement
-        # Match exact short answers OR sentences starting with clear yes-indicators
         yes_patterns = [
-            # Exact short answers
             r"^(ja|yes|yep|yeah|ok|oké|oke|zeker|absoluut|natuurlijk|tuurlijk|klopt|correct|inderdaad|dat klopt)[\s!.]*$",
-            # Sentences starting with yes-indicators
             r"^(ja|yes|ok|oké|zeker|absoluut|natuurlijk|tuurlijk|klopt|correct|inderdaad)[,!\s]",
-            # Common confirmation phrases
             r"^(ja\s*(hoor|zeker|absoluut|inderdaad|dat|natuurlijk))",
             r"^(dat klopt|dat is correct|dat heb ik|die heb ik)",
             r"^(geen probleem|no problem)",
@@ -960,11 +1016,8 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
 
         # Clear NO patterns - candidate confirms they DON'T meet requirement
         no_patterns = [
-            # Exact short answers
             r"^(nee|no|nope|helaas|jammer)[\s!.]*$",
-            # Sentences starting with no-indicators
             r"^(nee|no|nope|helaas|jammer)[,!\s]",
-            # Common negative phrases
             r"^(nee\s*(helaas|jammer|dat|sorry))",
             r"^(dat heb ik niet|die heb ik niet|ik heb geen)",
             r"(helaas niet|kan ik niet|lukt niet|heb ik niet)",
@@ -976,18 +1029,25 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
                 return {"passed": True, "summary": "Ja, voldoet aan vereiste"}, True
 
         for pattern in no_patterns:
-            if re.search(pattern, msg):  # Use search for phrases that can appear anywhere
+            if re.search(pattern, msg):
                 logger.debug(f"Knockout regex match NO: '{msg}'")
                 return {"passed": False, "summary": "Nee, voldoet niet aan vereiste"}, True
 
-        # Ambiguous - use LLM
-        logger.debug(f"Knockout no regex match, using LLM for: '{msg}'")
+        return {"passed": True, "summary": ""}, False  # No regex match
+
+    async def _evaluate_knockout_llm(self, answer: str, question: dict) -> dict:
+        """
+        Evaluate if knockout answer passes using LLM (called when regex doesn't match).
+
+        Returns:
+            dict: {"passed": bool, "summary": str}
+        """
         prompt = KNOCKOUT_EVAL_PROMPT.format(
             requirement=question.get("requirement", question["question"]),
             answer=answer,
         )
         response = await self._evaluate(prompt)
-        return self._parse_json_response(response, {"passed": True, "summary": answer[:100]}), False
+        return self._parse_json_response(response, {"passed": True, "summary": answer[:100]})
 
     async def _generate_fail_response(self, question: dict, answer: str) -> str:
         """Generate knockout fail response."""
@@ -995,6 +1055,54 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
             candidate_name=self.state.candidate_name,
             requirement=question.get("requirement", question["question"]),
             answer=answer,
+        )
+        return await self._generate(prompt)
+
+    async def _generate_speculative_knockout_pass(self, user_message: str) -> str:
+        """
+        Speculatively generate response assuming user passed the current knockout question.
+
+        This runs in parallel with evaluation - if user actually passed, we use this response.
+        If user failed/unrelated, we discard it and generate the appropriate response.
+
+        This optimization saves ~2s on the happy path (most common case).
+        """
+        # Figure out what the next question will be (assuming pass)
+        next_knockout_index = self.state.knockout_index + 1
+
+        if next_knockout_index >= len(self.state.knockout_questions):
+            # This was the last knockout - next is open questions
+            next_q = self.state.open_questions[self.state.open_index]
+            prompt = KNOCKOUT_PASS_DONE_PROMPT.format(
+                candidate_name=self.state.candidate_name,
+                answer=user_message,
+                next_question=next_q,
+            )
+        else:
+            # More knockout questions coming
+            next_q = self.state.knockout_questions[next_knockout_index]
+            prompt = KNOCKOUT_PASS_NEXT_PROMPT.format(
+                candidate_name=self.state.candidate_name,
+                answer=user_message,
+                next_question=next_q["question"],
+            )
+
+        return await self._generate(prompt)
+
+    async def _generate_speculative_hello_ready(self, user_message: str) -> str:
+        """
+        Speculatively generate response assuming user is ready to start screening.
+
+        This runs in parallel with evaluation - if user is actually ready, we use this response.
+        If user isn't ready/unrelated, we discard it and generate the appropriate response.
+
+        This optimization saves ~2s on the happy path (most common case).
+        """
+        first_q = self.state.knockout_questions[self.state.knockout_index]
+        prompt = READY_START_PROMPT.format(
+            candidate_name=self.state.candidate_name,
+            answer=user_message,
+            first_question=first_q["question"],
         )
         return await self._generate(prompt)
 
@@ -1023,26 +1131,34 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
 
     async def _generate(self, prompt: str) -> str:
         """Generate text using LLM."""
+        import time
         from google import genai
 
+        t0 = time.perf_counter()
         client = genai.Client()
         response = await client.aio.models.generate_content(
             model=self.config.model_generate,
             contents=prompt,
         )
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(f"⏱️ _generate ({self.config.model_generate}): {elapsed:.0f}ms")
         # Convert Markdown bold (**text**) to WhatsApp bold (*text*)
         text = response.text.replace("**", "*")
         return text
 
     async def _evaluate(self, prompt: str) -> str:
         """Fast evaluation using lightweight model for JSON responses."""
+        import time
         from google import genai
 
+        t0 = time.perf_counter()
         client = genai.Client()
         response = await client.aio.models.generate_content(
             model=self.config.model_evaluate,
             contents=prompt,
         )
+        elapsed = (time.perf_counter() - t0) * 1000
+        logger.info(f"⏱️ _evaluate ({self.config.model_evaluate}): {elapsed:.0f}ms")
         return response.text
 
 

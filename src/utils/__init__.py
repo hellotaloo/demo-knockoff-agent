@@ -12,6 +12,14 @@ from .random_candidate import (
     generate_random_candidate,
     generate_batch,
 )
+from .conversation_cache import (
+    conversation_cache,
+    agent_cache,
+    ConversationType,
+    CachedConversation,
+    CachedAgent,
+    clear_all_caches,
+)
 
 __all__ = [
     "DUTCH_DAYS",
@@ -21,4 +29,10 @@ __all__ = [
     "RandomCandidate",
     "generate_random_candidate",
     "generate_batch",
+    "conversation_cache",
+    "agent_cache",
+    "ConversationType",
+    "CachedConversation",
+    "CachedAgent",
+    "clear_all_caches",
 ]

@@ -29,6 +29,7 @@ from src.config import (
     TWILIO_AUTH_TOKEN,
     TWILIO_WHATSAPP_NUMBER
 )
+from src.utils.conversation_cache import conversation_cache
 
 logger = logging.getLogger(__name__)
 
@@ -675,6 +676,8 @@ Summary: {verification_result.verification_summary}
     # Handle completion
     if is_complete:
         logger.info(f"Triggering background processing for {conversation_id}")
+        # Invalidate cache so next message gets fresh routing
+        await conversation_cache.invalidate(phone_normalized)
         asyncio.create_task(_process_document_collection(
             pool, conversation_id, conv_row["application_id"], completion_outcome
         ))
@@ -682,6 +685,8 @@ Summary: {verification_result.verification_summary}
     # Check max retries
     if retry_count >= 3 and not is_complete:
         logger.warning(f"Max retries reached for {conversation_id}")
+        # Invalidate cache since conversation is ending
+        await conversation_cache.invalidate(phone_normalized)
         await pool.execute(
             """UPDATE ats.document_collection_conversations
             SET status = 'needs_review', completed_at = NOW()

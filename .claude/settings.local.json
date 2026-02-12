@@ -89,7 +89,10 @@
       "Read(//Users/lunar/.claude/**)",
       "mcp__adk-docs-mcp__list_doc_sources",
       "mcp__adk-docs-mcp__fetch_docs",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "mcp__plugin_supabase_supabase__get_logs",
+      "mcp__plugin_supabase_supabase__merge_branch",
+      "Bash(twilio profiles:list:*)"
     ],
     "defaultMode": "acceptEdits"
   },

@@ -28,6 +28,8 @@ from src.models.webhook import ElevenLabsWebhookPayload
 from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
 from src.database import get_db_pool
+from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
+from src.services.whatsapp_service import send_whatsapp_message
 
 logger = logging.getLogger(__name__)
 
@@ -424,6 +426,57 @@ async def _save_whatsapp_scheduled_interview(
         # Don't re-raise - scheduling failure shouldn't break the conversation
 
 
+async def _save_agent_state_background(
+    pool,
+    conversation_id: uuid.UUID,
+    agent_state_dict: dict,
+):
+    """Background task to save agent state to DB."""
+    try:
+        await pool.execute(
+            """
+            UPDATE ats.screening_conversations
+            SET agent_state = $1, updated_at = NOW()
+            WHERE id = $2
+            """,
+            json.dumps(agent_state_dict),
+            conversation_id
+        )
+        logger.debug(f"💾 Agent state saved for {conversation_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save agent state for {conversation_id}: {e}")
+
+
+async def _save_messages_background(
+    pool,
+    conversation_id: uuid.UUID,
+    user_message: str,
+    agent_response: Optional[str],
+):
+    """Background task to save conversation messages to DB."""
+    try:
+        # Store user message
+        await pool.execute(
+            """
+            INSERT INTO ats.conversation_messages (conversation_id, role, message)
+            VALUES ($1, 'user', $2)
+            """,
+            conversation_id, user_message
+        )
+        # Store agent response
+        if agent_response:
+            await pool.execute(
+                """
+                INSERT INTO ats.conversation_messages (conversation_id, role, message)
+                VALUES ($1, 'agent', $2)
+                """,
+                conversation_id, agent_response
+            )
+        logger.debug(f"💾 Messages saved for {conversation_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save messages for {conversation_id}: {e}")
+
+
 async def _webhook_impl_vacancy_specific(
     pool,
     conversation_id: uuid.UUID,
@@ -432,6 +485,9 @@ async def _webhook_impl_vacancy_specific(
 ) -> tuple[str, bool, str | None]:
     """
     Handle webhook using pre-screening WhatsApp agent.
+
+    Uses in-memory agent cache to avoid loading/restoring agent state from DB
+    on every message. DB writes happen in background to minimize latency.
 
     Args:
         pool: Database connection pool
@@ -445,71 +501,94 @@ async def _webhook_impl_vacancy_specific(
         - is_complete: True if conversation is in terminal state (DONE or FAILED)
         - completion_outcome: The outcome description if complete, None otherwise
     """
-    # Load agent state from database
-    row = await pool.fetchrow(
-        """
-        SELECT agent_state FROM ats.screening_conversations WHERE id = $1
-        """,
-        conversation_id
-    )
-
-    if not row or not row["agent_state"]:
-        logger.error(f"No agent state found for conversation {conversation_id}")
-        return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
+    import time as time_module
+    conv_id_str = str(conversation_id)
+    timings = {}
+    t_start = time_module.perf_counter()
 
     try:
-        # Restore agent from saved state
-        # Handle multiple levels of JSON encoding from legacy data
-        agent_state = row["agent_state"]
+        # Check agent cache first
+        t0 = time_module.perf_counter()
+        agent = await agent_cache.get(conv_id_str)
+        timings["cache_check"] = (time_module.perf_counter() - t0) * 1000
 
-        # Unwrap any string encoding until we get a dict
-        # This handles double/triple-encoded JSON from before the fix
-        max_unwrap = 3  # Safety limit
-        for _ in range(max_unwrap):
-            if isinstance(agent_state, dict):
-                break
-            if isinstance(agent_state, str):
-                try:
-                    agent_state = json.loads(agent_state)
-                except json.JSONDecodeError:
-                    logger.error(f"Failed to parse agent_state JSON: {agent_state[:100]}...")
-                    return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
+        if agent:
+            logger.info(f"⚡ Agent cache HIT for conversation {conversation_id}")
+            timings["cache_hit"] = True
+        else:
+            timings["cache_hit"] = False
+            # Cache miss - load from database
+            logger.info(f"💾 Agent cache MISS for conversation {conversation_id} - loading from DB...")
+            t0 = time_module.perf_counter()
+            row = await pool.fetchrow(
+                """
+                SELECT agent_state FROM ats.screening_conversations WHERE id = $1
+                """,
+                conversation_id
+            )
+            timings["db_load"] = (time_module.perf_counter() - t0) * 1000
 
-        if not isinstance(agent_state, dict):
-            logger.error(f"agent_state is not a dict after unwrapping: {type(agent_state)}")
-            return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
+            if not row or not row["agent_state"]:
+                logger.error(f"No agent state found for conversation {conversation_id}")
+                return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
 
-        # Now convert dict to JSON string for restore_agent_from_state
-        state_json = json.dumps(agent_state)
-        agent = restore_agent_from_state(state_json)
-        logger.info(f"📱 Restored agent for conversation {conversation_id}, phase={agent.state.phase.value}")
+            # Restore agent from saved state
+            # Handle multiple levels of JSON encoding from legacy data
+            agent_state = row["agent_state"]
 
-        # Process the message
+            # Unwrap any string encoding until we get a dict
+            t0 = time_module.perf_counter()
+            max_unwrap = 3
+            for _ in range(max_unwrap):
+                if isinstance(agent_state, dict):
+                    break
+                if isinstance(agent_state, str):
+                    try:
+                        agent_state = json.loads(agent_state)
+                    except json.JSONDecodeError:
+                        logger.error(f"Failed to parse agent_state JSON: {agent_state[:100]}...")
+                        return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
+
+            if not isinstance(agent_state, dict):
+                logger.error(f"agent_state is not a dict after unwrapping: {type(agent_state)}")
+                return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
+
+            # Restore agent and cache it
+            state_json = json.dumps(agent_state)
+            agent = restore_agent_from_state(state_json)
+            timings["restore_agent"] = (time_module.perf_counter() - t0) * 1000
+
+            t0 = time_module.perf_counter()
+            await agent_cache.set(conv_id_str, agent)
+            timings["cache_set"] = (time_module.perf_counter() - t0) * 1000
+            logger.info(f"📱 Restored agent for conversation {conversation_id}, phase={agent.state.phase.value}")
+
+        # Process the message (this is the LLM call - main latency)
+        t0 = time_module.perf_counter()
         response_text = await agent.process_message(incoming_msg)
+        timings["llm_call"] = (time_module.perf_counter() - t0) * 1000
+
+        timings["total"] = (time_module.perf_counter() - t_start) * 1000
+        logger.info(f"⏱️ TIMINGS: {timings}")
         logger.info(f"📱 Agent response: phase={agent.state.phase.value}, response={response_text[:100]}...")
 
-        # Save updated state back to database
-        updated_state = agent.state.to_dict()
-        await pool.execute(
-            """
-            UPDATE ats.screening_conversations
-            SET agent_state = $1, updated_at = NOW()
-            WHERE id = $2
-            """,
-            json.dumps(updated_state),  # Serialize to JSON string for JSONB column
-            conversation_id
-        )
+        # Update cache with new state
+        await agent_cache.set(conv_id_str, agent)
 
-        # Save scheduled interview if agent has scheduling info
+        # Save state to DB in background (don't wait)
+        updated_state = agent.state.to_dict()
+        asyncio.create_task(_save_agent_state_background(pool, conversation_id, updated_state))
+
+        # Save scheduled interview if agent has scheduling info (in background)
         if agent.state.selected_date and agent.state.selected_time:
-            await _save_whatsapp_scheduled_interview(
+            asyncio.create_task(_save_whatsapp_scheduled_interview(
                 pool=pool,
                 conversation_id=conversation_id,
                 selected_date=agent.state.selected_date,
                 selected_time=agent.state.selected_time,
                 selected_slot_text=agent.state.scheduled_time,
                 candidate_name=candidate_name,
-            )
+            ))
 
         # Check if conversation is complete
         complete = is_conversation_complete(agent)
@@ -518,6 +597,8 @@ async def _webhook_impl_vacancy_specific(
             outcome = get_conversation_outcome(agent)
             completion_outcome = outcome.get("outcome", "completed")
             logger.info(f"🏁 Conversation complete: phase={agent.state.phase.value}, outcome={completion_outcome}")
+            # Invalidate agent cache on completion
+            await agent_cache.invalidate(conv_id_str)
 
         return response_text, complete, completion_outcome
 
@@ -534,6 +615,109 @@ async def _webhook_impl_generic(user_id: str, incoming_msg: str) -> str:
     """
     logger.info(f"No active screening for {user_id}, returning default message")
     return "Hallo! Er is momenteel geen actief gesprek. Als je bent uitgenodigd voor een screening, wacht dan even op ons bericht. 👋"
+
+
+async def _process_and_respond_async(
+    phone_normalized: str,
+    incoming_msg: str,
+    conv_row: Optional[dict],
+):
+    """
+    Background task to process message and send response via Twilio REST API.
+
+    This enables fast webhook response times by processing asynchronously.
+    """
+    import time as time_module
+    t_start = time_module.perf_counter()
+
+    try:
+        pool = await get_db_pool()
+        response_text = None
+        is_complete = False
+        completion_outcome = None
+        conversation_id = None
+        vacancy_id = None
+        pre_screening = None
+
+        if conv_row:
+            # Found active outbound screening - use vacancy-specific agent
+            vacancy_id = str(conv_row["vacancy_id"])
+            conversation_id = conv_row["id"]
+            candidate_name = conv_row["candidate_name"] or "Kandidaat"
+
+            logger.info(f"📱 [ASYNC] Processing message for conversation {conversation_id}")
+
+            # Process message with the pre-screening agent
+            response_text, is_complete, completion_outcome = await _webhook_impl_vacancy_specific(
+                pool, conversation_id, incoming_msg, candidate_name
+            )
+
+            # Get pre-screening config for transcript processing (only needed if conversation completes)
+            if is_complete:
+                ps_row = await pool.fetchrow(
+                    """
+                    SELECT intro, knockout_failed_action, final_action
+                    FROM ats.pre_screenings
+                    WHERE id = $1
+                    """,
+                    conv_row["pre_screening_id"]
+                )
+
+                questions = await pool.fetch(
+                    """
+                    SELECT id, question_type, position, question_text, ideal_answer
+                    FROM ats.pre_screening_questions
+                    WHERE pre_screening_id = $1
+                    ORDER BY question_type, position
+                    """,
+                    conv_row["pre_screening_id"]
+                )
+
+                pre_screening = {
+                    "intro": ps_row["intro"],
+                    "knockout_failed_action": ps_row["knockout_failed_action"],
+                    "final_action": ps_row["final_action"],
+                    "knockout_questions": [dict(q) for q in questions if q["question_type"] == "knockout"],
+                    "qualification_questions": [dict(q) for q in questions if q["question_type"] == "qualification"],
+                }
+
+            # Store messages in background (don't wait)
+            if conversation_id:
+                asyncio.create_task(_save_messages_background(
+                    pool, conversation_id, incoming_msg, response_text
+                ))
+
+            # If conversation is complete, trigger transcript processing in background
+            if is_complete and conversation_id:
+                logger.info(f"🔄 Triggering background transcript processing for conversation {conversation_id}")
+                await conversation_cache.invalidate(phone_normalized)
+                asyncio.create_task(_safe_process_conversation(
+                    pool, conversation_id, vacancy_id, pre_screening, completion_outcome
+                ))
+        else:
+            # No active outbound screening - use generic demo agent
+            logger.info(f"[ASYNC] No active screening for {phone_normalized}")
+            response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
+
+        # Send response via Twilio REST API
+        if response_text:
+            t_send = time_module.perf_counter()
+            success = await send_whatsapp_message(phone_normalized, response_text)
+            send_time = (time_module.perf_counter() - t_send) * 1000
+
+            total_time = (time_module.perf_counter() - t_start) * 1000
+            logger.info(f"⏱️ [ASYNC] Total processing: {total_time:.0f}ms, send: {send_time:.0f}ms, success={success}")
+
+    except Exception as e:
+        logger.error(f"❌ [ASYNC] Error processing message for {phone_normalized}: {e}")
+        # Try to send error message
+        try:
+            await send_whatsapp_message(
+                phone_normalized,
+                "Er is een fout opgetreden. Probeer het later opnieuw."
+            )
+        except Exception:
+            pass
 
 
 async def verify_elevenlabs_signature(request_body: bytes, signature_header: str) -> bool:
@@ -608,162 +792,169 @@ async def webhook(
     """
     Handle incoming WhatsApp messages from Twilio with SMART ROUTING.
 
-    Routes to the correct agent based on active conversation type:
-    1. Document collection (if active document_collection_conversation exists)
-    2. Pre-screening (if active screening_conversation exists)
-    3. Generic demo agent (fallback)
+    Uses ASYNC RESPONSE pattern for pre-screening:
+    - Returns empty TwiML immediately (~50ms)
+    - Processes message in background
+    - Sends response via Twilio REST API
+
+    This dramatically reduces perceived latency from ~5s to ~2s.
     """
+    import time as time_module
+    webhook_start = time_module.perf_counter()
+
     incoming_msg = Body
     from_number = From
 
     # Use phone number as user/session ID for conversation continuity
-    # Remove "whatsapp:" prefix and "+" to match outbound format
     phone_normalized = from_number.replace("whatsapp:", "").lstrip("+")
 
-    pool = await get_db_pool()
+    logger.info(f"🔍 Webhook received from {phone_normalized}")
 
-    # SMART ROUTING: Check for active DOCUMENT COLLECTION first
-    logger.info(f"🔍 Webhook received from {phone_normalized} - checking routing...")
+    # ==========================================================================
+    # TEST MODE: Measure pure Twilio round-trip time without LLM
+    # Commands:
+    #   LATENCY_TEST     - Single ping/pong
+    #   TEST_CONV        - Start simulated conversation
+    #   TEST_1, TEST_2.. - Continue simulated conversation
+    # ==========================================================================
+    test_msg = incoming_msg.strip().upper()
 
-    doc_conv_row = await pool.fetchrow(
-        """
-        SELECT id, vacancy_id, session_id, candidate_name
-        FROM ats.document_collection_conversations
-        WHERE candidate_phone = $1
-        AND status = 'active'
-        ORDER BY started_at DESC
-        LIMIT 1
-        """,
-        phone_normalized
-    )
+    if test_msg == "LATENCY_TEST":
+        test_response = f"🏓 PONG! Server received at {time_module.time():.3f}"
+        logger.info(f"🧪 LATENCY TEST MODE - sending hardcoded response")
 
-    if doc_conv_row:
-        # Route to document collection webhook
-        logger.info(f"📄 SMART ROUTING → Document collection (conversation_id={doc_conv_row['id']})")
-        from src.routers.document_collection import router as doc_router
-        # Import the webhook handler
-        from src.routers import document_collection as doc_module
-        return await doc_module.document_webhook(
-            Body=Body,
-            From=From,
-            NumMedia=NumMedia,
-            MediaUrl0=MediaUrl0,
-            MediaContentType0=MediaContentType0
+        asyncio.create_task(send_whatsapp_message(phone_normalized, test_response))
+
+        webhook_total = (time_module.perf_counter() - webhook_start) * 1000
+        logger.info(f"⏱️ LATENCY TEST webhook response: {webhook_total:.0f}ms")
+
+        resp = MessagingResponse()
+        return PlainTextResponse(content=str(resp), media_type="application/xml")
+
+    # Simulated conversation test - hardcoded responses for each step
+    TEST_RESPONSES = {
+        "TEST_CONV": "👋 Hallo! Welkom bij de test-screening. Dit is een gesimuleerde reactie om latency te meten. Stuur 'TEST_1' voor de volgende stap.",
+        "TEST_1": "✅ Geweldig! Eerste vraag: Hoeveel jaar ervaring heb je? (Stuur 'TEST_2' om door te gaan)",
+        "TEST_2": "📝 Bedankt voor je antwoord. Tweede vraag: Ben je beschikbaar voor fulltime werk? (Stuur 'TEST_3')",
+        "TEST_3": "🎯 Uitstekend! Laatste vraag: Wanneer zou je kunnen beginnen? (Stuur 'TEST_END' om af te ronden)",
+        "TEST_END": "🏁 Test voltooid! Je hebt alle stappen doorlopen. Gemiddelde latency kun je nu berekenen uit de logs.",
+    }
+
+    if test_msg in TEST_RESPONSES:
+        test_response = TEST_RESPONSES[test_msg]
+        logger.info(f"🧪 TEST CONV MODE [{test_msg}] - sending hardcoded response")
+
+        asyncio.create_task(send_whatsapp_message(phone_normalized, test_response))
+
+        webhook_total = (time_module.perf_counter() - webhook_start) * 1000
+        logger.info(f"⏱️ TEST CONV [{test_msg}] webhook response: {webhook_total:.0f}ms")
+
+        resp = MessagingResponse()
+        return PlainTextResponse(content=str(resp), media_type="application/xml")
+
+    # Check cache first for fast routing
+    cached = await conversation_cache.get(phone_normalized)
+    conv_row = None
+
+    if cached:
+        logger.info(f"⚡ Cache HIT for {phone_normalized}: {cached.conversation_type.value}")
+
+        if cached.conversation_type == ConversationType.DOCUMENT_COLLECTION:
+            # Document collection still uses TwiML (has media handling)
+            logger.info(f"📄 SMART ROUTING → Document collection (cached)")
+            from src.routers import document_collection as doc_module
+            return await doc_module.document_webhook(
+                Body=Body, From=From, NumMedia=NumMedia,
+                MediaUrl0=MediaUrl0, MediaContentType0=MediaContentType0
+            )
+        elif cached.conversation_type == ConversationType.PRE_SCREENING:
+            logger.info(f"📞 SMART ROUTING → Pre-screening (async, cached)")
+            conv_row = {
+                "id": uuid.UUID(cached.conversation_id) if cached.conversation_id else None,
+                "vacancy_id": uuid.UUID(cached.vacancy_id) if cached.vacancy_id else None,
+                "pre_screening_id": uuid.UUID(cached.pre_screening_id) if cached.pre_screening_id else None,
+                "session_id": cached.session_id,
+                "candidate_name": cached.candidate_name,
+                "vacancy_title": cached.vacancy_title,
+            }
+        elif cached.conversation_type == ConversationType.NONE:
+            logger.info(f"🔀 SMART ROUTING → Generic fallback (async, cached)")
+            conv_row = None
+    else:
+        # Cache miss - run both routing queries in parallel
+        logger.info(f"💾 Cache MISS for {phone_normalized} - querying DB...")
+        pool = await get_db_pool()
+
+        doc_task = pool.fetchrow(
+            """
+            SELECT id, vacancy_id, session_id, candidate_name
+            FROM ats.document_collection_conversations
+            WHERE candidate_phone = $1 AND status = 'active'
+            ORDER BY started_at DESC LIMIT 1
+            """,
+            phone_normalized
+        )
+        conv_task = pool.fetchrow(
+            """
+            SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, sc.candidate_name,
+                   v.title as vacancy_title
+            FROM ats.screening_conversations sc
+            JOIN ats.vacancies v ON v.id = sc.vacancy_id
+            WHERE sc.candidate_phone = $1 AND sc.channel = 'whatsapp' AND sc.status = 'active'
+            ORDER BY sc.started_at DESC LIMIT 1
+            """,
+            phone_normalized
         )
 
-    logger.info(f"❌ No active document collection found for {phone_normalized}")
+        doc_conv_row, conv_row = await asyncio.gather(doc_task, conv_task)
 
-    # Check for active WhatsApp SCREENING conversation
-    conv_row = await pool.fetchrow(
-        """
-        SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, sc.candidate_name,
-               v.title as vacancy_title
-        FROM ats.screening_conversations sc
-        JOIN ats.vacancies v ON v.id = sc.vacancy_id
-        WHERE sc.candidate_phone = $1
-        AND sc.channel = 'whatsapp'
-        AND sc.status = 'active'
-        ORDER BY sc.started_at DESC
-        LIMIT 1
-        """,
-        phone_normalized
-    )
-
-    if conv_row:
-        logger.info(f"📞 SMART ROUTING → Pre-screening (conversation_id={conv_row['id']})")
-    else:
-        logger.info(f"❌ No active pre-screening found for {phone_normalized}")
-        logger.info(f"🔀 SMART ROUTING → Generic fallback (no active conversations)")
-
-    is_complete = False
-    completion_outcome = None
-    conversation_id = None
-
-    try:
-        if conv_row:
-            # Found active outbound screening - use vacancy-specific agent
-            vacancy_id = str(conv_row["vacancy_id"])
-            pre_screening_id = str(conv_row["pre_screening_id"])
-            vacancy_title = conv_row["vacancy_title"]
-            conversation_id = conv_row["id"]
-            candidate_name = conv_row["candidate_name"] or "Kandidaat"
-
-            logger.info(f"📱 WhatsApp webhook: Found active conversation {conversation_id}")
-
-            # Process message with the pre-screening agent
-            response_text, is_complete, completion_outcome = await _webhook_impl_vacancy_specific(
-                pool, conversation_id, incoming_msg, candidate_name
+        # Cache and route
+        if doc_conv_row:
+            await conversation_cache.set(
+                phone=phone_normalized,
+                conversation_type=ConversationType.DOCUMENT_COLLECTION,
+                conversation_id=str(doc_conv_row["id"]),
+                vacancy_id=str(doc_conv_row["vacancy_id"]) if doc_conv_row["vacancy_id"] else None,
+                session_id=doc_conv_row["session_id"],
+                candidate_name=doc_conv_row["candidate_name"],
             )
-
-            # Get pre-screening config for transcript processing (only needed if conversation completes)
-            pre_screening = None
-            if is_complete:
-                ps_row = await pool.fetchrow(
-                    """
-                    SELECT intro, knockout_failed_action, final_action
-                    FROM ats.pre_screenings
-                    WHERE id = $1
-                    """,
-                    conv_row["pre_screening_id"]
-                )
-
-                questions = await pool.fetch(
-                    """
-                    SELECT id, question_type, position, question_text, ideal_answer
-                    FROM ats.pre_screening_questions
-                    WHERE pre_screening_id = $1
-                    ORDER BY question_type, position
-                    """,
-                    conv_row["pre_screening_id"]
-                )
-
-                pre_screening = {
-                    "intro": ps_row["intro"],
-                    "knockout_failed_action": ps_row["knockout_failed_action"],
-                    "final_action": ps_row["final_action"],
-                    "knockout_questions": [dict(q) for q in questions if q["question_type"] == "knockout"],
-                    "qualification_questions": [dict(q) for q in questions if q["question_type"] == "qualification"],
-                }
-
-            # Store messages in conversation_messages table
-            if conversation_id:
-                # Store user message
-                await pool.execute(
-                    """
-                    INSERT INTO ats.conversation_messages (conversation_id, role, message)
-                    VALUES ($1, 'user', $2)
-                    """,
-                    conversation_id, incoming_msg
-                )
-                # Store agent response
-                if response_text:
-                    await pool.execute(
-                        """
-                        INSERT INTO ats.conversation_messages (conversation_id, role, message)
-                        VALUES ($1, 'agent', $2)
-                        """,
-                        conversation_id, response_text
-                    )
-
-            # If conversation is complete, trigger transcript processing in background
-            if is_complete and conversation_id:
-                logger.info(f"🔄 Triggering background transcript processing for conversation {conversation_id}")
-                asyncio.create_task(_safe_process_conversation(
-                    pool, conversation_id, vacancy_id, pre_screening, completion_outcome
-                ))
+            logger.info(f"📄 SMART ROUTING → Document collection")
+            from src.routers import document_collection as doc_module
+            return await doc_module.document_webhook(
+                Body=Body, From=From, NumMedia=NumMedia,
+                MediaUrl0=MediaUrl0, MediaContentType0=MediaContentType0
+            )
+        elif conv_row:
+            await conversation_cache.set(
+                phone=phone_normalized,
+                conversation_type=ConversationType.PRE_SCREENING,
+                conversation_id=str(conv_row["id"]),
+                vacancy_id=str(conv_row["vacancy_id"]),
+                pre_screening_id=str(conv_row["pre_screening_id"]),
+                session_id=conv_row["session_id"],
+                candidate_name=conv_row["candidate_name"],
+                vacancy_title=conv_row["vacancy_title"],
+            )
+            logger.info(f"📞 SMART ROUTING → Pre-screening (async)")
         else:
-            # No active outbound screening - use generic demo agent
-            logger.info(f"WhatsApp webhook routing to generic agent (no active screening found)")
-            response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
+            await conversation_cache.set(
+                phone=phone_normalized,
+                conversation_type=ConversationType.NONE,
+            )
+            logger.info(f"🔀 SMART ROUTING → Generic fallback (async)")
 
-    except (InterfaceError, OperationalError) as e:
-        logger.warning(f"Database connection error: {e}")
-        # Retry with generic agent on connection error
-        response_text = await _webhook_impl_generic(phone_normalized, incoming_msg)
+    # Launch background processing and return immediately
+    asyncio.create_task(_process_and_respond_async(
+        phone_normalized=phone_normalized,
+        incoming_msg=incoming_msg,
+        conv_row=conv_row,
+    ))
 
-    # Send TwiML response
+    webhook_total = (time_module.perf_counter() - webhook_start) * 1000
+    logger.info(f"⏱️ WEBHOOK RESPONSE TIME: {webhook_total:.0f}ms (processing in background)")
+
+    # Return empty TwiML - response will be sent via REST API
     resp = MessagingResponse()
-    resp.message(response_text or "Sorry, I couldn't process that.")
     return PlainTextResponse(content=str(resp), media_type="application/xml")
 
 
@@ -1108,3 +1299,161 @@ async def elevenlabs_webhook(request: Request):
     }
     logger.info(f"[webhook/elevenlabs] response: {response}")
     return response
+
+
+# ============================================================================
+# Cache Management
+# ============================================================================
+
+@router.delete("/webhook/cache")
+async def clear_conversation_cache():
+    """
+    Clear all in-memory conversation and agent caches.
+
+    Use this to reset cached conversations when testing.
+    """
+    from src.utils.conversation_cache import clear_all_caches
+    result = await clear_all_caches()
+    return {
+        "status": "cleared",
+        "conversations_cleared": result["conversations"],
+        "agents_cleared": result["agents"]
+    }
+
+
+# ============================================================================
+# Meta WhatsApp Cloud API Webhooks
+# ============================================================================
+
+# Verify token for Meta webhook setup - should match what you enter in Meta Developer Console
+META_VERIFY_TOKEN = os.getenv("META_VERIFY_TOKEN", "taloo_verify_token_2024")
+
+
+@router.get("/webhook/meta")
+async def meta_webhook_verify(
+    request: Request,
+):
+    """
+    Handle Meta WhatsApp webhook verification (GET request).
+
+    Meta sends a GET request with hub.mode, hub.verify_token, and hub.challenge
+    to verify the webhook URL is valid.
+    """
+    params = request.query_params
+
+    mode = params.get("hub.mode")
+    token = params.get("hub.verify_token")
+    challenge = params.get("hub.challenge")
+
+    logger.info(f"🔔 Meta webhook verification: mode={mode}, token={token[:10] if token else 'None'}... challenge={challenge[:20] if challenge else 'None'}...")
+
+    if mode == "subscribe" and token == META_VERIFY_TOKEN:
+        logger.info("✅ Meta webhook verified successfully!")
+        # Return the challenge as plain text
+        return PlainTextResponse(content=challenge, status_code=200)
+    else:
+        logger.warning(f"❌ Meta webhook verification failed: mode={mode}, token mismatch={token != META_VERIFY_TOKEN}")
+        raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@router.post("/webhook/meta")
+async def meta_webhook_receive(request: Request):
+    """
+    Handle incoming WhatsApp messages from Meta Cloud API (POST request).
+
+    This endpoint receives message notifications from Meta when users send messages.
+    Supports LATENCY_TEST command to measure Meta API round-trip time.
+    """
+    import time as time_module
+    from src.services.meta_whatsapp_service import send_meta_whatsapp_message
+
+    webhook_start = time_module.perf_counter()
+
+    try:
+        body = await request.json()
+        logger.info(f"📱 Meta webhook received: {json.dumps(body, indent=2)[:500]}")
+
+        # Extract message details from Meta's webhook format
+        # Structure: body.entry[0].changes[0].value.messages[0]
+        entry = body.get("entry", [])
+        if not entry:
+            return {"status": "ok"}
+
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return {"status": "ok"}
+
+        value = changes[0].get("value", {})
+        messages = value.get("messages", [])
+
+        if not messages:
+            # Could be a status update, not a message
+            statuses = value.get("statuses", [])
+            if statuses:
+                logger.info(f"📊 Message status update: {statuses[0].get('status')}")
+            return {"status": "ok"}
+
+        # Process the incoming message
+        message = messages[0]
+        from_number = message.get("from")  # Phone number without +
+        message_type = message.get("type")
+        timestamp = message.get("timestamp")
+
+        # Extract text message
+        text_body = ""
+        if message_type == "text":
+            text_body = message.get("text", {}).get("body", "")
+
+        logger.info(f"📨 Meta message from {from_number}: {text_body[:100]}")
+
+        # ==========================================================================
+        # TEST MODE: Measure pure Meta API round-trip time without LLM
+        # Commands:
+        #   LATENCY_TEST     - Single ping/pong
+        #   TEST_CONV        - Start simulated conversation
+        #   TEST_1, TEST_2.. - Continue simulated conversation
+        # ==========================================================================
+        test_msg = text_body.strip().upper()
+
+        if test_msg == "LATENCY_TEST":
+            test_response = f"🏓 META PONG! Server received at {time_module.time():.3f}"
+            logger.info(f"🧪 META LATENCY TEST MODE - sending hardcoded response")
+
+            # Send response via Meta API (in background for fast webhook response)
+            asyncio.create_task(send_meta_whatsapp_message(from_number, test_response))
+
+            webhook_total = (time_module.perf_counter() - webhook_start) * 1000
+            logger.info(f"⏱️ META LATENCY TEST webhook response: {webhook_total:.0f}ms")
+
+            return {"status": "ok"}
+
+        # Simulated conversation test - hardcoded responses for each step
+        META_TEST_RESPONSES = {
+            "TEST_CONV": "👋 META Hallo! Welkom bij de test-screening via Meta API. Stuur 'TEST_1' voor de volgende stap.",
+            "TEST_1": "✅ META Geweldig! Eerste vraag: Hoeveel jaar ervaring heb je? (Stuur 'TEST_2' om door te gaan)",
+            "TEST_2": "📝 META Bedankt voor je antwoord. Tweede vraag: Ben je beschikbaar voor fulltime werk? (Stuur 'TEST_3')",
+            "TEST_3": "🎯 META Uitstekend! Laatste vraag: Wanneer zou je kunnen beginnen? (Stuur 'TEST_END' om af te ronden)",
+            "TEST_END": "🏁 META Test voltooid! Je hebt alle stappen doorlopen via Meta API. Vergelijk de latency met Twilio!",
+        }
+
+        if test_msg in META_TEST_RESPONSES:
+            test_response = META_TEST_RESPONSES[test_msg]
+            logger.info(f"🧪 META TEST CONV MODE [{test_msg}] - sending hardcoded response")
+
+            asyncio.create_task(send_meta_whatsapp_message(from_number, test_response))
+
+            webhook_total = (time_module.perf_counter() - webhook_start) * 1000
+            logger.info(f"⏱️ META TEST CONV [{test_msg}] webhook response: {webhook_total:.0f}ms")
+
+            return {"status": "ok"}
+
+        # TODO: Route to pre-screening agent similar to Twilio webhook
+        # For now, just acknowledge receipt
+        logger.info(f"📨 No handler for message from {from_number}: {text_body[:50]}")
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        logger.error(f"❌ Meta webhook error: {e}")
+        # Always return 200 to Meta to prevent retries
+        return {"status": "error", "message": str(e)}
