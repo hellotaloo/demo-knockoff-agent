@@ -18,8 +18,7 @@ async def get_db_pool() -> asyncpg.Pool:
     if _db_pool is None:
         # Convert SQLAlchemy URL to asyncpg format
         raw_url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-        # Disable statement cache for Supabase pooler compatibility (transaction-level pooling)
-        _db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=10, statement_cache_size=0)
+        _db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=10)
         logger.info("Database connection pool created")
     return _db_pool
 

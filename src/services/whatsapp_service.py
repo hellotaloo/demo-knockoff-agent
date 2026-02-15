@@ -24,7 +24,10 @@ def get_twilio_client() -> Client:
     return Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
-async def send_whatsapp_message(to_phone: str, message: str) -> bool:
+from typing import Optional
+
+
+async def send_whatsapp_message(to_phone: str, message: str) -> Optional[str]:
     """
     Send a WhatsApp message via Twilio REST API.
 
@@ -33,7 +36,7 @@ async def send_whatsapp_message(to_phone: str, message: str) -> bool:
         message: The message text to send
 
     Returns:
-        True if message was sent successfully, False otherwise
+        Message SID if sent successfully, None otherwise
     """
     try:
         client = get_twilio_client()
@@ -41,6 +44,9 @@ async def send_whatsapp_message(to_phone: str, message: str) -> bool:
         # Normalize phone number format
         if not to_phone.startswith("+"):
             to_phone = f"+{to_phone}"
+
+        # Convert Markdown bold (**text**) to WhatsApp bold (*text*)
+        message = message.replace("**", "*")
 
         # Run the blocking Twilio call in a thread pool
         # Use Messaging Service SID if available (required for WhatsApp Business)
@@ -65,11 +71,11 @@ async def send_whatsapp_message(to_phone: str, message: str) -> bool:
             )
 
         logger.info(f"📤 WhatsApp message sent to {to_phone}: SID={result.sid}")
-        return True
+        return result.sid
 
     except Exception as e:
         logger.error(f"❌ Failed to send WhatsApp message to {to_phone}: {e}")
-        return False
+        return None
 
 
 async def send_whatsapp_message_background(to_phone: str, message: str):

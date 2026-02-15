@@ -1,12 +1,11 @@
 """
-Scheduling service - handles time slot generation and scheduling for interviews.
+Scheduling service - handles interview scheduling and calendar event creation.
 
-This service provides the core business logic for:
-- Generating available interview time slots (from Google Calendar or fallback)
-- Formatting slots for voice/text output
-- Scheduling interviews (creates Google Calendar events)
+This service provides:
+- Creating calendar events for scheduled interviews
 - Saving selected interview slots to database
 """
+
 import logging
 import os
 from datetime import datetime, timedelta
@@ -15,12 +14,7 @@ from zoneinfo import ZoneInfo
 import asyncpg
 from pydantic import BaseModel
 
-from src.utils.dutch_dates import (
-    DUTCH_DAYS,
-    DUTCH_MONTHS,
-    get_dutch_date,
-    get_next_business_days,
-)
+from src.utils.dutch_dates import get_dutch_date
 from src.repositories.scheduled_interview_repo import ScheduledInterviewRepository
 
 logger = logging.getLogger(__name__)
@@ -29,37 +23,21 @@ logger = logging.getLogger(__name__)
 TIMEZONE = ZoneInfo("Europe/Brussels")
 
 
-class TimeSlot(BaseModel):
-    """A single day's available time slots."""
-    date: str  # ISO format: YYYY-MM-DD
-    dutch_date: str  # e.g., "Maandag 16 februari"
-    morning: list[str]  # e.g., ["10u", "11u"]
-    afternoon: list[str]  # e.g., ["14u", "16u"]
-
-
-class SlotData(BaseModel):
-    """Response containing available slots and formatted text."""
-    slots: list[TimeSlot]
-    formatted_text: str
-
-
 class ScheduleResult(BaseModel):
     """Result of scheduling an interview."""
     confirmed: bool
     message: str
     slot: Optional[str] = None
-    calendar_event_id: Optional[str] = None  # Google Calendar event ID
+    calendar_event_id: Optional[str] = None
 
 
 class SchedulingService:
     """
-    Service for managing interview scheduling.
+    Service for scheduling interviews.
 
     Handles:
-    - Generating available time slots (from Google Calendar when available)
     - Creating calendar events for scheduled interviews
     - Saving selected slots to database
-    - Formatting slots for voice/text output
     """
 
     def __init__(self, pool: asyncpg.Pool = None):
@@ -71,7 +49,6 @@ class SchedulingService:
     def calendar_service(self):
         """Lazy-load calendar service."""
         if self._calendar_service is None:
-            # Only import if Google Calendar is configured
             if os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE"):
                 from src.services.google_calendar_service import calendar_service
                 self._calendar_service = calendar_service
@@ -83,124 +60,6 @@ class SchedulingService:
         if self._repo is None and self.pool:
             self._repo = ScheduledInterviewRepository(self.pool)
         return self._repo
-
-    def get_available_slots(
-        self,
-        recruiter_id: Optional[str] = None,
-        days_ahead: int = 3,
-        start_offset_days: int = 3,
-    ) -> SlotData:
-        """
-        Get available time slots for scheduling interviews.
-
-        Args:
-            recruiter_id: Optional recruiter ID for calendar lookup (future)
-            days_ahead: Number of business days to return
-            start_offset_days: Start from N days in the future
-
-        Returns:
-            SlotData with slots and formatted Dutch text
-        """
-        logger.info(f"Getting available slots (recruiter={recruiter_id}, days={days_ahead})")
-
-        # Start from +N days (get_next_business_days adds 1, so we use N-1)
-        start_date = datetime.now() + timedelta(days=start_offset_days - 1)
-        business_days = get_next_business_days(start_date, days_ahead)
-
-        # Default time slots (future: read from recruiter preferences)
-        morning_slots = ["10u", "11u"]
-        afternoon_slots = ["14u", "16u"]
-
-        slots = []
-        formatted_lines = []
-
-        for day in business_days:
-            day_name = DUTCH_DAYS[day.weekday()].capitalize()
-            month_name = DUTCH_MONTHS[day.month]
-            dutch_date = f"{day_name} {day.day} {month_name}"
-
-            slots.append(TimeSlot(
-                date=day.strftime("%Y-%m-%d"),
-                dutch_date=dutch_date,
-                morning=morning_slots,
-                afternoon=afternoon_slots
-            ))
-
-            formatted_lines.append(f"**{dutch_date}:**")
-            formatted_lines.append(f"- Voormiddag: {', '.join(morning_slots)}")
-            formatted_lines.append(f"- Namiddag: {', '.join(afternoon_slots)}")
-            formatted_lines.append("")
-
-        return SlotData(
-            slots=slots,
-            formatted_text="\n".join(formatted_lines).strip()
-        )
-
-    async def get_available_slots_async(
-        self,
-        recruiter_email: Optional[str] = None,
-        days_ahead: int = 3,
-        start_offset_days: int = 3,
-    ) -> SlotData:
-        """
-        Get available time slots from Google Calendar.
-
-        If recruiter_email is provided and Google Calendar is configured,
-        queries real calendar availability. Otherwise falls back to default slots.
-
-        Args:
-            recruiter_email: Recruiter's email for calendar lookup
-            days_ahead: Number of business days to return
-            start_offset_days: Start from N days in the future
-
-        Returns:
-            SlotData with slots and formatted Dutch text
-        """
-        # If calendar service is available and email provided, use real data
-        if self.calendar_service and recruiter_email:
-            try:
-                logger.info(f"Fetching real calendar availability for {recruiter_email}")
-                calendar_slots = await self.calendar_service.get_available_slots(
-                    calendar_email=recruiter_email,
-                    days_ahead=days_ahead,
-                    start_offset_days=start_offset_days,
-                )
-
-                if calendar_slots:
-                    # Convert to TimeSlot format
-                    slots = [
-                        TimeSlot(
-                            date=s["date"],
-                            dutch_date=s["dutch_date"],
-                            morning=s["morning"],
-                            afternoon=s["afternoon"],
-                        )
-                        for s in calendar_slots
-                    ]
-
-                    formatted_lines = []
-                    for slot in slots:
-                        formatted_lines.append(f"**{slot.dutch_date}:**")
-                        if slot.morning:
-                            formatted_lines.append(f"- Voormiddag: {', '.join(slot.morning)}")
-                        if slot.afternoon:
-                            formatted_lines.append(f"- Namiddag: {', '.join(slot.afternoon)}")
-                        formatted_lines.append("")
-
-                    return SlotData(
-                        slots=slots,
-                        formatted_text="\n".join(formatted_lines).strip()
-                    )
-                else:
-                    logger.warning(f"No calendar slots found for {recruiter_email}")
-
-            except Exception as e:
-                logger.error(f"Failed to get calendar slots for {recruiter_email}: {e}")
-                # Fall through to default slots
-
-        # Fallback to default slots (sync version)
-        logger.info("Using default slots (no calendar integration)")
-        return self.get_available_slots(days_ahead=days_ahead, start_offset_days=start_offset_days)
 
     async def schedule_slot_async(
         self,
@@ -227,8 +86,8 @@ class SchedulingService:
         Returns:
             ScheduleResult with confirmation and calendar event details
         """
-        # Parse the time
-        time_str = time.lower().replace("u", "").replace(":", "")
+        # Parse the time (handle "10u", "10 uur", "10:00" formats)
+        time_str = time.lower().replace(" uur", "").replace("uur", "").replace("u", "").replace(":", "")
         try:
             hour = int(time_str[:2]) if len(time_str) >= 2 else int(time_str)
         except ValueError:
@@ -253,7 +112,6 @@ class SchedulingService:
 
         # Try to create calendar event if service is available
         event_id = None
-        event_link = None
 
         if self.calendar_service and recruiter_email:
             try:
@@ -266,7 +124,6 @@ class SchedulingService:
                     attendee_email=candidate_email,
                 )
                 event_id = event.get("id")
-                event_link = event.get("htmlLink")
                 invite_note = f" (invite sent to {candidate_email})" if candidate_email else ""
                 logger.info(f"Created calendar event {event_id} for {candidate_name}{invite_note}")
             except Exception as e:
@@ -278,64 +135,6 @@ class SchedulingService:
             message=f"Perfect! Je staat ingepland voor {slot_text}. Je krijgt een bevestiging per SMS.",
             slot=slot_text,
             calendar_event_id=event_id,
-        )
-
-    def format_slots_for_voice(self, slots: list[TimeSlot]) -> str:
-        """
-        Format slots for voice output (more natural speech).
-
-        Args:
-            slots: List of TimeSlot objects
-
-        Returns:
-            Natural Dutch text suitable for TTS
-        """
-        if not slots:
-            return "Er zijn momenteel geen beschikbare tijdsloten."
-
-        parts = []
-        for slot in slots:
-            morning = " of ".join(slot.morning) if slot.morning else None
-            afternoon = " of ".join(slot.afternoon) if slot.afternoon else None
-
-            if morning and afternoon:
-                parts.append(f"{slot.dutch_date} 's ochtends om {morning}, of 's middags om {afternoon}")
-            elif morning:
-                parts.append(f"{slot.dutch_date} 's ochtends om {morning}")
-            elif afternoon:
-                parts.append(f"{slot.dutch_date} 's middags om {afternoon}")
-
-        if len(parts) == 1:
-            return parts[0]
-        elif len(parts) == 2:
-            return f"{parts[0]}, of {parts[1]}"
-        else:
-            return ", ".join(parts[:-1]) + f", of {parts[-1]}"
-
-    def schedule_slot(
-        self,
-        slot: str,
-        conversation_id: str,
-        candidate_id: Optional[str] = None,
-    ) -> ScheduleResult:
-        """
-        Schedule an interview for the given slot.
-
-        Args:
-            slot: The selected time slot (e.g., "maandag om 10 uur")
-            conversation_id: The conversation ID for tracking
-            candidate_id: Optional candidate ID
-
-        Returns:
-            ScheduleResult with confirmation
-        """
-        logger.info(f"Scheduling slot: {slot} for conversation {conversation_id}")
-
-        # Future: Actually create calendar event, send confirmation email, etc.
-        return ScheduleResult(
-            confirmed=True,
-            message=f"Perfect! Je staat ingepland voor {slot}. Je krijgt een bevestiging per SMS.",
-            slot=slot
         )
 
     async def save_scheduled_slot(
@@ -350,25 +149,22 @@ class SchedulingService:
         notes: str = None,
     ) -> dict:
         """
-        Save a scheduled interview slot from ElevenLabs webhook.
+        Save a scheduled interview slot from webhook.
 
         Looks up vacancy_id from conversation_id via screening_conversations.
 
         Args:
-            conversation_id: ElevenLabs conversation ID
+            conversation_id: Conversation ID (e.g., from ElevenLabs)
             selected_date: Date in YYYY-MM-DD format
             selected_time: Time slot (e.g., "10u", "14u")
             selected_slot_text: Full Dutch text for display
-            candidate_name: Candidate's name (may be overridden by DB lookup)
-            candidate_phone: Candidate's phone (may be overridden by DB lookup)
+            candidate_name: Candidate's name
+            candidate_phone: Candidate's phone
             candidate_email: Candidate's email for calendar invite
             notes: Optional notes
 
         Returns:
             dict with success status and scheduled interview details
-
-        Raises:
-            ValueError: If conversation_id not found or vacancy lookup fails
         """
         if not self.repo:
             raise RuntimeError("SchedulingService requires pool for database operations")
@@ -425,5 +221,5 @@ class SchedulingService:
         }
 
 
-# Singleton instance for easy import
+# Singleton instance
 scheduling_service = SchedulingService()

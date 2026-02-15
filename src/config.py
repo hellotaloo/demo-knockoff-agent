@@ -38,6 +38,23 @@ TWILIO_MESSAGING_SERVICE_SID = os.environ.get("TWILIO_MESSAGING_SERVICE_SID")  #
 ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
 ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")  # Master voice agent ID
 
+# VAPI Configuration
+VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
+VAPI_SQUAD_ID = os.environ.get("VAPI_SQUAD_ID", "c43899f8-59fa-4886-85d6-02bed3ed325d")
+VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
+VAPI_WEBHOOK_SECRET = os.environ.get("VAPI_WEBHOOK_SECRET", "")
+VAPI_SERVER_URL = os.environ.get("VAPI_SERVER_URL")  # Webhook URL for this environment
+
+# =============================================================================
+# Supabase Auth Configuration
+# =============================================================================
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
 # ============================================================================
 # Logging Configuration
 # ============================================================================

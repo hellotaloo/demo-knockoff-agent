@@ -1,0 +1,33 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "0e84f7f5-9c3f-4f64-ad8b-4155717a097b",
+  "packageName": "be.taloo.bot",
+  "developer": {
+    "name": "Taloo",
+    "websiteUrl": "https://taloo.be",
+    "privacyUrl": "https://taloo.be/privacy",
+    "termsOfUseUrl": "https://taloo.be/terms"
+  },
+  "name": {
+    "short": "TalooBot",
+    "full": "Taloo Recruitment Assistant"
+  },
+  "description": {
+    "short": "AI recruitment assistant",
+    "full": "Taloo Bot helps with recruitment tasks."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#5558AF",
+  "bots": [
+    {
+      "botId": "0e84f7f5-9c3f-4f64-ad8b-4155717a097b",
+      "scopes": ["personal", "team", "groupChat"]
+    }
+  ],
+  "validDomains": []
+}

@@ -30,6 +30,7 @@ from src.config import (
     TWILIO_WHATSAPP_NUMBER
 )
 from src.utils.conversation_cache import conversation_cache
+from src.services.whatsapp_service import send_whatsapp_message
 
 logger = logging.getLogger(__name__)
 
@@ -192,13 +193,8 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
     8. Send via Twilio WhatsApp
     9. Store conversation record
     """
-    from twilio.rest import Client
-
     global session_manager
     pool = await get_db_pool()
-
-    # Initialize Twilio client
-    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
     # Validate vacancy_id
     try:
@@ -298,14 +294,12 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
     if not opening_message:
         opening_message = f"Hallo {full_name}! Ik help je graag met het uploaden van je documenten."
 
-    # Send via Twilio WhatsApp
-    message = twilio_client.messages.create(
-        body=opening_message,
-        from_=TWILIO_WHATSAPP_NUMBER,
-        to=f"whatsapp:{request.whatsapp_number}"
-    )
+    # Send via centralized WhatsApp service (handles ** to * conversion)
+    message_sid = await send_whatsapp_message(request.whatsapp_number, opening_message)
+    if not message_sid:
+        raise HTTPException(500, "Failed to send WhatsApp message")
 
-    logger.info(f"Sent WhatsApp message: {message.sid}")
+    logger.info(f"Sent WhatsApp message: {message_sid}")
 
     # Create conversation record
     conv_row = await pool.fetchrow(

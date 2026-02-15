@@ -1,18 +1,15 @@
 """
-Pre-screening Voice Agent - ElevenLabs integration for outbound phone call screenings.
+Pre-screening Voice Agent.
 
-The voice agent is managed in the ElevenLabs dashboard (ELEVENLABS_AGENT_ID).
-This module handles initiating outbound calls via Twilio.
+Voice-based candidate screening via VAPI/ElevenLabs.
 """
 
-from .agent import (
-    get_elevenlabs_client,
-    initiate_outbound_call,
-    get_dutch_greeting,
+from pre_screening_voice_agent.calendar_helpers import (
+    get_time_slots_for_voice,
+    schedule_interview,
 )
 
 __all__ = [
-    "get_elevenlabs_client",
-    "initiate_outbound_call",
-    "get_dutch_greeting",
+    "get_time_slots_for_voice",
+    "schedule_interview",
 ]

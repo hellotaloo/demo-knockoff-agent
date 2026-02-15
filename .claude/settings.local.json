@@ -92,7 +92,20 @@
       "Bash(git rm:*)",
       "mcp__plugin_supabase_supabase__get_logs",
       "mcp__plugin_supabase_supabase__merge_branch",
-      "Bash(twilio profiles:list:*)"
+      "Bash(twilio profiles:list:*)",
+      "mcp__plugin_supabase_supabase__search_docs",
+      "mcp__plugin_supabase_supabase__get_project_url",
+      "mcp__plugin_supabase_supabase__get_publishable_keys",
+      "mcp__plugin_supabase_supabase__get_cost",
+      "mcp__plugin_supabase_supabase__confirm_cost",
+      "mcp__plugin_supabase_supabase__create_branch",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJlbWFpbCI6ImRldkB0YWxvby5iZSIsImF1ZCI6ImF1dGhlbnRpY2F0ZWQiLCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImlhdCI6MTc3MTA3NDkxOSwiZXhwIjoxNzcxMTYxMzE5LCJ1c2VyX21ldGFkYXRhIjp7ImZ1bGxfbmFtZSI6IkRldiBVc2VyIiwiZW1haWwiOiJkZXZAdGFsb28uYmUifX0.eCm7HXERhd9mlK8OcHYm06XMJ2r-F5FNeLm3qYfabjM\")",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJlbWFpbCI6ImRldkB0YWxvby5iZSIsImF1ZCI6ImF1dGhlbnRpY2F0ZWQiLCJyb2xlIjoiYXV0aGVudGljYXRlZCIsImlhdCI6MTc3MTA3NTE1MywiZXhwIjoxNzcxMTYxNTUzLCJ1c2VyX21ldGFkYXRhIjp7ImZ1bGxfbmFtZSI6IkRldiBVc2VyIiwiZW1haWwiOiJkZXZAdGFsb28uYmUifX0.ICuOlS3MFrmLeveDDMixXO3N5zsDsEH-OjuiAS3pc1Y\")",
+      "Bash(npx tsc:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npx eslint:*)",
+      "Bash(zip:*)",
+      "Bash(unzip:*)"
     ],
     "defaultMode": "acceptEdits"
   },

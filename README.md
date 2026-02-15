@@ -6,7 +6,7 @@ Google ADK-powered agents for candidate screening and interview generation.
 
 | Agent | Purpose | Interface |
 |-------|---------|-----------|
-| `knockout_agent` | WhatsApp/Voice candidate screening | Twilio webhook |
+| `pre_screening_whatsapp_agent` | WhatsApp candidate screening | Twilio webhook |
 | `interview_generator` | Generate interview questions from vacancy text | REST API + SSE |
 
 ## Prerequisites
@@ -102,7 +102,7 @@ source .venv/bin/activate
 adk web --port 8001
 ```
 
-Open http://localhost:8001 - select `interview_generator` or `knockout_agent`.
+Open http://localhost:8001 - select `interview_generator`.
 
 ### 5. Test WhatsApp & Voice Webhooks Locally
 
@@ -212,9 +212,9 @@ curl https://taloo-agent-182581851450.europe-west1.run.app/health
 
 ```
 .
-├── knockout_agent/
+├── pre_screening_whatsapp_agent/
 │   ├── __init__.py
-│   └── agent.py              # WhatsApp screening agent
+│   └── agent.py              # WhatsApp screening agent (code-controlled flow)
 ├── interview_generator/
 │   ├── __init__.py
 │   └── agent.py              # Interview question generator agent
@@ -247,38 +247,7 @@ Twilio API ──POST /webhook──► Cloud Run (FastAPI)
 
 ## Customizing the Agent
 
-Edit `knockout_agent/agent.py` to customize the agent's behavior:
-
-```python
-from google.adk.agents.llm_agent import Agent
-
-root_agent = Agent(
-    name="whatsapp_agent",
-    model="gemini-2.0-flash",
-    instruction="Your custom instructions here...",
-    description="Your agent description",
-    tools=[],  # Add tools here
-)
-```
-
-## Adding Tools
-
-You can add custom tools for your agent to use:
-
-```python
-def get_weather(city: str) -> dict:
-    """Get current weather for a city."""
-    # Your implementation
-    return {"city": city, "temp": "72°F", "condition": "sunny"}
-
-root_agent = Agent(
-    name="whatsapp_agent",
-    model="gemini-2.0-flash",
-    instruction="You are a helpful assistant that can check the weather.",
-    description="WhatsApp agent with weather capability",
-    tools=[get_weather],
-)
-```
+The WhatsApp screening agent uses a code-controlled flow pattern. Edit `pre_screening_whatsapp_agent/agent.py` to customize the behavior. The agent uses Python code to manage conversation flow, with the LLM only generating conversational responses.
 
 ## Resources
 

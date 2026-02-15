@@ -1,7 +1,6 @@
-# CLAUDE.md - Taloo Backend (Staging)
+# CLAUDE.md - Taloo Backend
 
 ## Project Overview
-This is the staging code for the Taloo Backend. Always update the staging branch of the DB!!!
 Taloo Backend is an AI-powered recruitment screening platform built with Python/FastAPI and Google ADK. It automates candidate screening through WhatsApp, voice calls, and CV analysis using Gemini 2.0 Flash LLM.
 
 ## Tech Stack
@@ -68,14 +67,21 @@ git commit -m "message"
 git push
 ```
 
-## Environment Variables
+## Environments
 
-Required in `.env`:
-- `DATABASE_URL` - Supabase PostgreSQL connection
+| Environment | Config | Twilio | Database | Deployment |
+|-------------|--------|--------|----------|------------|
+| **Local** | `.env` file | Sandbox (`+14155238886`) | Local branch | `./start-local-dev.sh` |
+| **Staging** | Cloud Run env vars | Production (`+32456820441`) | Main branch | `gcloud run deploy` |
+
+### Environment Variables
+
+Required in `.env` (local development):
+- `ENVIRONMENT=local`
+- `DATABASE_URL` - Supabase PostgreSQL (local branch)
 - `GOOGLE_API_KEY` - Gemini API key
-- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER`
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` - Sandbox credentials
 - `ELEVENLABS_API_KEY`, `ELEVENLABS_WEBHOOK_SECRET`
-- `ENVIRONMENT` - production|staging|development
 
 ## Code Style
 
@@ -91,7 +97,7 @@ All agents are Google ADK agents using Gemini models.
 
 ### Core Agents
 1. **Interview Generator** (`interview_generator/agent.py`) - Generates knockout + qualification questions from vacancy text
-2. **Knockout Agent** (`knockout_agent/agent.py`) - WhatsApp screening conversations
+2. **Pre-screening WhatsApp Agent** (`pre_screening_whatsapp_agent/agent.py`) - WhatsApp screening conversations (code-controlled flow)
 3. **Voice Agent** (`voice_agent/agent.py`) - ElevenLabs phone screening with Dutch prompts
 
 ### Specialized Agents
@@ -117,19 +123,54 @@ All agents are Google ADK agents using Gemini models.
 
 PostgreSQL with 25+ migrations in `migrations/`. Schema auto-runs on startup via `run_schema_migrations()`.
 
-### Supabase Branching
+### Supabase Environments
 
-**IMPORTANT**: Always apply migrations to the **staging** branch, not production!
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ALWAYS USE THE LOCAL BRANCH FOR MIGRATIONS                                 │
+│  Project ID: vrpdzvattqlrtbaowapx                                           │
+│                                                                             │
+│  NEVER modify the staging (main) branch directly!                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-| Branch | Project Ref | Use For |
-|--------|-------------|---------|
-| main (production) | `szascstjqkmssauvfaaj` | Production data - DO NOT modify directly |
-| staging | `svebhvifkcxrsbpxjptr` | Development and testing - apply migrations here |
+| Environment | Branch | Project Ref | Use For |
+|-------------|--------|-------------|---------|
+| **Local dev** | local | `vrpdzvattqlrtbaowapx` | All development, testing, and migrations |
+| **Staging/Demo** | main | `beniqwbanoqhxyrjwulg` | Cloud Run demos - migrate via merge only |
+| **Production** | (future) | TBD | Not set up yet |
 
-When using the Supabase MCP tools, always use `project_id: svebhvifkcxrsbpxjptr` for migrations.
+### Migration Workflow
+
+**Step 1: Develop locally**
+- Write and test migrations on the `local` branch (`vrpdzvattqlrtbaowapx`)
+- Use Supabase MCP with `project_id: vrpdzvattqlrtbaowapx`
+
+**Step 2: Deploy to staging**
+- When ready to deploy to staging/demo, use Supabase branch merge:
+```
+mcp__plugin_supabase_supabase__merge_branch(branch_id="23001d49-d5ee-4820-8186-5e6d4b6c869a")
+```
+- This applies all migrations from local → staging (main)
+
+**Step 3: Verify**
+- Test on Cloud Run staging environment
+- If issues, fix on local branch and merge again
+
+### MCP Tool Usage
+
+When using Supabase MCP tools:
+- `apply_migration` → **ALWAYS** use `project_id: vrpdzvattqlrtbaowapx` (local)
+- `execute_sql` → Use `vrpdzvattqlrtbaowapx` for dev, `beniqwbanoqhxyrjwulg` only for read-only queries
+- `list_tables` → Either project is fine for inspection
 
 ## When Making Changes
 
+- **CRITICAL: Always test code before delivering** - Never deliver untested code. When creating new scripts, functions, or making edits, run the code to verify it works correctly before presenting it as complete. This includes:
+  - Running new scripts to verify they execute without errors
+  - Testing new API endpoints with sample requests
+  - Running existing tests if modifying tested code (`python -m pytest`)
+  - Starting the server (`uvicorn app:app --reload --port 8080`) to verify imports and syntax
 - Always use async/await for database and external API calls
 - Add new routers to `src/routers/__init__.py` and register in `app.py`
 - Keep prompts/instructions in Dutch for user-facing content

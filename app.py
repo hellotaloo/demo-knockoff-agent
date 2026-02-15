@@ -106,12 +106,36 @@ from src.routers import (
     candidates_router,
     agents_router,
     activities_router,
+    monitoring_router,
     elevenlabs_router,
+    auth_router,
+    workspaces_router,
+    vapi_router,
+    teams_router,
+    workflow_poc_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
 import src.routers.data_query as data_query_router_module
 import src.routers.document_collection as document_collection_router_module
+
+
+# ============================================================================
+# Logging Configuration
+# ============================================================================
+
+class EndpointFilter(logging.Filter):
+    """Filter out noisy polling endpoints from access logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Filter out GET requests to /vacancies/.../applications (polling endpoint)
+        message = record.getMessage()
+        if "/applications HTTP" in message and "GET" in message:
+            return False
+        return True
+
+# Apply filter to uvicorn access logger
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 
 # ============================================================================
@@ -223,7 +247,13 @@ app.include_router(scheduling_router)
 app.include_router(candidates_router)
 app.include_router(agents_router)
 app.include_router(activities_router)
+app.include_router(monitoring_router)
 app.include_router(elevenlabs_router)
+app.include_router(auth_router)
+app.include_router(workspaces_router)
+app.include_router(vapi_router)
+app.include_router(teams_router)
+app.include_router(workflow_poc_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

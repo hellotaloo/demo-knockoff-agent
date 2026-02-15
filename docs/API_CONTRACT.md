@@ -4,6 +4,10 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-02-15** — Added lightweight `GET /agents/counts` endpoint for navigation sidebar counts
+- **2026-02-15** — Renamed endpoints: `/activities` → `/monitoring` (event log), new `/api/activities/tasks` (active workflow tasks)
+- **2026-02-15** — Added `workflow_activities` query param to `/demo/reset` for seeding dashboard demo data
+- **2026-02-14** — Added Authentication endpoints with Google OAuth and dev-login for local testing
 - **2026-02-12** — Added GET/PUT `/elevenlabs/voice-config/{agent_id}` endpoints for storing/retrieving voice settings in database
 - **2026-02-12** — Added PATCH `/elevenlabs/agent/{agent_id}/config` endpoint for updating ElevenLabs agent voice configuration (voice_id, model_id, stability, similarity_boost)
 - **2026-02-12** — Changed `/interview/generate` to accept `vacancy_id` instead of `vacancy_text`; backend now fetches vacancy from database
@@ -48,22 +52,218 @@ Complete API reference for the Taloo recruitment screening platform.
 18. [Webhooks](#webhooks)
 19. [Scheduling](#scheduling)
 20. [ElevenLabs](#elevenlabs)
-21. [Demo](#demo)
-22. [Error Reference](#error-reference)
+21. [Activities](#activities)
+22. [Demo](#demo)
+23. [Error Reference](#error-reference)
 
 ---
 
 ## Authentication
 
-The API is open with no endpoint-level authentication. Security relies on:
+The API uses **Supabase Auth with Google OAuth** for user authentication. Protected endpoints require a valid JWT token.
 
-- **Webhook HMAC Validation**: ElevenLabs webhooks require SHA256 HMAC signature verification via `elevenlabs-signature` header
-- **Trusted External Services**: Twilio webhooks are trusted via IP range
-- **CORS**: Currently allows all origins (`*`)
+### Headers
 
 ```
-No Authorization header required for any endpoint.
+Authorization: Bearer <access_token>
+X-Workspace-ID: <workspace_uuid>
 ```
+
+### Auth Endpoints
+
+#### POST /auth/dev-login
+
+**Development-only** endpoint for local testing. Creates a dev user and returns a valid JWT token.
+
+**Auth:** None (only works when `ENVIRONMENT=local`)
+
+**Response:**
+
+```typescript
+interface AuthCallbackResponse {
+  access_token: string;      // JWT token (24hr expiry)
+  refresh_token: string;     // Not functional for dev-login
+  token_type: "bearer";
+  expires_in: number;        // Seconds until expiry
+  user: UserProfileResponse;
+  workspaces: WorkspaceSummary[];
+}
+
+interface UserProfileResponse {
+  id: string;
+  email: string;
+  full_name: string;
+  avatar_url?: string;
+  phone?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkspaceSummary {
+  id: string;
+  name: string;
+  slug: string;
+  logo_url?: string;
+  role: "owner" | "admin" | "member";
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "dev-refresh-token-not-functional",
+  "token_type": "bearer",
+  "expires_in": 86400,
+  "user": {
+    "id": "4079a85f-11ea-4d32-9c5c-be908b4020e1",
+    "email": "dev@taloo.be",
+    "full_name": "Dev User",
+    "avatar_url": null,
+    "phone": null,
+    "is_active": true,
+    "created_at": "2026-02-14T13:11:02.205952Z",
+    "updated_at": "2026-02-14T13:11:02.205952Z"
+  },
+  "workspaces": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "Default Workspace",
+      "slug": "default",
+      "logo_url": null,
+      "role": "owner"
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 403 | Dev login only available in local/development environment |
+
+---
+
+#### GET /auth/login/google
+
+Initiate Google OAuth login flow. Redirects user to Google consent page.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `redirect_to` | string | No | URL to redirect after login |
+
+**Response:** HTTP 302 redirect to Google OAuth
+
+---
+
+#### GET /auth/callback
+
+OAuth callback handler. Exchanges authorization code for tokens.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `code` | string | Yes | Authorization code from OAuth |
+
+**Response:** `AuthCallbackResponse` (same as dev-login)
+
+---
+
+#### POST /auth/refresh
+
+Refresh access token using refresh token.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface RefreshTokenRequest {
+  refresh_token: string;
+}
+```
+
+**Response:**
+
+```typescript
+interface TokenResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  expires_in: number;
+}
+```
+
+---
+
+#### POST /auth/logout
+
+Log out the current user.
+
+**Auth:** Optional Bearer token
+
+**Response:**
+
+```json
+{ "success": true }
+```
+
+---
+
+#### GET /auth/me
+
+Get current user info and workspaces.
+
+**Auth:** Bearer token required
+
+**Response:**
+
+```typescript
+interface AuthMeResponse {
+  user: UserProfileResponse;
+  workspaces: WorkspaceSummary[];
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 401 | Authorization header required |
+| 401 | Invalid authorization header format |
+| 401 | Invalid or malformed token |
+| 401 | Token expired |
+
+---
+
+### Multi-Workspace Support
+
+Users can belong to multiple workspaces with role-based access:
+
+| Role | Permissions |
+|------|-------------|
+| `owner` | Full access, can delete workspace |
+| `admin` | Manage members, full data access |
+| `member` | View and edit workspace data |
+
+When accessing workspace-scoped data, include the `X-Workspace-ID` header.
+
+---
+
+### Webhook Authentication
+
+- **ElevenLabs**: SHA256 HMAC signature via `elevenlabs-signature` header
+- **Twilio**: Trusted via IP range
 
 ---
 
@@ -863,6 +1063,46 @@ List vacancies by pre-onboarding agent status.
 - `archived`: Vacancy status is 'closed' or 'filled'
 
 **Response:** Same structure as `/agents/prescreening/vacancies`
+
+---
+
+### GET /agents/counts
+
+Get lightweight counts for navigation sidebar. Returns vacancy counts by agent status without fetching full vacancy data.
+
+**Auth:** None
+
+**Response:**
+
+```typescript
+interface NavigationCountsResponse {
+  prescreening: {
+    new: number;
+    generated: number;
+    archived: number;
+  };
+  preonboarding: {
+    new: number;
+    generated: number;
+    archived: number;
+  };
+}
+```
+
+```json
+{
+  "prescreening": {
+    "new": 7,
+    "generated": 3,
+    "archived": 2
+  },
+  "preonboarding": {
+    "new": 7,
+    "generated": 0,
+    "archived": 2
+  }
+}
+```
 
 ---
 
@@ -2510,6 +2750,104 @@ interface VoiceConfigRequest {
 
 ---
 
+## Activities
+
+Unified view of all active agent tasks (pre-screening, document collection, scheduling, etc.).
+
+### GET /api/activities/tasks
+
+Get all active workflow tasks as a table view.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `status` | string | No | `active` | Filter: `active`, `completed`, or `all` |
+| `stuck_only` | boolean | No | `false` | Only show stuck tasks (no update > 1 hour) |
+| `limit` | number | No | 50 | Results per page (1-200) |
+| `offset` | number | No | 0 | Pagination offset |
+
+**Response:**
+
+```typescript
+interface TaskRow {
+  id: string;                    // Workflow instance ID
+  candidate_name?: string;       // From context
+  vacancy_title?: string;        // From context
+  workflow_type: string;         // pre_screening, document_collection, scheduling
+  workflow_type_label: string;   // Human-readable: "Pre-screening", "Document Collection"
+  current_step: string;          // Raw step: waiting, knockout, complete
+  current_step_label: string;    // Human-readable: "Knockout vraag 2/3", "Wacht op ID kaart"
+  status: string;                // active, stuck, completed
+  is_stuck: boolean;             // True if no update > 1 hour
+  updated_at: string;            // ISO timestamp
+  time_ago: string;              // "2 min ago", "1 hour ago"
+}
+
+interface TasksResponse {
+  tasks: TaskRow[];
+  total: number;
+  stuck_count: number;           // Number of stuck tasks in result set
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "tasks": [
+    {
+      "id": "8d84fb06-7cf3-4e99-9668-93d05f2a0fee",
+      "candidate_name": "Jan Peeters",
+      "vacancy_title": "Operator Mengafdeling",
+      "workflow_type": "pre_screening",
+      "workflow_type_label": "Pre-screening",
+      "current_step": "waiting",
+      "current_step_label": "Knockout vraag 2/3",
+      "status": "active",
+      "is_stuck": false,
+      "updated_at": "2026-02-15T08:50:27.231819+00:00",
+      "time_ago": "just now"
+    },
+    {
+      "id": "bae9bfa2-6fda-40d3-8078-61fc5cb6b2ab",
+      "candidate_name": "Anna Vermeersch",
+      "vacancy_title": "Magazijnier",
+      "workflow_type": "document_collection",
+      "workflow_type_label": "Document Collection",
+      "current_step": "waiting",
+      "current_step_label": "Wacht op Rijbewijs",
+      "status": "stuck",
+      "is_stuck": true,
+      "updated_at": "2026-02-15T07:10:00.000000+00:00",
+      "time_ago": "1 hour ago"
+    }
+  ],
+  "total": 15,
+  "stuck_count": 2
+}
+```
+
+**Status Indicators:**
+
+| Status | Meaning |
+|--------|---------|
+| `active` | Task is in progress, recently updated |
+| `stuck` | No update for > 1 hour (may need attention) |
+| `completed` | Task finished successfully |
+
+**Workflow Types:**
+
+| Type | Label | Description |
+|------|-------|-------------|
+| `pre_screening` | Pre-screening | WhatsApp/voice screening conversation |
+| `document_collection` | Document Collection | ID/license/certificate collection |
+| `scheduling` | Interview Planning | Calendar scheduling |
+
+---
+
 ## Demo
 
 ### POST /demo/seed
@@ -2545,20 +2883,26 @@ Reset all data and optionally reseed.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `reseed` | boolean | No | true | Reseed after reset |
+| `reseed` | boolean | No | `true` | Reseed with demo data after reset |
+| `activities` | boolean | No | `true` | Include agent activities in reseed |
+| `workflow_activities` | boolean | No | `false` | Include activities dashboard demo data (workflow tasks) |
 
 **Response:**
 
 ```typescript
 interface DemoResetResponse {
-  status: "reset";
+  status: "success";
   message: string;
-  elevenlabs_cleanup: {
-    agents_deleted: number;
-    errors: number;
-  };
   seed?: DemoSeedResponse;
+  workflow_activities_count?: number;  // When workflow_activities=true
 }
+```
+
+**Example:**
+
+```bash
+# Full reset with all demo data including activities dashboard
+curl -X POST "http://localhost:8080/demo/reset?reseed=true&workflow_activities=true"
 ```
 
 ---

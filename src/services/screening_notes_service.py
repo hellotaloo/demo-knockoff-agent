@@ -72,8 +72,8 @@ async def generate_screening_notes_sections(
         """
         SELECT
             a.id, a.vacancy_id, a.candidate_id,
-            COALESCE(c.full_name, a.candidate_name) as candidate_name,
-            COALESCE(c.phone, a.candidate_phone) as candidate_phone,
+            a.candidate_name,
+            a.candidate_phone,
             c.email as candidate_email,
             a.channel, a.status, a.qualified,
             a.started_at, a.completed_at, a.interaction_seconds,

@@ -12,8 +12,9 @@ from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityC
 from src.repositories import CandidateRepository
 from src.services import ActivityService
 from src.database import get_db_pool
-from src.config import TWILIO_WHATSAPP_NUMBER, ELEVENLABS_AGENT_ID, logger
-from pre_screening_voice_agent import initiate_outbound_call
+from src.config import TWILIO_WHATSAPP_NUMBER, VAPI_API_KEY, logger
+from src.services.whatsapp_service import send_whatsapp_message
+from src.services.vapi_service import get_vapi_service
 from pre_screening_whatsapp_agent import create_simple_agent
 
 router = APIRouter(tags=["Outbound Screening"])
@@ -90,14 +91,7 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     - TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN must be set
     - TWILIO_WHATSAPP_NUMBER must be set
     """
-    # Import dependencies needed for the endpoint
-    from twilio.rest import Client
-    from src.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN
-
     pool = await get_db_pool()
-
-    # Initialize Twilio client (needed for WhatsApp)
-    twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
     # Validate vacancy_id
     try:
@@ -203,8 +197,10 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
             vacancy_id=str(vacancy_uuid),
             vacancy_title=row["vacancy_title"],
             pre_screening_id=str(row["pre_screening_id"]),
+            candidate_id=str(candidate_id),
             test_conversation_id=request.test_conversation_id,
             is_test=request.is_test,
+            application_id=str(application_id),
         )
         response.application_id = str(application_id)
         return response
@@ -219,7 +215,7 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
             whatsapp_agent_id=row["whatsapp_agent_id"],
             intro=row["intro"],
             is_test=request.is_test,
-            twilio_client=twilio_client,
+            application_id=str(application_id),
         )
         response.application_id = str(application_id)
         return response
@@ -233,73 +229,99 @@ async def _initiate_voice_screening(
     vacancy_id: str,
     vacancy_title: str,
     pre_screening_id: str,
+    candidate_id: str,
     test_conversation_id: Optional[str] = None,
     is_test: bool = False,
+    application_id: Optional[str] = None,
 ) -> OutboundScreeningResponse:
-    """Initiate a voice call screening using ElevenLabs master agent."""
+    """Initiate a voice call screening using VAPI squad with dynamic prompts."""
 
-    if not ELEVENLABS_AGENT_ID and not test_conversation_id:
+    if not VAPI_API_KEY and not test_conversation_id:
         raise HTTPException(
             status_code=500,
-            detail="ELEVENLABS_AGENT_ID not configured in environment"
+            detail="VAPI_API_KEY not configured in environment"
         )
 
     try:
         # Normalize phone for database storage
         phone_normalized = phone.lstrip("+")
 
-        # Note: Session cleanup is now handled by _clear_all_sessions_for_phone()
-        # called at the start of initiate_outbound_screening()
+        # Fetch questions from database (same pattern as WhatsApp agent)
+        questions = await pool.fetch(
+            """
+            SELECT id, question_type, position, question_text, ideal_answer
+            FROM ats.pre_screening_questions
+            WHERE pre_screening_id = $1
+            ORDER BY question_type, position
+            """,
+            uuid.UUID(pre_screening_id)
+        )
+
+        knockout_questions = [
+            {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
+            for q in questions if q["question_type"] == "knockout"
+        ]
+        qualification_questions = [
+            {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
+            for q in questions if q["question_type"] == "qualification"
+        ]
+
+        logger.info(f"Loaded {len(knockout_questions)} knockout + {len(qualification_questions)} qualification questions for voice call")
 
         # Test mode: skip real call, use provided conversation_id
         if test_conversation_id:
             result = {
                 "success": True,
                 "message": "Test mode: call simulated",
-                "conversation_id": test_conversation_id,
-                "call_sid": f"TEST_{test_conversation_id}",
+                "call_id": test_conversation_id,
+                "status": "test",
             }
-            logger.info(f"TEST MODE: Simulated call with conversation_id={test_conversation_id}")
+            logger.info(f"TEST MODE: Simulated VAPI call with call_id={test_conversation_id}")
         else:
-            # Initiate the call with the master voice agent
-            # Pass first_name and IDs for webhook correlation
-            result = initiate_outbound_call(
+            # Use VAPI service for real calls with dynamic prompts
+            vapi_service = get_vapi_service()
+            result = vapi_service.create_outbound_call(
                 to_number=phone,
-                agent_id=ELEVENLABS_AGENT_ID,
                 first_name=first_name,
-                pre_screening_id=pre_screening_id,
+                candidate_id=candidate_id,
                 vacancy_id=vacancy_id,
+                vacancy_title=vacancy_title,
+                knockout_questions=knockout_questions,
+                qualification_questions=qualification_questions,
+                pre_screening_id=pre_screening_id,
             )
 
         if result.get("success"):
             # Create conversation record in database to track the call
+            # Store VAPI call_id as session_id for webhook correlation
             conv_row = await pool.fetchrow(
                 """
                 INSERT INTO ats.screening_conversations
-                (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test)
-                VALUES ($1, $2, $3, $4, $5, 'voice', 'active', $6)
+                (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, application_id)
+                VALUES ($1, $2, $3, $4, $5, 'voice', 'active', $6, $7)
                 RETURNING id
                 """,
                 uuid.UUID(vacancy_id),
                 uuid.UUID(pre_screening_id),
-                result.get("conversation_id"),  # Use ElevenLabs conversation_id as session_id
+                result.get("call_id"),  # Use VAPI call_id as session_id
                 candidate_name,
                 phone_normalized,
-                is_test
+                is_test,
+                uuid.UUID(application_id) if application_id else None
             )
-            logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, elevenlabs_conversation_id={result.get('conversation_id')}, is_test={is_test}")
+            logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, vapi_call_id={result.get('call_id')}, is_test={is_test}")
 
             # Application stays 'active' while call is in progress
             # Status will change to 'processing' when transcript analysis starts,
             # then 'completed' when analysis finishes
-            logger.info(f"Voice call initiated, application remains status='active' for phone {phone_normalized}")
+            logger.info(f"VAPI call initiated, application remains status='active' for phone {phone_normalized}")
 
         return OutboundScreeningResponse(
             success=result["success"],
             message=result["message"],
             channel=InterviewChannel.VOICE,
-            conversation_id=result.get("conversation_id"),
-            call_sid=result.get("call_sid"),
+            conversation_id=result.get("call_id"),
+            call_sid=result.get("call_id"),  # For backwards compatibility
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -318,7 +340,7 @@ async def _initiate_whatsapp_screening(
     whatsapp_agent_id: Optional[str],
     intro: Optional[str],
     is_test: bool = False,
-    twilio_client = None,
+    application_id: Optional[str] = None,
 ) -> OutboundScreeningResponse:
     """Initiate a WhatsApp screening conversation using pre_screening_whatsapp_agent."""
 
@@ -373,6 +395,7 @@ async def _initiate_whatsapp_screening(
             company_name="",
             knockout_questions=knockout_questions,
             open_questions=open_questions,
+            is_test=is_test,
         )
 
         # Generate opening message (greeting + "are you ready?")
@@ -382,12 +405,10 @@ async def _initiate_whatsapp_screening(
         if not opening_message:
             raise Exception("Agent did not generate opening message")
 
-        # Send WhatsApp message via Twilio
-        message = twilio_client.messages.create(
-            body=opening_message,
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=f"whatsapp:{phone}"
-        )
+        # Send WhatsApp message via centralized service (handles ** to * conversion)
+        message_sid = await send_whatsapp_message(phone, opening_message)
+        if not message_sid:
+            raise Exception("Failed to send WhatsApp message")
 
         # Create conversation record with agent state
         # Generate a session_id for database compatibility (we use JSON state, not ADK sessions)
@@ -395,8 +416,8 @@ async def _initiate_whatsapp_screening(
         conv_row = await pool.fetchrow(
             """
             INSERT INTO ats.screening_conversations
-            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, agent_state)
-            VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6, $7)
+            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, agent_state, application_id)
+            VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6, $7, $8)
             RETURNING id
             """,
             uuid.UUID(vacancy_id),
@@ -405,7 +426,8 @@ async def _initiate_whatsapp_screening(
             candidate_name,
             phone_normalized,
             is_test,
-            json.dumps(agent.state.to_dict())  # Store initial agent state as JSON string
+            json.dumps(agent.state.to_dict()),  # Store initial agent state as JSON string
+            uuid.UUID(application_id) if application_id else None
         )
 
         conversation_id = conv_row["id"]
@@ -448,7 +470,7 @@ async def _initiate_whatsapp_screening(
             message="WhatsApp screening initiated",
             channel=InterviewChannel.WHATSAPP,
             conversation_id=str(conversation_id),
-            whatsapp_message_sid=message.sid,
+            whatsapp_message_sid=message_sid,
         )
     except Exception as e:
         logger.error(f"Error initiating WhatsApp screening: {e}")

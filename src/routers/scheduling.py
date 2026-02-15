@@ -13,15 +13,13 @@ import logging
 import os
 import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.database import get_db_pool
 from src.services.scheduling_service import (
     scheduling_service,
     SchedulingService,
-    TimeSlot,
-    SlotData,
 )
 from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
@@ -39,12 +37,19 @@ class GetTimeSlotsRequest(BaseModel):
     """Request for getting available time slots."""
     conversation_id: Optional[str] = None
     recruiter_id: Optional[str] = None
+    recruiter_email: Optional[str] = None  # Override default recruiter calendar
+    mode: str = "full"  # "full", "quick", or "specific_day"
+    specific_date: Optional[str] = None  # Required for "specific_day" mode (YYYY-MM-DD)
+    days_ahead: int = 3  # Only used for "full" mode
 
 
 class GetTimeSlotsResponse(BaseModel):
     """Response containing available time slots."""
-    slots: list[TimeSlot]
+    slots: list  # Can be TimeSlot (full/specific_day) or individual slots (quick)
     formatted_text: str
+    mode: str = "full"
+    has_availability: bool = True
+    requested_date: Optional[str] = None  # Only for specific_day mode
 
 
 class SaveSlotRequest(BaseModel):
@@ -126,65 +131,165 @@ class CancelResponse(BaseModel):
 # Endpoints
 # =============================================================================
 
-@router.post("/get-time-slots", response_model=GetTimeSlotsResponse)
-async def get_time_slots(request: GetTimeSlotsRequest = GetTimeSlotsRequest()):
+@router.post("/get-time-slots")
+async def get_time_slots(raw_request: Request):
     """
     Get available time slots for scheduling interviews.
 
     This endpoint is called by:
+    - VAPI voice agent via tool call (sends wrapper format)
     - ElevenLabs voice agent via webhook tool
     - Frontend applications for scheduling UI
 
-    Returns 3 business days starting from +3 days from today,
-    with morning (voormiddag) and afternoon (namiddag) slots.
+    Supports three retrieval modes:
+    - "full" (default): Returns all slots grouped by day (3 business days)
+    - "quick": Returns 3 individual slots spread across morning/afternoon
+    - "specific_day": Returns slots for a specific date (requires specific_date param)
 
     If Google Calendar is configured (GOOGLE_SERVICE_ACCOUNT_FILE),
     returns real availability from the recruiter's calendar.
     Uses GOOGLE_CALENDAR_IMPERSONATE_EMAIL as the default recruiter calendar.
 
-    Request body is optional - all fields have defaults.
+    Handles both direct requests and VAPI's tool-call wrapper format.
     """
+    import json
+
+    # Parse raw body to handle both direct and VAPI wrapper formats
+    body = await raw_request.body()
+    body_str = body.decode("utf-8") if body else "{}"
+    logger.info(f"[scheduling/get-time-slots] RAW BODY: {body_str}")
+
+    try:
+        data = json.loads(body_str) if body_str else {}
+    except json.JSONDecodeError:
+        data = {}
+
+    # VAPI wraps tool-call payloads inside a "message" envelope - unwrap it
+    if "message" in data and isinstance(data["message"], dict):
+        logger.info("[scheduling/get-time-slots] Unwrapping VAPI 'message' envelope")
+        data = data["message"]
+
+    # Check if this is VAPI tool-call format (has "type": "tool-calls" and "toolCallList")
+    is_vapi_format = data.get("type") == "tool-calls" and "toolCallList" in data
+    vapi_tool_call_id = None
+
+    if is_vapi_format:
+        logger.info("[scheduling/get-time-slots] Detected VAPI tool-call wrapper format")
+        # Extract arguments from first tool call
+        tool_calls = data.get("toolCallList", [])
+        if tool_calls:
+            first_call = tool_calls[0]
+            vapi_tool_call_id = first_call.get("id")
+            # Handle both direct and function wrapper formats
+            if "function" in first_call and isinstance(first_call["function"], dict):
+                args_raw = first_call["function"].get("arguments", "{}")
+                arguments = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+            else:
+                arguments = first_call.get("arguments", {})
+            logger.info(f"[scheduling/get-time-slots] Extracted VAPI arguments: {arguments}")
+        else:
+            arguments = {}
+
+        # Build request from VAPI arguments
+        request = GetTimeSlotsRequest(
+            mode=arguments.get("mode", "full"),
+            specific_date=arguments.get("specific_date"),
+            days_ahead=arguments.get("days_ahead", 3),
+            recruiter_email=arguments.get("recruiter_email"),
+            conversation_id=arguments.get("conversation_id"),
+            recruiter_id=arguments.get("recruiter_id"),
+        )
+    else:
+        # Direct request format
+        request = GetTimeSlotsRequest(**data) if data else GetTimeSlotsRequest()
+
+    logger.info(f"[scheduling/get-time-slots] PARSED REQUEST: {request.model_dump()}")
+
+    # Auto-detect mode: if specific_date is provided, use specific_day mode
+    mode = request.mode
+    if request.specific_date and mode != "specific_day":
+        mode = "specific_day"
+        logger.info(f"[scheduling/get-time-slots] Auto-switching to specific_day mode (specific_date={request.specific_date})")
+
     logger.info(
         f"[scheduling/get-time-slots] request: "
         f"conversation_id={request.conversation_id}, "
-        f"recruiter_id={request.recruiter_id}"
+        f"recruiter_id={request.recruiter_id}, "
+        f"mode={mode}, "
+        f"specific_date={request.specific_date}"
     )
 
-    # Use default recruiter email from environment
-    recruiter_email = os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
+    # Use provided recruiter email or default from environment
+    recruiter_email = request.recruiter_email or os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
 
-    # Use async version for Google Calendar integration
-    slot_data = await scheduling_service.get_available_slots_async(
-        recruiter_email=recruiter_email
+    if not recruiter_email:
+        logger.warning("[scheduling/get-time-slots] No recruiter email configured")
+        return GetTimeSlotsResponse(
+            slots=[],
+            formatted_text="Geen recruiter e-mail geconfigureerd.",
+            mode=request.mode,
+            has_availability=False,
+        )
+
+    # Use the voice agent calendar helper
+    from pre_screening_voice_agent.calendar_helpers import get_time_slots_for_voice
+
+    result = await get_time_slots_for_voice(
+        specific_date=request.specific_date,
+        start_from_days=3,
     )
 
     response = GetTimeSlotsResponse(
-        slots=slot_data.slots,
-        formatted_text=slot_data.formatted_text
+        slots=result["slots"],
+        formatted_text=result["formatted"],
+        mode="specific_day" if request.specific_date else "default",
+        has_availability=result.get("has_availability", False),
+        requested_date=result.get("requested_date"),
     )
 
     # Log response for debugging
     lines = [
         "[scheduling/get-time-slots] response:",
-        f"  recruiter_email={recruiter_email or 'not configured'}",
+        f"  recruiter_email={recruiter_email}",
+        f"  has_availability={response.has_availability}",
         f"  slots_count={len(response.slots)}"
     ]
     for i, slot in enumerate(response.slots, 1):
-        lines.append(f"  slot {i}: {slot.dutch_date} ({slot.date})")
-        lines.append(f"    voormiddag: {', '.join(slot.morning)}")
-        lines.append(f"    namiddag: {', '.join(slot.afternoon)}")
+        if isinstance(slot, dict):
+            lines.append(f"  slot {i}: {slot.get('dutch_text', slot.get('dutch_date', 'N/A'))}")
+        else:
+            lines.append(f"  slot {i}: {slot}")
     logger.info("\n".join(lines))
+
+    # Return in VAPI format if this was a VAPI tool-call request
+    if is_vapi_format:
+        vapi_response = {
+            "results": [{
+                "toolCallId": vapi_tool_call_id,
+                "result": json.dumps({
+                    "slots": response.slots,
+                    "formatted_text": response.formatted_text,
+                    "mode": response.mode,
+                    "has_availability": response.has_availability,
+                    "requested_date": response.requested_date,
+                })
+            }]
+        }
+        logger.info(f"[scheduling/get-time-slots] Returning VAPI format response")
+        return vapi_response
 
     return response
 
 
-@router.post("/save-slot", response_model=SaveSlotResponse)
-async def save_time_slot(request: SaveSlotRequest):
+@router.post("/save-slot")
+async def save_time_slot(raw_request: Request):
     """
     Save a selected interview time slot and create a Google Calendar event.
 
-    This endpoint is called by ElevenLabs voice agent via webhook tool
-    when a candidate selects an interview time slot.
+    This endpoint is called by:
+    - VAPI voice agent via tool call (sends wrapper format)
+    - ElevenLabs voice agent via webhook tool
+    - Frontend applications
 
     The endpoint:
     1. Looks up vacancy_id from conversation_id (via screening_conversations)
@@ -192,16 +297,71 @@ async def save_time_slot(request: SaveSlotRequest):
     3. Creates a Google Calendar event (if configured)
     4. Returns confirmation for the agent to relay to candidate
 
-    ElevenLabs Webhook Tool Configuration:
-    - URL: https://your-domain.com/api/scheduling/save-slot
-    - Method: POST
-    - Body parameters:
-      - conversation_id: dynamic_variable (system.conversation_id)
-      - selected_date: llm_prompt ("Extract the selected date in YYYY-MM-DD format")
-      - selected_time: llm_prompt ("Extract the selected time, e.g., '10u' or '14u'")
-      - selected_slot_text: llm_prompt ("Extract the full slot text in Dutch")
+    Handles both direct requests and VAPI's tool-call wrapper format.
     """
-    # Enhanced logging for debugging ElevenLabs webhook calls
+    import json
+
+    # Parse raw body to handle both direct and VAPI wrapper formats
+    body = await raw_request.body()
+    body_str = body.decode("utf-8") if body else "{}"
+    logger.info(f"[scheduling/save-slot] RAW BODY: {body_str}")
+
+    try:
+        data = json.loads(body_str) if body_str else {}
+    except json.JSONDecodeError:
+        data = {}
+
+    # VAPI wraps tool-call payloads inside a "message" envelope - unwrap it
+    if "message" in data and isinstance(data["message"], dict):
+        logger.info("[scheduling/save-slot] Unwrapping VAPI 'message' envelope")
+        data = data["message"]
+
+    # Check if this is VAPI tool-call format (has "type": "tool-calls" and "toolCallList")
+    is_vapi_format = data.get("type") == "tool-calls" and "toolCallList" in data
+    vapi_tool_call_id = None
+    vapi_call_id = None
+
+    if is_vapi_format:
+        logger.info("[scheduling/save-slot] Detected VAPI tool-call wrapper format")
+        # Extract call_id from the call object (for conversation lookup)
+        call_obj = data.get("call", {})
+        vapi_call_id = call_obj.get("id")
+
+        # Extract arguments from first tool call
+        tool_calls = data.get("toolCallList", [])
+        if tool_calls:
+            first_call = tool_calls[0]
+            vapi_tool_call_id = first_call.get("id")
+            # Handle both direct and function wrapper formats
+            if "function" in first_call and isinstance(first_call["function"], dict):
+                args_raw = first_call["function"].get("arguments", "{}")
+                arguments = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+            else:
+                arguments = first_call.get("arguments", {})
+            logger.info(f"[scheduling/save-slot] Extracted VAPI arguments: {arguments}")
+        else:
+            arguments = {}
+
+        # Build request from VAPI arguments
+        # Use VAPI call_id as conversation_id for DB lookup
+        request = SaveSlotRequest(
+            conversation_id=vapi_call_id or arguments.get("conversation_id", ""),
+            selected_date=arguments.get("selected_date", ""),
+            selected_time=arguments.get("selected_time", ""),
+            selected_slot_text=arguments.get("selected_slot_text"),
+            candidate_name=arguments.get("candidate_name"),
+            candidate_phone=arguments.get("candidate_phone"),
+            candidate_email=arguments.get("candidate_email"),
+            notes=arguments.get("notes"),
+            debug=arguments.get("debug", False),
+        )
+    else:
+        # Direct request format
+        request = SaveSlotRequest(**data) if data else SaveSlotRequest(
+            conversation_id="", selected_date="", selected_time=""
+        )
+
+    # Enhanced logging for debugging webhook calls
     print("\n" + "=" * 60)
     print("📅 SAVE INTERVIEW SLOT - Webhook Called")
     print("=" * 60)
@@ -212,6 +372,7 @@ async def save_time_slot(request: SaveSlotRequest):
     print(f"  candidate_name:  {request.candidate_name}")
     print(f"  candidate_email: {request.candidate_email}")
     print(f"  debug_mode:      {request.debug}")
+    print(f"  is_vapi_format:  {is_vapi_format}")
     print("-" * 60)
 
     logger.info(
@@ -263,6 +424,15 @@ async def save_time_slot(request: SaveSlotRequest):
         print(f"   Message: {message}")
         print("=" * 60 + "\n")
         logger.info(f"[scheduling/save-slot] DEBUG response: {response.model_dump()}")
+
+        # Return in VAPI format if this was a VAPI tool-call request
+        if is_vapi_format:
+            return {
+                "results": [{
+                    "toolCallId": vapi_tool_call_id,
+                    "result": json.dumps(response.model_dump())
+                }]
+            }
         return response
 
     # Normal mode: save to DB and create calendar event
@@ -355,13 +525,37 @@ async def save_time_slot(request: SaveSlotRequest):
                     summary=f"Interview ingepland op {slot_text}"
                 )
 
+        # Return in VAPI format if this was a VAPI tool-call request
+        if is_vapi_format:
+            return {
+                "results": [{
+                    "toolCallId": vapi_tool_call_id,
+                    "result": json.dumps(response.model_dump())
+                }]
+            }
         return response
 
     except ValueError as e:
         logger.error(f"[scheduling/save-slot] error: {e}")
+        # Return error in VAPI format if this was a VAPI tool-call request
+        if is_vapi_format:
+            return {
+                "results": [{
+                    "toolCallId": vapi_tool_call_id,
+                    "result": json.dumps({"success": False, "error": str(e)})
+                }]
+            }
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"[scheduling/save-slot] unexpected error: {e}")
+        # Return error in VAPI format if this was a VAPI tool-call request
+        if is_vapi_format:
+            return {
+                "results": [{
+                    "toolCallId": vapi_tool_call_id,
+                    "result": json.dumps({"success": False, "error": "Failed to save scheduled slot"})
+                }]
+            }
         raise HTTPException(status_code=500, detail="Failed to save scheduled slot")
 
 
@@ -529,55 +723,68 @@ async def reschedule_interview(
         )
         print(f"  Created new interview: {new_interview_id}")
 
-        # 4. Handle Google Calendar (cancel old event, create new one)
+        # 4. Handle Google Calendar - UPDATE existing event (preserves recruiter notes)
         recruiter_email = os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
         if recruiter_email:
             from src.services.google_calendar_service import calendar_service
-            service = SchedulingService(pool)
+            from zoneinfo import ZoneInfo
 
-            # Cancel old calendar event if it exists
             old_calendar_event_id = existing.get("calendar_event_id")
             if old_calendar_event_id:
+                # Update existing event (preserves any notes recruiter added)
                 try:
-                    print(f"📆 Cancelling old calendar event: {old_calendar_event_id}")
-                    await calendar_service.delete_event(
+                    # Parse new time
+                    hour = int(request.new_time.replace("u", "").replace("h", ""))
+                    tz = ZoneInfo("Europe/Brussels")
+                    new_start_time = datetime.combine(new_date, datetime.min.time(), tzinfo=tz).replace(hour=hour)
+
+                    print(f"📆 Updating calendar event: {old_calendar_event_id}")
+                    print(f"   New date: {request.new_date}")
+                    print(f"   New time: {request.new_time}")
+
+                    updated_event = await calendar_service.update_event(
                         calendar_email=recruiter_email,
-                        event_id=old_calendar_event_id
+                        event_id=old_calendar_event_id,
+                        start_time=new_start_time,
                     )
-                    print(f"   Old event cancelled: ✅")
+
+                    if updated_event:
+                        print(f"   Calendar event updated: ✅")
+                        # Associate the same calendar event with the new interview record
+                        await repo.update_calendar_event_id(
+                            interview_id=new_interview_id,
+                            calendar_event_id=old_calendar_event_id
+                        )
+                        print(f"   Linked calendar_event_id to new interview record")
+                    else:
+                        print(f"   Calendar event update: ⚠️ Failed")
                 except Exception as e:
-                    logger.warning(f"[scheduling/reschedule] Failed to cancel old event: {e}")
-                    print(f"   Old event cancel: ⚠️ Failed - {e}")
+                    logger.warning(f"[scheduling/reschedule] Calendar event update failed: {e}")
+                    print(f"   Calendar event update: ⚠️ Failed - {e}")
+            else:
+                # No existing event - create new one
+                try:
+                    service = SchedulingService(pool)
+                    candidate_name = existing["candidate_name"] or "Kandidaat"
+                    print(f"📆 Creating new calendar event for: {candidate_name}")
 
-            # Create new calendar event
-            try:
-                candidate_name = existing["candidate_name"] or "Kandidaat"
-                print(f"📆 Creating new calendar event for: {candidate_name}")
-                print(f"   Recruiter calendar: {recruiter_email}")
-                print(f"   Date: {request.new_date}")
-                print(f"   Time: {request.new_time}")
-
-                calendar_result = await service.schedule_slot_async(
-                    recruiter_email=recruiter_email,
-                    candidate_name=candidate_name,
-                    date=request.new_date,
-                    time=request.new_time,
-                    conversation_id=conversation_id
-                )
-                if calendar_result.confirmed and calendar_result.calendar_event_id:
-                    print(f"   Calendar event ID: {calendar_result.calendar_event_id}")
-                    print(f"   Calendar result: ✅ Created")
-                    # Store the new calendar event ID
-                    await repo.update_calendar_event_id(
-                        interview_id=new_interview_id,
-                        calendar_event_id=calendar_result.calendar_event_id
+                    calendar_result = await service.schedule_slot_async(
+                        recruiter_email=recruiter_email,
+                        candidate_name=candidate_name,
+                        date=request.new_date,
+                        time=request.new_time,
+                        conversation_id=conversation_id
                     )
-                    print(f"   Stored calendar_event_id in database")
-                else:
-                    print(f"   Calendar result: ✅ Created (no event ID)")
-            except Exception as e:
-                logger.warning(f"[scheduling/reschedule] Calendar event failed: {e}")
-                print(f"   Calendar result: ⚠️ Failed - {e}")
+                    if calendar_result.confirmed and calendar_result.calendar_event_id:
+                        print(f"   Calendar event ID: {calendar_result.calendar_event_id}")
+                        await repo.update_calendar_event_id(
+                            interview_id=new_interview_id,
+                            calendar_event_id=calendar_result.calendar_event_id
+                        )
+                        print(f"   Calendar result: ✅ Created")
+                except Exception as e:
+                    logger.warning(f"[scheduling/reschedule] Calendar event create failed: {e}")
+                    print(f"   Calendar result: ⚠️ Failed - {e}")
 
         # Build response message
         slot_text = request.new_slot_text or f"{request.new_date} om {request.new_time}"

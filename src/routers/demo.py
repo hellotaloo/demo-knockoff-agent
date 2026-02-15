@@ -13,9 +13,13 @@ import json
 
 from src.database import get_db_pool
 from src.services import DemoService
+from src.services.workflow_poc_service import WorkflowPocService
 from src.repositories import ConversationRepository
 
 logger = logging.getLogger(__name__)
+
+# Default workspace ID for demo data
+DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 router = APIRouter(tags=["Demo Data"])
 
@@ -64,10 +68,10 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
             client_name_to_id = {}
             for cli in clients_data:
                 row = await conn.fetchrow("""
-                    INSERT INTO ats.clients (name, location, industry, logo)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO ats.clients (name, location, industry, logo, workspace_id)
+                    VALUES ($1, $2, $3, $4, $5)
                     RETURNING id
-                """, cli["name"], cli.get("location"), cli.get("industry"), cli.get("logo"))
+                """, cli["name"], cli.get("location"), cli.get("industry"), cli.get("logo"), DEFAULT_WORKSPACE_ID)
                 client_id = row["id"]
                 created_clients.append({"id": str(client_id), "name": cli["name"]})
                 client_name_to_id[cli["name"]] = client_id
@@ -82,13 +86,13 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 row = await conn.fetchrow("""
                     INSERT INTO ats.candidates
                     (phone, email, first_name, last_name, full_name, source,
-                     status, availability, available_from, rating)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     status, availability, available_from, rating, workspace_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     RETURNING id
                 """, cand["phone"], cand.get("email"), cand.get("first_name"),
                     cand.get("last_name"), cand["full_name"], cand.get("source", "application"),
                     cand.get("status", "new"), cand.get("availability", "unknown"),
-                    available_from, cand.get("rating"))
+                    available_from, cand.get("rating"), DEFAULT_WORKSPACE_ID)
 
                 candidate_id = row["id"]
                 created_candidates.append({
@@ -120,11 +124,11 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                     client_id = client_name_to_id.get(vac["client_name"])
 
                 row = await conn.fetchrow("""
-                    INSERT INTO ats.vacancies (title, company, location, description, status, source, source_id, recruiter_id, client_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    INSERT INTO ats.vacancies (title, company, location, description, status, source, source_id, recruiter_id, client_id, workspace_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING id
                 """, vac["title"], vac["company"], vac["location"], vac["description"],
-                    vac["status"], vac["source"], vac["source_id"], recruiter_id, client_id)
+                    vac["status"], vac["source"], vac["source_id"], recruiter_id, client_id, DEFAULT_WORKSPACE_ID)
                 created_vacancies.append({"id": str(row["id"]), "title": vac["title"]})
 
             # Insert applications (with candidate_id linked)
@@ -271,7 +275,8 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 @router.post("/demo/reset")
 async def reset_demo_data(
     reseed: bool = Query(True, description="Reseed with demo data after reset"),
-    activities: bool = Query(True, description="Include activities in reseed (only used if reseed=true)")
+    activities: bool = Query(True, description="Include activities in reseed (only used if reseed=true)"),
+    workflow_activities: bool = Query(False, description="Include workflow activities dashboard demo data")
 ):
     """Clear all vacancies, applications, candidates, and pre-screenings, optionally reseed with demo data."""
     pool = await get_db_pool()
@@ -279,7 +284,13 @@ async def reset_demo_data(
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Delete in correct order respecting foreign key constraints
-            # First: tables that reference applications/candidates
+            # First: conversation_messages (references screening_conversations)
+            try:
+                await conn.execute("DELETE FROM ats.conversation_messages")
+            except Exception:
+                pass  # Table may not exist yet
+
+            # Then: tables that reference applications/candidates
             await conn.execute("DELETE FROM ats.screening_conversations")
             await conn.execute("DELETE FROM ats.application_answers")
             await conn.execute("DELETE FROM ats.scheduled_interviews")
@@ -313,6 +324,12 @@ async def reset_demo_data(
             await conn.execute("DELETE FROM ats.recruiters")
             await conn.execute("DELETE FROM ats.clients")
 
+            # Delete workflow_poc (activities dashboard)
+            try:
+                await conn.execute("DELETE FROM ats.workflow_poc")
+            except Exception:
+                pass  # Table may not exist yet
+
     result = {
         "status": "success",
         "message": "All demo data cleared",
@@ -323,5 +340,75 @@ async def reset_demo_data(
         seed_result = await seed_demo_data(activities=activities)
         result["message"] = "Demo data reset and reseeded" + ("" if activities else " (without activities)")
         result["seed"] = seed_result
+
+    # Optionally seed workflow activities (activities dashboard)
+    if workflow_activities:
+        workflow_service = WorkflowPocService(pool)
+        await workflow_service.ensure_table()
+
+        # Get created vacancies and candidates for context
+        created_vacancies = result.get("seed", {}).get("vacancies", [])
+        created_candidates = []
+        if reseed:
+            # Query just-created candidates for names
+            rows = await pool.fetch("""
+                SELECT id, full_name FROM ats.candidates
+                ORDER BY created_at DESC LIMIT 10
+            """)
+            created_candidates = [{"id": str(r["id"]), "full_name": r["full_name"]} for r in rows]
+
+        # Seed realistic workflow activities using actual candidate/vacancy data
+        workflow_demo_data = []
+
+        # Pre-screening workflows (use first 4 candidates if available)
+        for i, step_info in enumerate([
+            {"knockout_index": 2, "knockout_total": 3},
+            {"knockout_index": 1, "knockout_total": 3},
+            {"knockout_index": 3, "knockout_total": 3},
+            {"open_index": 1, "open_total": 2},
+        ]):
+            if i < len(created_candidates) and i < len(created_vacancies):
+                workflow_demo_data.append({
+                    "workflow_type": "pre_screening",
+                    "context": {
+                        "candidate_name": created_candidates[i]["full_name"],
+                        "candidate_id": created_candidates[i]["id"],
+                        "vacancy_title": created_vacancies[i]["title"],
+                        "vacancy_id": created_vacancies[i]["id"],
+                        **step_info,
+                    },
+                    "timeout_seconds": 7200,
+                })
+
+        # Document collection workflows (use next 3 candidates)
+        doc_types = ["ID kaart", "Rijbewijs", "Werkvergunning"]
+        for i, doc_type in enumerate(doc_types):
+            idx = i + 4  # Start after pre-screening candidates
+            if idx < len(created_candidates) and i < len(created_vacancies):
+                workflow_demo_data.append({
+                    "workflow_type": "document_collection",
+                    "context": {
+                        "candidate_name": created_candidates[idx]["full_name"],
+                        "candidate_id": created_candidates[idx]["id"],
+                        "vacancy_title": created_vacancies[i]["title"],
+                        "vacancy_id": created_vacancies[i]["id"],
+                        "document_type": doc_type,
+                    },
+                    "timeout_seconds": 86400,
+                })
+
+        # Create the workflows
+        created_workflows = 0
+        for data in workflow_demo_data:
+            await workflow_service.create(
+                workflow_type=data["workflow_type"],
+                context=data["context"],
+                timeout_seconds=data["timeout_seconds"],
+            )
+            created_workflows += 1
+
+        result["workflow_activities_count"] = created_workflows
+        if "message" in result:
+            result["message"] += f", {created_workflows} workflow activities"
 
     return result

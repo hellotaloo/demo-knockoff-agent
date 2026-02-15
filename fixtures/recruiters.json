@@ -5,6 +5,7 @@
     "phone": "+32 473 12 34 56",
     "team": "West-Vlaanderen",
     "role": "Senior Recruiter",
+    "avatar_url": "/avatars/large/female_6.png",
     "is_active": true
   },
   {
@@ -13,6 +14,7 @@
     "phone": "+32 476 98 76 54",
     "team": "Limburg",
     "role": "Recruiter",
+    "avatar_url": "/avatars/large/male_2.png",
     "is_active": true
   },
   {
@@ -21,6 +23,7 @@
     "phone": "+32 479 11 22 33",
     "team": "Vlaams-Brabant",
     "role": "Junior Recruiter",
+    "avatar_url": "/avatars/large/female_1.png",
     "is_active": true
   },
   {
@@ -29,6 +32,7 @@
     "phone": "+32 478 44 55 66",
     "team": "Oost-Vlaanderen",
     "role": "Team Lead",
+    "avatar_url": "/avatars/large/male_1.png",
     "is_active": true
   },
   {
@@ -37,6 +41,7 @@
     "phone": "+32 477 77 88 99",
     "team": "Antwerpen",
     "role": "Senior Recruiter",
+    "avatar_url": "/avatars/large/female_3.png",
     "is_active": true
   }
 ]

@@ -169,3 +169,23 @@ class AgentVacancyRepository:
 
         rows = await self.pool.fetch(query, limit, offset)
         return rows, total
+
+    async def get_counts(self) -> dict:
+        """
+        Get all agent vacancy counts in a single lightweight query.
+        Used for navigation counters - no LATERAL joins or full data fetching.
+        """
+        query = """
+            SELECT
+                -- Pre-screening counts
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NULL) as prescreening_new,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL) as prescreening_generated,
+                COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as prescreening_archived,
+                -- Pre-onboarding counts
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND (v.preonboarding_agent_enabled IS NULL OR v.preonboarding_agent_enabled = false)) as preonboarding_new,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND v.preonboarding_agent_enabled = true) as preonboarding_generated,
+                COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as preonboarding_archived
+            FROM ats.vacancies v
+            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+        """
+        return await self.pool.fetchrow(query)

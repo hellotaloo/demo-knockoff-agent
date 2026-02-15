@@ -18,7 +18,13 @@ from .scheduling import router as scheduling_router
 from .candidates import router as candidates_router
 from .agents import router as agents_router
 from .activities import router as activities_router
+from .monitoring import router as monitoring_router
 from .elevenlabs import router as elevenlabs_router
+from .auth import router as auth_router
+from .workspaces import router as workspaces_router
+from .vapi import router as vapi_router
+from .teams import router as teams_router
+from .workflow_poc import router as workflow_poc_router
 
 __all__ = [
     "health_router",
@@ -38,5 +44,11 @@ __all__ = [
     "candidates_router",
     "agents_router",
     "activities_router",
+    "monitoring_router",
     "elevenlabs_router",
+    "auth_router",
+    "workspaces_router",
+    "vapi_router",
+    "teams_router",
+    "workflow_poc_router",
 ]

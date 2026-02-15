@@ -96,6 +96,12 @@ class DashboardStatsResponse(BaseModel):
     channel_breakdown: dict[str, int]  # voice, whatsapp, cv
 
 
+class NavigationCountsResponse(BaseModel):
+    """Lightweight counts for navigation sidebar."""
+    prescreening: dict[str, int]  # {"new": 7, "generated": 3, "archived": 2}
+    preonboarding: dict[str, int]  # {"new": 7, "generated": 0, "archived": 2}
+
+
 class VacancyDetailResponse(VacancyResponse):
     """Extended vacancy response with activity timeline."""
     timeline: list["ActivityResponse"] = []

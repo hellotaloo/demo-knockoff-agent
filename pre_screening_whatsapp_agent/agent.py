@@ -17,7 +17,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from src.services.scheduling_service import scheduling_service
+from pre_screening_whatsapp_agent.calendar_helpers import (
+    get_time_slots_for_whatsapp,
+    get_slots_for_specific_day,
+    TimeSlot,
+    SlotData,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +37,17 @@ class AgentConfig:
     # Models - gemini-2.5-flash-lite is fastest based on testing
     model_generate: str = "gemini-2.5-flash-lite"  # Fast model for response generation
     model_evaluate: str = "gemini-2.5-flash-lite"  # Fast model for JSON evaluations
+
+    # System instruction for consistent tone
+    system_instruction: str = """Je bent een professionele recruiter die een pre-screening gesprek voert via WhatsApp.
+
+Stijl:
+- Nederlands (Vlaams), professioneel maar warm
+- Korte, natuurlijke berichten
+- Vermijd "top" en "super"
+- GEEN emojis (behalve 📅 📋 bij tijdsloten)
+- Geen verkleinwoordjes, geen samenvattingen
+- GEEN begroetingen halverwege het gesprek"""
 
     # Exit thresholds
     max_unrelated_answers: int = 2  # Exit after this many irrelevant answers
@@ -163,9 +179,14 @@ class ConversationState:
     scheduled_time: str = ""  # Human-readable slot text (e.g., "maandag 17 februari om 10u")
     selected_date: str = ""   # ISO date (YYYY-MM-DD) for database storage
     selected_time: str = ""   # Time slot (e.g., "10u") for database storage
+    scheduling_attempts: int = 0  # Track how many times we've tried to find slots
+    asked_for_day_preference: bool = False  # Whether we've asked for a preferred day
 
     # Outcome
     outcome: str = ""
+
+    # Test mode (skip real calendar booking)
+    is_test: bool = False
 
     def to_dict(self) -> dict:
         """Serialize state to dictionary for JSON storage."""
@@ -190,7 +211,10 @@ class ConversationState:
             "scheduled_time": self.scheduled_time,
             "selected_date": self.selected_date,
             "selected_time": self.selected_time,
+            "scheduling_attempts": self.scheduling_attempts,
+            "asked_for_day_preference": self.asked_for_day_preference,
             "outcome": self.outcome,
+            "is_test": self.is_test,
         }
 
     @classmethod
@@ -217,7 +241,10 @@ class ConversationState:
             scheduled_time=data.get("scheduled_time", ""),
             selected_date=data.get("selected_date", ""),
             selected_time=data.get("selected_time", ""),
+            scheduling_attempts=data.get("scheduling_attempts", 0),
+            asked_for_day_preference=data.get("asked_for_day_preference", False),
             outcome=data.get("outcome", ""),
+            is_test=data.get("is_test", False),
         )
 
     def to_json(self) -> str:
@@ -236,13 +263,13 @@ class ConversationState:
 
 HELLO_PROMPT = """Schrijf een welkomstbericht. Je MOET dit exacte formaat volgen:
 
-Hey {candidate_name}! 👋
-Super leuk dat je interesse hebt in de functie {vacancy_title}!
+Hey {candidate_first_name}! 👋
+Leuk dat je interesse hebt in de functie {vacancy_title}.
 
 Ik heb een paar korte vragen voor je. Dit duurt maar een paar minuutjes.
 Ben je klaar om te beginnen?
 
-BELANGRIJK: Begin met "Hey {candidate_name}!" en noem de vacature. Schrijf in het Nederlands (Vlaams)."""
+BELANGRIJK: Begin met "Hey {candidate_first_name}! 👋" en noem de vacature. Schrijf in het Nederlands (Vlaams)."""
 
 INTENT_READY_PROMPT = """Bepaal of de kandidaat klaar is om te beginnen met het gesprek.
 
@@ -254,22 +281,13 @@ Antwoord ALLEEN met een JSON object:
 - ready=true als de kandidaat instemt, bevestigt, of aangeeft klaar te zijn (ja, ok, yes, sure, prima, etc.)
 - ready=false als de kandidaat twijfelt, een vraag stelt, of nog niet wil beginnen"""
 
-READY_START_PROMPT = """Reageer positief op de kandidaat en stel direct de eerste vraag.
+READY_START_PROMPT = """De kandidaat is klaar om te beginnen. Stel de eerste vraag.
 
-Context (niet herhalen in je antwoord):
-- Kandidaat zei: "{answer}"
-- Eerste vraag om te stellen: {first_question}
+Kandidaat zei: "{answer}"
+Eerste vraag: {first_question}
 
-Schrijf een natuurlijk WhatsApp bericht:
-1. Korte positieve reactie (1 zin, bijv. "Top! Daar gaan we." of "Prima, laten we beginnen!")
-2. Stel de eerste vraag
-
-Voorbeeld output:
-Top! 🚀 Daar gaan we!
-
-Mag je wettelijk werken in België?
-
-BELANGRIJK: Geef ALLEEN het bericht, geen labels zoals "Reactie:" of "Vraag:"."""
+Schrijf een kort WhatsApp bericht. Je mag een korte overgang maken of direct de vraag stellen.
+Max 2 zinnen. Geen emojis."""
 
 KNOCKOUT_ASK_PROMPT = """Je bent een recruiter. Stel deze vraag op een vriendelijke, directe manier:
 
@@ -290,34 +308,15 @@ passed=false ALLEEN als de kandidaat expliciet ontkent of aangeeft NIET te voldo
 
 Bij twijfel: passed=true."""
 
-KNOCKOUT_PASS_NEXT_PROMPT = """Reageer kort en stel de volgende vraag.
+KNOCKOUT_PASS_NEXT_PROMPT = """Stel ALLEEN de volgende vraag:
+{next_question}
 
-Context (niet herhalen):
-- Kandidaat zei: "{answer}"
-- Volgende vraag: {next_question}
+Geen reactie op het vorige antwoord. Geen "fijn", "oké", "mooi". Gewoon de vraag."""
 
-Schrijf een natuurlijk WhatsApp bericht:
-1. Korte reactie (bijv. "Oke!" / "Check!" / "Fijn!" / "Top!")
-2. Stel de vraag
+KNOCKOUT_PASS_DONE_PROMPT = """Stel ALLEEN deze vraag:
+{next_question}
 
-Voorbeeld:
-Check! ✓
-
-Heb je ervaring met X?
-
-GEEN labels zoals "Reactie:" of "Vraag:". Max 2 zinnen."""
-
-KNOCKOUT_PASS_DONE_PROMPT = """Basisvragen zijn klaar! Nu een open vraag.
-
-Context (niet herhalen):
-- Kandidaat zei: "{answer}"
-- Volgende vraag: {next_question}
-
-Schrijf een natuurlijk WhatsApp bericht:
-1. Korte positieve reactie (bijv. "Prima!" / "Mooi!" / "Top!")
-2. Stel de open vraag
-
-GEEN labels. Max 2 zinnen."""
+Geen reactie op het vorige antwoord. Gewoon de vraag."""
 
 KNOCKOUT_FAIL_PROMPT = """De kandidaat voldoet niet aan een vereiste voor deze specifieke vacature.
 
@@ -362,40 +361,35 @@ Kandidaat: {candidate_name}
 Bedank kort voor hun tijd en wens succes met de zoektocht.
 Max 2 zinnen. GEEN handtekening."""
 
-OPEN_RECORD_NEXT_PROMPT = """De kandidaat heeft een vraag beantwoord. Reageer kort EN stel de volgende vraag.
+OPEN_RECORD_NEXT_PROMPT = """Stel ALLEEN de volgende vraag:
+{next_question}
 
-Vraag: "{question}"
-Antwoord: "{answer}"
-Volgende vraag: "{next_question}"
+Geen reactie op het vorige antwoord. Gewoon de vraag."""
 
-VARIATIE IN REACTIES - pas aan op basis van het antwoord:
-- Kort antwoord → kort en neutraal: "Oke!" / "Duidelijk." / "Begrepen!"
-- Goed antwoord → positief: "Mooi!" / "Fijn!" / "Interessant!"
-- Uitgebreid/sterk antwoord → enthousiast: "Klinkt goed!" / "Dat is mooi!" / "Leuk om te horen!"
+OPEN_RECORD_DONE_PROMPT = """Laatste vraag beantwoord. Ga nu over naar het inplannen van een gesprek.
 
-BELANGRIJK: Varieer! Herhaal NIET dezelfde woorden als in eerdere berichten.
-Max 2 zinnen totaal."""
+Tijdsloten:
+{slots_text}
 
-OPEN_RECORD_DONE_PROMPT = """De kandidaat heeft de laatste vraag beantwoord. Reageer kort EN presenteer de beschikbare tijdsloten.
+Bedank kort, zeg dat je een gesprek wilt inplannen, en toon de tijdsloten.
+Kopieer de tijdsloten EXACT (met 📅 en **sterretjes** voor vetgedrukt).
 
-Antwoord: "{answer}"
-Tijdsloten: {slots_text}
+Geen andere emojis. Max 3 zinnen voor je intro."""
 
-Reageer passend bij hun antwoord (kort bij kort antwoord, enthousiaster bij uitgebreid antwoord).
-Geef dan aan dat je een korte kennismaking wilt inplannen en presenteer de tijdsloten.
-Varieer je woordkeuze. Max 3 zinnen. GEEN handtekening."""
+SCHEDULE_CONFIRM_PROMPT = """Bevestig de afspraak. Begin met een korte enthousiaste zin (bijv. "Top!", "Super!", "Heel goed!") en dan:
 
-SCHEDULE_CONFIRM_PROMPT = """Bevestig de afspraak in een WhatsApp chat.
+Je gesprek met {recruiter_name} staat gepland:
 
-Ingepland: {scheduled_time}
+📅 **{scheduled_time}**
+📋 Functie: **{vacancy_title}**
 
-BELANGRIJK: Spreek de kandidaat DIRECT aan met "je" (niet in derde persoon).
-Noem NIET de naam van de kandidaat in je bericht.
+Je ontvangt vooraf nog een reminder.
 
-Goed: "Top! Je afspraak staat genoteerd voor {scheduled_time}. Je ontvangt nog een reminder."
-Fout: "De afspraak voor [naam] staat genoteerd..."
+Komt er iets tussen? Dan kan je hier je afspraak aanpassen.
 
-Bevestig kort, zeg dat ze een reminder krijgen. Max 2 zinnen. GEEN handtekening."""
+Succes!
+
+GEEN begroeting zoals "Hoi". Kopieer de rest LETTERLIJK."""
 
 SLOT_EXTRACT_PROMPT = """Extraheer de gekozen dag en tijd uit het bericht van de kandidaat.
 
@@ -405,12 +399,66 @@ BESCHIKBARE SLOTS:
 BERICHT VAN KANDIDAAT: "{message}"
 
 Antwoord ALLEEN met een JSON object:
-{{"day": "maandag/dinsdag/woensdag/donderdag/vrijdag", "time": "10u/11u/14u/16u", "date": "YYYY-MM-DD"}}
+{{"day": "maandag/dinsdag/woensdag/donderdag/vrijdag", "time": "<tijd uit beschikbare slots>", "date": "YYYY-MM-DD"}}
 
 - Zoek de dag (ook afkortingen: ma=maandag, di=dinsdag, woe=woensdag, do=donderdag, vrij=vrijdag)
-- Zoek de tijd (10u, 11u, 14u, 16u, of "ochtend"=10u, "middag"=14u)
+- Zoek de tijd uit de BESCHIKBARE SLOTS hierboven (of "ochtend"=eerste ochtendslot, "middag"=eerste middagslot)
 - Geef de bijbehorende date uit de beschikbare slots
 - Als onduidelijk: {{"day": null, "time": null, "date": null}}"""
+
+SCHEDULE_INTENT_PROMPT = """Analyseer wat de kandidaat bedoelt met hun antwoord over de tijdsloten.
+
+BESCHIKBARE SLOTS:
+{available_slots}
+
+BERICHT VAN KANDIDAAT: "{message}"
+
+Antwoord ALLEEN met een JSON object:
+{{"intent": "slot_choice" | "no_fit" | "specific_day" | "next_week" | "unclear", "day_mentioned": "maandag/dinsdag/woensdag/donderdag/vrijdag/null", "time_preference": "morning" | "afternoon" | null, "outside_hours": true/false}}
+
+Intent types:
+- "slot_choice": kandidaat kiest een specifiek moment uit de lijst (dag + tijd)
+- "no_fit": kandidaat zegt dat geen enkel moment past ("past niet", "kan niet", "lukt niet", "geen van deze")
+- "specific_day": kandidaat noemt een specifieke dag ("vrijdag", "liever donderdag", "volgende week maandag")
+- "next_week": kandidaat vraagt om later/volgende week ZONDER specifieke dag ("een week later", "volgende week", "week erna", "later")
+- "unclear": onduidelijk wat de kandidaat bedoelt
+
+day_mentioned: als kandidaat een dag noemt (ook als niet in de lijst), geef de dag. Bij "next_week" zonder dag = null.
+time_preference: "morning" als kandidaat ochtend/voormiddag wil, "afternoon" als kandidaat middag/namiddag wil, null als geen voorkeur.
+  - Voorbeelden "morning": "'s ochtends", "in de ochtend", "voormiddag", "in the morning"
+  - Voorbeelden "afternoon": "'s middags", "in de namiddag", "namiddag", "in the afternoon"
+outside_hours: true als kandidaat aangeeft alleen 's avonds, weekend, of heel andere tijden te kunnen"""
+
+SCHEDULE_ASK_DAY_PROMPT = """De kandidaat gaf aan dat de voorgestelde momenten niet passen.
+
+Vraag vriendelijk welke dag WEL zou passen voor een gesprek.
+Houd het kort (1-2 zinnen). Geen excuses nodig."""
+
+SCHEDULE_NEW_SLOTS_PROMPT = """Je hebt nieuwe beschikbare momenten gevonden voor de gevraagde dag.
+
+Nieuwe tijdsloten:
+{slots_text}
+
+Presenteer deze momenten aan de kandidaat. Gebruik altijd de dag + datum in je antwoord.
+Voorbeeld: "Op {day_name} {date_short} kan ik je deze momenten aanbieden:"
+Dan de tijdsloten EXACT zoals hierboven (met 📅 emoji en ** voor vetgedrukt).
+Houd het kort en vriendelijk."""
+
+SCHEDULE_NO_SLOTS_PROMPT = """Er zijn geen beschikbare momenten op de gevraagde dag ({day_name} {date_short}).
+
+Vertel de kandidaat dat er helaas geen momenten beschikbaar zijn op die dag.
+Vraag of een andere dag zou passen, of dat ze liever gebeld worden door een recruiter.
+Houd het kort (2 zinnen)."""
+
+SCHEDULE_RECRUITER_HANDOFF_PROMPT = """We kunnen geen geschikt moment vinden voor de kandidaat.
+
+Dit kan zijn omdat:
+- De kandidaat alleen buiten kantooruren kan
+- De gevraagde dag is te ver in de toekomst
+- We hebben al meerdere keren geprobeerd
+
+Vertel de kandidaat vriendelijk dat een recruiter contact met hen opneemt om een geschikt moment te vinden.
+Bedank voor hun geduld. Max 2 zinnen. GEEN handtekening."""
 
 UNRELATED_CHECK_PROMPT = """Is dit antwoord een poging om de vraag te beantwoorden?
 
@@ -472,6 +520,29 @@ class SimplePreScreeningAgent:
             logger.warning(f"⚠️ Forbidden content detected: '{matched_term}' in message from {self.state.candidate_name}")
             return await self._handle_inappropriate_exit()
 
+        # TEST COMMANDS - skip to specific phases for testing
+        msg_lower = user_message.lower().strip()
+        if msg_lower in ["/skip-schedule", "/test-schedule", "!schedule"]:
+            logger.info(f"🧪 TEST: Skipping to SCHEDULE phase")
+            # Mark all knockout questions as passed
+            for q in self.state.knockout_questions:
+                self.state.knockout_results.append({
+                    "question": q["question"],
+                    "answer": "[TEST SKIP]",
+                    "passed": True,
+                })
+            self.state.knockout_index = len(self.state.knockout_questions)
+            # Mark all open questions as answered
+            for q in self.state.open_questions:
+                self.state.open_results.append({
+                    "question": q,
+                    "answer": "[TEST SKIP]",
+                })
+            self.state.open_index = len(self.state.open_questions)
+            # Jump to schedule phase
+            self.state.phase = Phase.SCHEDULE
+            return await self._start_scheduling()
+
         phase = self.state.phase
         logger.info(f"🔄 Processing message in phase: {phase.value}")
 
@@ -496,9 +567,11 @@ class SimplePreScreeningAgent:
 
     async def get_initial_message(self) -> str:
         """Get the initial welcome message."""
+        # Extract first name only for a more personal greeting
+        first_name = self.state.candidate_name.split()[0] if self.state.candidate_name else "daar"
         prompt = HELLO_PROMPT.format(
             company_name=self.state.company_name,
-            candidate_name=self.state.candidate_name,
+            candidate_first_name=first_name,
             vacancy_title=self.state.vacancy_title,
         )
         return await self._generate(prompt)
@@ -692,13 +765,11 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
         if self.state.open_index >= len(self.state.open_questions):
             # All open questions done - move to scheduling
             self.state.phase = Phase.SCHEDULE
-            # Get slots from Google Calendar (uses GOOGLE_CALENDAR_IMPERSONATE_EMAIL from .env)
-            import os
-            calendar_email = os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
-            slot_data = await scheduling_service.get_available_slots_async(
-                recruiter_email=calendar_email,
+            # Get slots from Google Calendar (or defaults in test mode)
+            slot_data = await get_time_slots_for_whatsapp(
                 days_ahead=self.config.schedule_days_ahead,
                 start_offset_days=self.config.schedule_start_offset,
+                skip_calendar=self.state.is_test,
             )
             self.state.available_slots = [s.model_dump() for s in slot_data.slots]
             prompt = OPEN_RECORD_DONE_PROMPT.format(
@@ -716,42 +787,383 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
             )
             return await self._generate(prompt)
 
+    async def _start_scheduling(self) -> str:
+        """
+        Start the scheduling phase - fetch slots and present them.
+
+        Used by test commands to skip directly to scheduling.
+        """
+        slot_data = await get_time_slots_for_whatsapp(
+            days_ahead=self.config.schedule_days_ahead,
+            start_offset_days=self.config.schedule_start_offset,
+            skip_calendar=self.state.is_test,
+        )
+        self.state.available_slots = [s.model_dump() for s in slot_data.slots]
+
+        # Use the same prompt as the normal flow (OPEN_RECORD_DONE_PROMPT)
+        prompt = OPEN_RECORD_DONE_PROMPT.format(
+            answer="[TEST SKIP]",
+            slots_text=slot_data.formatted_text,
+        )
+        return await self._generate(prompt)
+
     async def _handle_schedule(self, user_message: str) -> str:
-        """Handle scheduling phase - use LLM to extract slot choice, store in state."""
-        # Use LLM to extract slot choice
-        slot_info = await self._extract_slot_choice(user_message)
+        """Handle scheduling phase - smart slot selection with day and time preference support."""
+        self.state.scheduling_attempts += 1
 
-        if slot_info and slot_info.get("day") and slot_info.get("time"):
-            # Build slot text
-            day = slot_info["day"]
-            time = slot_info["time"]
-            date = slot_info.get("date", "")  # ISO format YYYY-MM-DD from available_slots
+        # Too many attempts → hand off to recruiter
+        if self.state.scheduling_attempts > 3:
+            return await self._recruiter_handoff()
 
-            # Build human-readable slot text
-            # Find the matching slot to get the full dutch_date
-            slot_text = f"{day} om {time}"
-            for slot in self.state.available_slots:
-                if slot.get("date") == date:
-                    slot_text = f"{slot.get('dutch_date', day)} om {time}"
-                    break
+        # Analyze intent: slot_choice, no_fit, specific_day, or unclear
+        intent_info = await self._analyze_schedule_intent(user_message)
+        intent = intent_info.get("intent", "unclear")
+        day_mentioned = intent_info.get("day_mentioned")
+        time_preference = intent_info.get("time_preference")  # "morning", "afternoon", or None
+        outside_hours = intent_info.get("outside_hours", False)
 
-            # Store scheduling info in state (actual DB save happens in webhook handler)
-            self.state.scheduled_time = slot_text
-            self.state.selected_date = date
-            self.state.selected_time = time
-            self.state.phase = Phase.DONE
-            self.state.outcome = f"Scheduled: {slot_text}"
+        logger.info(f"📅 Schedule intent: {intent}, day={day_mentioned}, time_pref={time_preference}, outside_hours={outside_hours}")
 
-            logger.info(f"📅 Slot selected: {slot_text} (date={date}, time={time})")
+        # User can only do outside business hours → recruiter handoff
+        if outside_hours:
+            return await self._recruiter_handoff()
 
-            return await self._generate_confirm(slot_text)
+        if intent == "slot_choice":
+            # Try to extract the specific slot
+            slot_info = await self._extract_slot_choice(user_message)
+            if slot_info and slot_info.get("day") and slot_info.get("time"):
+                return await self._confirm_slot(slot_info)
+            # Couldn't extract → ask to clarify
+            return await self._ask_to_clarify(user_message)
+
+        elif intent == "no_fit":
+            # No slots work → ask for preferred day
+            if not self.state.asked_for_day_preference:
+                self.state.asked_for_day_preference = True
+                return await self._generate(SCHEDULE_ASK_DAY_PROMPT)
+            else:
+                # Already asked, still no fit → recruiter handoff
+                return await self._recruiter_handoff()
+
+        elif intent == "specific_day" and day_mentioned:
+            # User mentioned a specific day → try to find slots for that day
+            return await self._get_slots_for_day(day_mentioned, time_preference)
+
+        elif intent == "next_week":
+            # User wants slots a week later → fetch slots starting 7 days from now
+            return await self._get_slots_next_week(time_preference)
+
         else:
-            # LLM couldn't extract - ask to clarify
-            prompt = f"""De kandidaat zei: "{user_message}"
+            # Unclear → ask to clarify
+            return await self._ask_to_clarify(user_message)
 
-Je begreep niet welk tijdslot ze willen. Vraag vriendelijk om te verduidelijken.
-Noem de beschikbare dagen kort. Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
+    async def _confirm_slot(self, slot_info: dict) -> str:
+        """Confirm the selected slot and update state, creating Google Calendar event.
+
+        Double-checks availability before booking to prevent conflicts when
+        candidates take time to respond.
+        """
+        import os
+
+        day = slot_info["day"]
+        time = slot_info["time"]
+        date = slot_info.get("date", "")
+
+        # Build human-readable slot text
+        slot_text = f"{day} om {time}"
+        for slot in self.state.available_slots:
+            if slot.get("date") == date:
+                slot_text = f"{slot.get('dutch_date', day)} om {time}"
+                break
+
+        # Double-check availability before booking (prevents conflicts if candidate took hours to respond)
+        # Skip real calendar lookups in test mode
+        recruiter_email = os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
+        if recruiter_email and date and os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE") and not self.state.is_test:
+            try:
+                from src.services.google_calendar_service import calendar_service
+
+                # Re-fetch availability for this specific date
+                slot = await calendar_service.get_slots_for_date(
+                    calendar_email=recruiter_email,
+                    target_date=date,
+                )
+
+                if slot:
+                    # Convert times to "10u" format and check availability
+                    all_times = [t.replace(" uur", "u") for t in (slot["morning"] + slot["afternoon"])]
+                    time_still_available = time in all_times
+
+                    if not time_still_available:
+                        # Slot was taken - refresh available slots and ask again
+                        logger.warning(f"📅 Slot {date} {time} no longer available, refreshing slots")
+                        slot_data = await get_time_slots_for_whatsapp(
+                            days_ahead=self.config.schedule_days_ahead,
+                            start_offset_days=self.config.schedule_start_offset,
+                        )
+                        self.state.available_slots = [s.model_dump() for s in slot_data.slots]
+
+                        if slot_data.slots:
+                            prompt = f"""Het moment dat je koos ({slot_text}) is helaas net ingepland door iemand anders.
+
+Hier zijn de nog beschikbare momenten:
+{slot_data.formatted_text}
+
+Welk moment past jou het beste?"""
+                            return await self._generate(prompt)
+                        else:
+                            return await self._recruiter_handoff()
+                else:
+                    # No slots on that date anymore
+                    return await self._recruiter_handoff()
+
+            except Exception as e:
+                logger.error(f"📅 Error checking availability: {e}")
+                # Continue with booking - better to potentially double-book than fail entirely
+
+        # Store scheduling info in state
+        self.state.scheduled_time = slot_text
+        self.state.selected_date = date
+        self.state.selected_time = time
+        self.state.phase = Phase.DONE
+        self.state.outcome = f"Scheduled: {slot_text}"
+
+        # Note: Calendar event is created by the webhook handler (_save_scheduled_interview)
+        # which has access to full vacancy info for the event title/description.
+        # This avoids duplicate events and ensures consistent formatting.
+
+        logger.info(f"📅 Slot selected: {slot_text} (date={date}, time={time})")
+        return await self._generate_confirm(slot_text)
+
+    async def _ask_to_clarify(self, user_message: str) -> str:
+        """Ask user to clarify their slot choice."""
+        slots_summary = ", ".join([s.get("dutch_date", "") for s in self.state.available_slots])
+        prompt = f"""De kandidaat zei: "{user_message}"
+
+Je begreep niet welk tijdslot ze willen. De beschikbare dagen zijn: {slots_summary}.
+Vraag vriendelijk om te verduidelijken welke dag en tijd past. Max 2 zinnen."""
+        return await self._generate(prompt)
+
+    async def _recruiter_handoff(self) -> str:
+        """Hand off to recruiter when no suitable slot can be found."""
+        self.state.phase = Phase.DONE
+        self.state.outcome = "Recruiter handoff - no suitable slot"
+        logger.info("📅 Scheduling: recruiter handoff")
+        return await self._generate(SCHEDULE_RECRUITER_HANDOFF_PROMPT)
+
+    async def _get_slots_for_day(self, day_name: str, time_preference: str = None) -> str:
+        """Get available slots for a specific weekday, optionally filtered by time preference."""
+        import os
+        from datetime import datetime, timedelta
+
+        # Map Dutch day names to weekday numbers (0=Monday, 6=Sunday)
+        day_map = {
+            "maandag": 0, "dinsdag": 1, "woensdag": 2, "donderdag": 3,
+            "vrijdag": 4, "zaterdag": 5, "zondag": 6,
+        }
+
+        weekday = day_map.get(day_name.lower())
+        if weekday is None:
+            # Unknown day → ask to clarify
+            return await self._ask_to_clarify(day_name)
+
+        # Weekend → no business hours available
+        if weekday >= 5:
+            prompt = f"""De kandidaat vroeg om een moment op {day_name.lower()}.
+
+Vertel vriendelijk dat je alleen doordeweeks (maandag t/m vrijdag) gesprekken kunt inplannen.
+Vraag welke doordeweekse dag zou passen. Max 2 zinnen."""
             return await self._generate(prompt)
+
+        # Find the next occurrence of this weekday
+        today = datetime.now()
+        days_until = (weekday - today.weekday()) % 7
+        if days_until == 0:
+            days_until = 7  # Next week if today
+        target_date = today + timedelta(days=days_until)
+
+        # Check if too far in the future (more than 3 weeks)
+        if days_until > 21:
+            return await self._recruiter_handoff()
+
+        # Format date for display (lowercase day name in Dutch)
+        date_short = f"{target_date.day:02d}/{target_date.month:02d}"
+
+        # Get slots for that day
+        slot_data = await get_time_slots_for_whatsapp(
+            days_ahead=1,
+            start_offset_days=days_until,
+            skip_calendar=self.state.is_test,
+        )
+
+        if slot_data.slots:
+            # Filter by time preference if specified
+            filtered_slots, filtered_text = self._filter_slots_by_time(
+                slot_data.slots, time_preference
+            )
+
+            if filtered_slots:
+                # Found slots → update state and present them
+                self.state.available_slots = [s.model_dump() for s in filtered_slots]
+
+                # Add context about the filter if applicable
+                time_context = ""
+                if time_preference == "morning":
+                    time_context = " 's ochtends"
+                elif time_preference == "afternoon":
+                    time_context = " 's middags"
+
+                prompt = f"""Je hebt nieuwe beschikbare momenten gevonden voor {day_name.lower()}{time_context}.
+
+Nieuwe tijdsloten:
+{filtered_text}
+
+Presenteer deze momenten aan de kandidaat. Gebruik altijd de dag + datum in je antwoord.
+Voorbeeld: "Op {day_name.lower()} {date_short} kan ik je deze momenten aanbieden:"
+Dan de tijdsloten EXACT zoals hierboven (met 📅 emoji en ** voor vetgedrukt).
+Houd het kort en vriendelijk."""
+                return await self._generate(prompt)
+            else:
+                # Slots exist but not for requested time preference
+                time_label = "'s ochtends" if time_preference == "morning" else "'s middags"
+                prompt = f"""Er zijn helaas geen momenten beschikbaar op {day_name.lower()} {time_label}.
+
+De kandidaat wilde {time_label}, maar er zijn wel andere momenten op die dag.
+Hier zijn alle beschikbare momenten op {day_name.lower()}:
+{slot_data.formatted_text}
+
+Vertel de kandidaat dat {time_label} niet lukt, maar bied de andere tijden aan.
+Houd het kort en vriendelijk (2-3 zinnen)."""
+                self.state.available_slots = [s.model_dump() for s in slot_data.slots]
+                return await self._generate(prompt)
+        else:
+            # No slots on that day
+            prompt = SCHEDULE_NO_SLOTS_PROMPT.format(
+                day_name=day_name.lower(),  # Dutch: lowercase days
+                date_short=date_short,
+            )
+            return await self._generate(prompt)
+
+    async def _get_slots_next_week(self, time_preference: str = None) -> str:
+        """Get available slots starting a week from now, optionally filtered by time preference."""
+        # Get slots starting 7 days from now
+        slot_data = await get_time_slots_for_whatsapp(
+            days_ahead=self.config.schedule_days_ahead,
+            start_offset_days=7,  # Start from 1 week later
+            skip_calendar=self.state.is_test,
+        )
+
+        if slot_data.slots:
+            # Filter by time preference if specified
+            filtered_slots, filtered_text = self._filter_slots_by_time(
+                slot_data.slots, time_preference
+            )
+
+            if filtered_slots:
+                # Found slots → update state and present them
+                self.state.available_slots = [s.model_dump() for s in filtered_slots]
+
+                # Add context about the filter if applicable
+                time_context = ""
+                if time_preference == "morning":
+                    time_context = " 's ochtends"
+                elif time_preference == "afternoon":
+                    time_context = " 's middags"
+
+                prompt = f"""Je hebt nieuwe beschikbare momenten gevonden voor volgende week{time_context}.
+
+Nieuwe tijdsloten:
+{filtered_text}
+
+Presenteer deze momenten aan de kandidaat. Zeg iets als "Geen probleem! Hier zijn de momenten voor volgende week{time_context}:" en dan de tijdsloten EXACT zoals hierboven (met 📅 emoji en ** voor vetgedrukt).
+Houd het kort en vriendelijk."""
+                return await self._generate(prompt)
+            else:
+                # Slots exist but not for requested time preference
+                time_label = "'s ochtends" if time_preference == "morning" else "'s middags"
+                prompt = f"""Er zijn helaas geen momenten beschikbaar volgende week {time_label}.
+
+De kandidaat wilde {time_label}, maar er zijn wel andere momenten.
+Hier zijn alle beschikbare momenten voor volgende week:
+{slot_data.formatted_text}
+
+Vertel de kandidaat dat {time_label} niet lukt, maar bied de andere tijden aan.
+Houd het kort en vriendelijk (2-3 zinnen)."""
+                self.state.available_slots = [s.model_dump() for s in slot_data.slots]
+                return await self._generate(prompt)
+        else:
+            # No slots next week either → recruiter handoff
+            return await self._recruiter_handoff()
+
+    async def _analyze_schedule_intent(self, message: str) -> dict:
+        """Analyze the user's intent regarding scheduling."""
+        slots_text = [
+            f"- {slot['dutch_date']}: {slot['morning']}, {slot['afternoon']}"
+            for slot in self.state.available_slots
+        ]
+        prompt = SCHEDULE_INTENT_PROMPT.format(
+            available_slots="\n".join(slots_text),
+            message=message,
+        )
+        response = await self._evaluate(prompt)
+        return self._parse_json_response(response, {"intent": "unclear"})
+
+    def _filter_slots_by_time(self, slots: list, time_preference: str = None) -> tuple[list, str]:
+        """
+        Filter slots by time preference (morning/afternoon).
+
+        Args:
+            slots: List of slot objects from scheduling_service
+            time_preference: "morning", "afternoon", or None (no filter)
+
+        Returns:
+            tuple: (filtered_slots, formatted_text)
+            - filtered_slots: List of slot objects with only matching times
+            - formatted_text: Formatted string for display
+        """
+        if not time_preference or time_preference not in ("morning", "afternoon"):
+            # No filter - return as-is
+            formatted_lines = []
+            for slot in slots:
+                times = []
+                if slot.morning:
+                    times.extend(slot.morning)
+                if slot.afternoon:
+                    times.extend(slot.afternoon)
+                if times:
+                    formatted_lines.append(f"📅 **{slot.dutch_date}:** {', '.join(times)}")
+            return slots, "\n".join(formatted_lines)
+
+        # Filter slots based on preference
+        filtered_slots = []
+        formatted_lines = []
+
+        for slot in slots:
+            if time_preference == "morning" and slot.morning:
+                # Create a modified slot with only morning times
+                # TimeSlot imported from calendar_helpers at top of file
+                filtered_slot = TimeSlot(
+                    date=slot.date,
+                    dutch_date=slot.dutch_date,
+                    morning=slot.morning,
+                    afternoon=[],  # Clear afternoon
+                )
+                filtered_slots.append(filtered_slot)
+                formatted_lines.append(f"📅 **{slot.dutch_date}:** {', '.join(slot.morning)}")
+
+            elif time_preference == "afternoon" and slot.afternoon:
+                # Create a modified slot with only afternoon times
+                # TimeSlot imported from calendar_helpers at top of file
+                filtered_slot = TimeSlot(
+                    date=slot.date,
+                    dutch_date=slot.dutch_date,
+                    morning=[],  # Clear morning
+                    afternoon=slot.afternoon,
+                )
+                filtered_slots.append(filtered_slot)
+                formatted_lines.append(f"📅 **{slot.dutch_date}:** {', '.join(slot.afternoon)}")
+
+        return filtered_slots, "\n".join(formatted_lines)
 
     async def _handle_confirm_fail(self, user_message: str) -> str:
         """Handle confirm_fail phase - check if interested in other opportunities."""
@@ -819,20 +1231,12 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
             )
             return await self._generate(prompt)
         else:
-            # More questions - combine positive response with next question
+            # More questions - just ask the next one, no reaction
             next_q = self.state.alternate_questions[self.state.alternate_index]
-            prompt = f"""De kandidaat heeft een vraag beantwoord. Reageer kort EN stel de volgende vraag.
+            prompt = f"""Stel ALLEEN de volgende vraag:
+{next_q}
 
-Vraag: "{current_q}"
-Antwoord: "{user_message}"
-Volgende vraag: "{next_q}"
-
-Pas je reactie aan op het antwoord:
-- Kort antwoord → neutraal: "Oke!" / "Duidelijk." / "Begrepen!"
-- Goed antwoord → positief: "Fijn!" / "Mooi!" / "Interessant!"
-- Uitgebreid antwoord → enthousiast: "Klinkt goed!" / "Leuk om te horen!"
-
-Varieer je woordkeuze! Max 2 zinnen totaal."""
+Geen reactie op het vorige antwoord. Gewoon de vraag."""
             return await self._generate(prompt)
 
     # -------------------------------------------------------------------------
@@ -1108,8 +1512,14 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
 
     async def _generate_confirm(self, scheduled_time: str) -> str:
         """Generate scheduling confirmation."""
+        # TODO: Refactor to inject recruiter name from context (vacancy/pre-screening settings)
+        # For now, hardcoded recruiter name
+        recruiter_name = "Sarah Peters"
+
         prompt = SCHEDULE_CONFIRM_PROMPT.format(
             scheduled_time=scheduled_time,
+            recruiter_name=recruiter_name,
+            vacancy_title=self.state.vacancy_title,
         )
         return await self._generate(prompt)
 
@@ -1130,21 +1540,23 @@ Varieer je woordkeuze! Max 2 zinnen totaal."""
         return None
 
     async def _generate(self, prompt: str) -> str:
-        """Generate text using LLM."""
+        """Generate text using LLM with system instruction for consistent tone."""
         import time
         from google import genai
+        from google.genai import types
 
         t0 = time.perf_counter()
         client = genai.Client()
         response = await client.aio.models.generate_content(
             model=self.config.model_generate,
             contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=self.config.system_instruction,
+            ),
         )
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(f"⏱️ _generate ({self.config.model_generate}): {elapsed:.0f}ms")
-        # Convert Markdown bold (**text**) to WhatsApp bold (*text*)
-        text = response.text.replace("**", "*")
-        return text
+        return response.text
 
     async def _evaluate(self, prompt: str) -> str:
         """Fast evaluation using lightweight model for JSON responses."""
@@ -1173,6 +1585,7 @@ def create_simple_agent(
     knockout_questions: list[dict],
     open_questions: list[str],
     config: AgentConfig = None,
+    is_test: bool = False,
 ) -> SimplePreScreeningAgent:
     """
     Create a simple pre-screening agent.
@@ -1184,6 +1597,7 @@ def create_simple_agent(
         knockout_questions: List of {"question": "...", "requirement": "..."}
         open_questions: List of question strings
         config: Optional AgentConfig for customization
+        is_test: If True, skip real calendar bookings (for simulation/testing)
 
     Returns:
         SimplePreScreeningAgent ready to use
@@ -1196,6 +1610,7 @@ def create_simple_agent(
         knockout_questions=knockout_questions,
         open_questions=open_questions,
         alternate_questions=list(config.alternate_questions),
+        is_test=is_test,
     )
     return SimplePreScreeningAgent(state, config)
 

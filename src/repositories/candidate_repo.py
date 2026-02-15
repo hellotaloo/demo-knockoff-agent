@@ -5,6 +5,9 @@ import asyncpg
 import uuid
 from typing import Optional, List
 
+# Default workspace ID for backwards compatibility
+DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
 
 class CandidateRepository:
     """Repository for candidate database operations."""
@@ -41,6 +44,7 @@ class CandidateRepository:
         first_name: Optional[str] = None,
         last_name: Optional[str] = None,
         is_test: bool = False,
+        workspace_id: Optional[uuid.UUID] = None,
     ) -> uuid.UUID:
         """
         Find existing candidate by phone/email or create new one.
@@ -53,23 +57,26 @@ class CandidateRepository:
             first_name: First name (optional, parsed from full_name if not provided)
             last_name: Last name (optional, parsed from full_name if not provided)
             is_test: Flag indicating this is a test candidate (admin testing)
+            workspace_id: Workspace ID (defaults to DEFAULT_WORKSPACE_ID)
         """
+        # Use default workspace if not provided
+        if workspace_id is None:
+            workspace_id = DEFAULT_WORKSPACE_ID
+
         # Try to find by phone first (primary identifier)
         if phone:
             existing = await self.get_by_phone(phone)
             if existing:
-                # Update name if it changed
-                if existing["full_name"] != full_name:
-                    await self.update(existing["id"], full_name=full_name)
+                # Don't update the name - the application's conversation stores the correct name
                 return existing["id"]
 
         # Try email as fallback
         if email:
             existing = await self.get_by_email(email)
             if existing:
-                # Update phone if we now have it
+                # Update phone if we now have it (but don't change the name)
                 if phone and not existing["phone"]:
-                    await self.update(existing["id"], phone=phone, full_name=full_name)
+                    await self.update(existing["id"], phone=phone)
                 return existing["id"]
 
         # Parse name if first/last not provided
@@ -81,11 +88,11 @@ class CandidateRepository:
         # Create new candidate
         return await self.pool.fetchval(
             """
-            INSERT INTO ats.candidates (phone, email, full_name, first_name, last_name, source, is_test)
-            VALUES ($1, $2, $3, $4, $5, 'application', $6)
+            INSERT INTO ats.candidates (phone, email, full_name, first_name, last_name, source, is_test, workspace_id)
+            VALUES ($1, $2, $3, $4, $5, 'application', $6, $7)
             RETURNING id
             """,
-            phone, email, full_name, first_name, last_name, is_test
+            phone, email, full_name, first_name, last_name, is_test, workspace_id
         )
 
     async def update(

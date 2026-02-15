@@ -110,6 +110,7 @@ async def stream_screening_chat(
             company_name="",
             knockout_questions=knockout_questions,
             open_questions=open_questions,
+            is_test=is_test,
         )
 
         # Cache it for this session

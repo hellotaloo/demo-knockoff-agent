@@ -11,6 +11,7 @@ from src.models.vacancy import (
     ChannelsResponse,
     AgentStatusResponse,
     AgentsResponse,
+    NavigationCountsResponse,
     RecruiterSummary,
     ClientSummary,
 )
@@ -26,6 +27,29 @@ async def get_agent_vacancy_repo() -> AgentVacancyRepository:
     """Dependency to get AgentVacancyRepository."""
     pool = await get_db_pool()
     return AgentVacancyRepository(pool)
+
+
+@router.get("/counts", response_model=NavigationCountsResponse)
+async def get_navigation_counts(
+    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo)
+):
+    """
+    Get lightweight counts for navigation sidebar.
+    Returns vacancy counts by agent status without fetching full vacancy data.
+    """
+    row = await repo.get_counts()
+    return NavigationCountsResponse(
+        prescreening={
+            "new": row["prescreening_new"],
+            "generated": row["prescreening_generated"],
+            "archived": row["prescreening_archived"]
+        },
+        preonboarding={
+            "new": row["preonboarding_new"],
+            "generated": row["preonboarding_generated"],
+            "archived": row["preonboarding_archived"]
+        }
+    )
 
 
 def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:

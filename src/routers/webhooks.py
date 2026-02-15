@@ -30,6 +30,7 @@ from src.services import ActivityService
 from src.database import get_db_pool
 from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
 from src.services.whatsapp_service import send_whatsapp_message
+from src.services.screening_notes_integration_service import trigger_screening_notes_integration
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +117,10 @@ async def _process_whatsapp_conversation(
         q_dict["id"] = q_dict.get("id") or f"qual_{i}"
         qualification_questions.append(q_dict)
 
-    # Get conversation details BEFORE processing
+    # Get conversation details BEFORE processing (including linked application_id)
     conv_row = await pool.fetchrow(
         """
-        SELECT vacancy_id, candidate_name, candidate_phone, is_test
+        SELECT vacancy_id, candidate_name, candidate_phone, is_test, application_id
         FROM ats.screening_conversations
         WHERE id = $1
         """,
@@ -135,10 +136,20 @@ async def _process_whatsapp_conversation(
     candidate_phone = conv_row["candidate_phone"]
     is_test = conv_row["is_test"] or False
 
-    # Find existing application and set status to 'processing' BEFORE AI processing
-    # IMPORTANT: Only find applications for the WHATSAPP channel to avoid race conditions with voice
+    # Find existing application - prefer the linked application_id from conversation
     existing_app = None
-    if candidate_phone:
+    if conv_row["application_id"]:
+        # Use the directly linked application (unique per conversation)
+        existing_app = await pool.fetchrow(
+            """
+            SELECT id, candidate_id FROM ats.applications
+            WHERE id = $1 AND status != 'completed'
+            """,
+            conv_row["application_id"]
+        )
+
+    # Fallback to phone/name matching for legacy conversations without application_id
+    if not existing_app and candidate_phone:
         existing_app = await pool.fetchrow(
             """
             SELECT id, candidate_id FROM ats.applications
@@ -316,6 +327,16 @@ async def _process_whatsapp_conversation(
             metadata=activity_metadata,
             summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
         )
+
+    # Trigger screening notes integration (Google Doc creation + calendar attachment)
+    # Runs as background task for qualified candidates with scheduled interviews
+    if result.overall_passed:
+        asyncio.create_task(trigger_screening_notes_integration(
+            pool=pool,
+            application_id=application_id,
+            recruiter_email=os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"),
+        ))
+        logger.info(f"📄 Triggered screening notes integration for application {application_id}")
 
 
 async def _save_whatsapp_scheduled_interview(
@@ -1030,7 +1051,7 @@ async def elevenlabs_webhook(request: Request):
     screening_conv = await pool.fetchrow(
         """
         SELECT sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone, sc.candidate_name, sc.is_test,
-               v.title as vacancy_title
+               sc.application_id, v.title as vacancy_title
         FROM ats.screening_conversations sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
@@ -1092,10 +1113,20 @@ async def elevenlabs_webhook(request: Request):
 
     # candidate_phone and candidate_name already retrieved from screening_conv above
 
-    # Find existing application and set status to 'processing' BEFORE AI analysis
-    # IMPORTANT: Only find applications for the VOICE channel to avoid race conditions with WhatsApp
+    # Find existing application - prefer the linked application_id from conversation
     existing_app = None
-    if candidate_phone:
+    if screening_conv["application_id"]:
+        # Use the directly linked application (unique per conversation)
+        existing_app = await pool.fetchrow(
+            """
+            SELECT id, candidate_id FROM ats.applications
+            WHERE id = $1 AND status != 'completed'
+            """,
+            screening_conv["application_id"]
+        )
+
+    # Fallback to phone matching for legacy conversations without application_id
+    if not existing_app and candidate_phone:
         existing_app = await pool.fetchrow(
             """
             SELECT id, candidate_id FROM ats.applications
@@ -1286,6 +1317,16 @@ async def elevenlabs_webhook(request: Request):
             metadata=activity_metadata,
             summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
         )
+
+    # Trigger screening notes integration (Google Doc creation + calendar attachment)
+    # Runs as background task for qualified candidates with scheduled interviews
+    if result.overall_passed:
+        asyncio.create_task(trigger_screening_notes_integration(
+            pool=pool,
+            application_id=application_id,
+            recruiter_email=os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"),
+        ))
+        logger.info(f"📄 Triggered screening notes integration for application {application_id}")
 
     response = {
         "status": "processed",

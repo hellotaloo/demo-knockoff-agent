@@ -200,14 +200,14 @@ class GoogleCalendarService:
                 slot_end = slot_start + timedelta(minutes=slot_duration_minutes)
 
                 if self._is_slot_available(slot_start, slot_end, busy_times):
-                    available_morning.append(f"{hour}u")
+                    available_morning.append(f"{hour} uur")
 
             for hour in DEFAULT_AFTERNOON_SLOTS:
                 slot_start = datetime.combine(day, datetime.min.time(), tzinfo=TIMEZONE).replace(hour=hour)
                 slot_end = slot_start + timedelta(minutes=slot_duration_minutes)
 
                 if self._is_slot_available(slot_start, slot_end, busy_times):
-                    available_afternoon.append(f"{hour}u")
+                    available_afternoon.append(f"{hour} uur")
 
             # Only include day if there are available slots
             if available_morning or available_afternoon:
@@ -220,6 +220,143 @@ class GoogleCalendarService:
 
         logger.info(f"Found {len(slots)} days with available slots for {calendar_email}")
         return slots
+
+    async def get_quick_slots(
+        self,
+        calendar_email: str,
+        num_days: int = 3,
+        start_offset_days: int = 3,
+        slot_duration_minutes: int = DEFAULT_INTERVIEW_DURATION_MINUTES,
+        max_times_per_day: int = 2,
+    ) -> list[dict]:
+        """
+        Get the first N available days with limited time slots per day.
+
+        Returns days with times, formatted for voice output.
+        Used when the candidate has no preference and wants options.
+
+        Args:
+            calendar_email: The recruiter's calendar email
+            num_days: Number of days to return (default 3)
+            start_offset_days: Start from N days in the future
+            slot_duration_minutes: Required slot duration
+            max_times_per_day: Maximum times to return per day (default 2)
+
+        Returns:
+            List of days with times: [
+                {
+                    "date": "2026-02-17",
+                    "dutch_date": "Dinsdag 17 februari",
+                    "times": ["10 uur", "14 uur"],
+                    "dutch_text": "Dinsdag om 10 uur en 14 uur"
+                },
+                ...
+            ]
+        """
+        # Get more days than needed to ensure we find enough
+        full_slots = await self.get_available_slots(
+            calendar_email=calendar_email,
+            days_ahead=num_days + 2,
+            start_offset_days=start_offset_days,
+            slot_duration_minutes=slot_duration_minutes,
+        )
+
+        if not full_slots:
+            return []
+
+        # Take first N days and format for voice
+        selected_days = []
+        for day_slot in full_slots[:num_days]:
+            morning_times = day_slot["morning"]
+            afternoon_times = day_slot["afternoon"]
+
+            # Combine and limit times for voice: "Dinsdag om 10 uur en 14 uur"
+            all_times = (morning_times + afternoon_times)[:max_times_per_day]
+            day_name = day_slot["dutch_date"].split()[0]  # "Dinsdag" from "Dinsdag 17 februari"
+
+            # Simple format: "Dinsdag om 11 uur, 14 uur en 16 uur"
+            if len(all_times) == 1:
+                dutch_text = f"{day_name} om {all_times[0]}"
+            elif len(all_times) == 2:
+                dutch_text = f"{day_name} om {all_times[0]} en {all_times[1]}"
+            else:
+                dutch_text = f"{day_name} om {', '.join(all_times[:-1])} en {all_times[-1]}"
+
+            selected_days.append({
+                "date": day_slot["date"],
+                "dutch_date": day_slot["dutch_date"],
+                "times": all_times,
+                "dutch_text": dutch_text,
+            })
+
+        logger.info(f"Selected {len(selected_days)} days with slots for {calendar_email}")
+        return selected_days
+
+    async def get_slots_for_date(
+        self,
+        calendar_email: str,
+        target_date: str,
+        slot_duration_minutes: int = DEFAULT_INTERVIEW_DURATION_MINUTES,
+    ) -> dict | None:
+        """
+        Get available slots for a specific date.
+
+        Args:
+            calendar_email: The recruiter's calendar email
+            target_date: Date in YYYY-MM-DD format
+            slot_duration_minutes: Required slot duration
+
+        Returns:
+            Dict with date info and available slots, or None if no slots available
+        """
+        from datetime import date as date_type
+
+        try:
+            target = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            logger.error(f"Invalid date format: {target_date}")
+            return None
+
+        # Query free/busy for just this day
+        time_min = datetime.combine(target, datetime.min.time(), tzinfo=TIMEZONE)
+        time_max = datetime.combine(target, datetime.max.time(), tzinfo=TIMEZONE)
+
+        busy_times = await self.get_free_busy(calendar_email, time_min, time_max)
+
+        # Generate Dutch date text
+        day_name = DUTCH_DAYS[target.weekday()].capitalize()
+        month_name = DUTCH_MONTHS[target.month]
+        dutch_date = f"{day_name} {target.day} {month_name}"
+
+        available_morning = []
+        available_afternoon = []
+
+        # Check each potential slot
+        for hour in DEFAULT_MORNING_SLOTS:
+            slot_start = datetime.combine(target, datetime.min.time(), tzinfo=TIMEZONE).replace(hour=hour)
+            slot_end = slot_start + timedelta(minutes=slot_duration_minutes)
+
+            if self._is_slot_available(slot_start, slot_end, busy_times):
+                available_morning.append(f"{hour} uur")
+
+        for hour in DEFAULT_AFTERNOON_SLOTS:
+            slot_start = datetime.combine(target, datetime.min.time(), tzinfo=TIMEZONE).replace(hour=hour)
+            slot_end = slot_start + timedelta(minutes=slot_duration_minutes)
+
+            if self._is_slot_available(slot_start, slot_end, busy_times):
+                available_afternoon.append(f"{hour} uur")
+
+        if not available_morning and not available_afternoon:
+            logger.info(f"No available slots on {target_date} for {calendar_email}")
+            return None
+
+        logger.info(f"Found slots on {target_date} for {calendar_email}: morning={available_morning}, afternoon={available_afternoon}")
+        return {
+            "date": target_date,
+            "dutch_date": dutch_date,
+            "morning": available_morning,
+            "afternoon": available_afternoon,
+        }
 
     def _is_slot_available(
         self,
@@ -325,77 +462,199 @@ class GoogleCalendarService:
             logger.error(f"Failed to delete event {event_id}: {e}")
             return False
 
+    async def update_event(
+        self,
+        calendar_email: str,
+        event_id: str,
+        summary: Optional[str] = None,
+        description: Optional[str] = None,
+        append_description: bool = False,
+        start_time: Optional[datetime] = None,
+        duration_minutes: int = DEFAULT_INTERVIEW_DURATION_MINUTES,
+    ) -> dict | None:
+        """
+        Update an existing calendar event.
+
+        Only updates fields that are provided (non-None). Preserves all other
+        fields including any notes the recruiter may have added.
+
+        Args:
+            calendar_email: The calendar owner's email
+            event_id: The event ID to update
+            summary: New event title (optional)
+            description: New description (optional)
+            append_description: If True, append to existing description instead of replacing
+            start_time: New start time (optional) - used for rescheduling
+            duration_minutes: Duration in minutes (only used if start_time is provided)
+
+        Returns:
+            Updated event dict or None if failed
+        """
+        service = self._get_service(impersonate_email=calendar_email)
+
+        try:
+            # Get current event to preserve existing fields
+            event = service.events().get(calendarId=calendar_email, eventId=event_id).execute()
+
+            # Update only the fields that are provided
+            if summary is not None:
+                event["summary"] = summary
+
+            if description is not None:
+                if append_description and event.get("description"):
+                    event["description"] = event["description"] + "\n\n" + description
+                else:
+                    event["description"] = description
+
+            # Update time if provided (for rescheduling)
+            if start_time is not None:
+                if start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=TIMEZONE)
+                end_time = start_time + timedelta(minutes=duration_minutes)
+
+                event["start"] = {
+                    "dateTime": start_time.isoformat(),
+                    "timeZone": TIMEZONE_STR,
+                }
+                event["end"] = {
+                    "dateTime": end_time.isoformat(),
+                    "timeZone": TIMEZONE_STR,
+                }
+
+            # Update the event
+            updated_event = service.events().update(
+                calendarId=calendar_email,
+                eventId=event_id,
+                body=event
+            ).execute()
+
+            logger.info(f"Updated calendar event: {event_id}")
+
+            return {
+                "id": updated_event.get("id"),
+                "htmlLink": updated_event.get("htmlLink"),
+                "summary": updated_event.get("summary"),
+                "description": updated_event.get("description"),
+                "start": updated_event.get("start"),
+                "end": updated_event.get("end"),
+            }
+
+        except HttpError as e:
+            logger.error(f"Failed to update event {event_id}: {e}")
+            return None
+
     async def add_attachment_to_event(
         self,
         calendar_email: str,
         event_id: str,
         file_url: str,
         file_title: str,
+        description_note: Optional[str] = None,
         mime_type: str = "application/vnd.google-apps.document",
     ) -> bool:
         """
         Add an attachment (Google Drive link) to a calendar event.
 
-        Note: This updates the event description with a link to the document,
-        as true attachments require G Suite/Workspace conference settings.
+        Attempts to add as a native Google Calendar attachment first.
+        Falls back to embedding the link in the event description.
 
         Args:
             calendar_email: The calendar owner's email
             event_id: The calendar event ID
             file_url: URL of the Google Drive file
             file_title: Title/name of the file
+            description_note: Optional note to add to event description (e.g., executive summary)
             mime_type: MIME type of the file
 
         Returns:
             True if updated successfully
         """
+        import re
+
         service = self._get_service(impersonate_email=calendar_email)
+
+        # Extract file ID from URL for native attachments
+        file_id = None
+        patterns = [
+            r"/document/d/([a-zA-Z0-9_-]+)",
+            r"/file/d/([a-zA-Z0-9_-]+)",
+            r"id=([a-zA-Z0-9_-]+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, file_url)
+            if match:
+                file_id = match.group(1)
+                break
 
         try:
             # Get current event
             event = service.events().get(calendarId=calendar_email, eventId=event_id).execute()
 
-            # Build new description with document link
-            current_description = event.get("description", "")
-            doc_link = f"\n\n📄 Notule: {file_url}"
-
-            if current_description:
-                new_description = current_description + doc_link
+            # Build new description
+            # Start with the description note (executive summary) if provided
+            if description_note:
+                new_description = description_note
             else:
-                new_description = f"📄 Notule: {file_url}"
+                new_description = event.get("description", "")
 
-            # Update the event
+            # Add document link to description as fallback
+            doc_link = f"\n\n📄 Screening Notule: {file_url}"
+            new_description = new_description + doc_link
+
             event["description"] = new_description
 
-            # Try to add as proper attachment (requires workspace setup)
-            # If it fails, the description update still works
-            try:
-                if "attachments" not in event:
-                    event["attachments"] = []
+            # Try to add as native attachment
+            # Native attachments require:
+            # 1. supportsAttachments=True
+            # 2. Properly formatted attachment object with fileId
+            native_attachment_success = False
 
-                event["attachments"].append({
-                    "fileUrl": file_url,
-                    "title": file_title,
-                    "mimeType": mime_type,
-                })
+            if file_id:
+                try:
+                    if "attachments" not in event:
+                        event["attachments"] = []
 
-                updated_event = service.events().update(
-                    calendarId=calendar_email,
-                    eventId=event_id,
-                    body=event,
-                    supportsAttachments=True
-                ).execute()
-            except HttpError as attach_error:
-                # Fallback: update without attachments field
-                logger.warning(f"Could not add attachment, updating description only: {attach_error}")
-                del event["attachments"]
-                updated_event = service.events().update(
+                    # Use fileId for native attachment (more reliable than fileUrl)
+                    attachment = {
+                        "fileId": file_id,
+                        "fileUrl": file_url,
+                        "title": file_title,
+                        "mimeType": mime_type,
+                    }
+                    event["attachments"].append(attachment)
+
+                    updated_event = service.events().update(
+                        calendarId=calendar_email,
+                        eventId=event_id,
+                        body=event,
+                        supportsAttachments=True
+                    ).execute()
+
+                    # Check if attachment was actually added
+                    if updated_event.get("attachments"):
+                        native_attachment_success = True
+                        logger.info(f"Added native attachment to calendar event {event_id}")
+
+                except HttpError as attach_error:
+                    # Native attachment failed - fall back to description only
+                    logger.warning(f"Native attachment failed, using description link: {attach_error}")
+                    if "attachments" in event:
+                        del event["attachments"]
+                    service.events().update(
+                        calendarId=calendar_email,
+                        eventId=event_id,
+                        body=event
+                    ).execute()
+            else:
+                # No file ID extracted, just update description
+                logger.info(f"Could not extract file ID from URL, updating description only")
+                service.events().update(
                     calendarId=calendar_email,
                     eventId=event_id,
                     body=event
                 ).execute()
 
-            logger.info(f"Added document link to calendar event {event_id}")
+            logger.info(f"Updated calendar event {event_id} (native_attachment={native_attachment_success})")
             return True
 
         except HttpError as e:

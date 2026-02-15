@@ -69,6 +69,19 @@ from .webhook import (
     ElevenLabsWebhookPayload,
 )
 
+# VAPI models
+from .vapi import (
+    VapiWebhookPayload,
+    VapiEndOfCallReportPayload,
+    VapiStatusUpdatePayload,
+    VapiCallObject,
+    VapiArtifact,
+    VapiTranscriptMessage,
+    VapiMessagePayload,
+    VapiCreateCallRequest,
+    VapiCreateCallResponse,
+)
+
 # CV analysis models
 from .cv import (
     CVQuestionRequest,
@@ -116,6 +129,36 @@ from .elevenlabs import (
     UpdateAgentVoiceConfigResponse,
 )
 
+# Auth models
+from .auth import (
+    TokenResponse,
+    RefreshTokenRequest,
+    AuthCallbackResponse,
+    AuthMeResponse,
+)
+
+# User models
+from .user import (
+    UserProfileCreate,
+    UserProfileUpdate,
+    UserProfileResponse,
+    UserProfileSummary,
+)
+
+# Workspace models
+from .workspace import (
+    WorkspaceRole,
+    WorkspaceCreate,
+    WorkspaceUpdate,
+    WorkspaceResponse,
+    WorkspaceSummary,
+    WorkspaceWithMembers,
+    WorkspaceMemberResponse,
+    WorkspaceMemberUpdate,
+    WorkspaceInvitationCreate,
+    WorkspaceInvitationResponse,
+)
+
 __all__ = [
     # Common
     "PaginatedResponse",
@@ -161,6 +204,16 @@ __all__ = [
     # Webhook
     "ElevenLabsWebhookData",
     "ElevenLabsWebhookPayload",
+    # VAPI
+    "VapiWebhookPayload",
+    "VapiEndOfCallReportPayload",
+    "VapiStatusUpdatePayload",
+    "VapiCallObject",
+    "VapiArtifact",
+    "VapiTranscriptMessage",
+    "VapiMessagePayload",
+    "VapiCreateCallRequest",
+    "VapiCreateCallResponse",
     # CV
     "CVQuestionRequest",
     "CVAnalyzeRequest",
@@ -192,4 +245,25 @@ __all__ = [
     "VoiceConfigResponse",
     "UpdateAgentVoiceConfigRequest",
     "UpdateAgentVoiceConfigResponse",
+    # Auth
+    "TokenResponse",
+    "RefreshTokenRequest",
+    "AuthCallbackResponse",
+    "AuthMeResponse",
+    # User
+    "UserProfileCreate",
+    "UserProfileUpdate",
+    "UserProfileResponse",
+    "UserProfileSummary",
+    # Workspace
+    "WorkspaceRole",
+    "WorkspaceCreate",
+    "WorkspaceUpdate",
+    "WorkspaceResponse",
+    "WorkspaceSummary",
+    "WorkspaceWithMembers",
+    "WorkspaceMemberResponse",
+    "WorkspaceMemberUpdate",
+    "WorkspaceInvitationCreate",
+    "WorkspaceInvitationResponse",
 ]

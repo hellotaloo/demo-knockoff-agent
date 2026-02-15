@@ -10,6 +10,9 @@ from .scheduled_interview_repo import ScheduledInterviewRepository
 from .candidate_repo import CandidateRepository
 from .activity_repo import ActivityRepository
 from .agent_vacancy_repo import AgentVacancyRepository
+from .user_repo import UserProfileRepository
+from .workspace_repo import WorkspaceRepository
+from .membership_repo import WorkspaceMembershipRepository
 
 __all__ = [
     "VacancyRepository",
@@ -21,4 +24,7 @@ __all__ = [
     "CandidateRepository",
     "ActivityRepository",
     "AgentVacancyRepository",
+    "UserProfileRepository",
+    "WorkspaceRepository",
+    "WorkspaceMembershipRepository",
 ]

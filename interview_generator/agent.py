@@ -151,8 +151,14 @@ Formuleer knockout vragen met een DUIDELIJK ja/nee antwoord:
 - **FOUT**: "Is ... geen probleem voor jou?" (dubbelzinnig door dubbele ontkenning)
 
 ## KWALIFICATIEVRAGEN - MAXIMAAL 3-4
-Kies de meest relevante uit:
-- Specifieke ervaring (machines, storingen, productie)
+
+### VOLGORDE - KRITISCH
+De EERSTE kwalificatievraag (qual_1) moet ALTIJD over ervaring gaan!
+Bijvoorbeeld: "Heb je al ervaring met [relevant werk]?" of "Kan je jouw ervaring als [functie] beschrijven?"
+Dit zorgt voor een natuurlijke gespreksopening na de knockout vragen.
+
+### Kies de meest relevante uit:
+- **EERSTE**: Specifieke ervaring (machines, storingen, productie, eerdere functies)
 - Leidinggevende capaciteiten (als relevant)
 - Motivatie voor de functie
 - Communicatie/samenwerking (als teamwerk belangrijk is)
