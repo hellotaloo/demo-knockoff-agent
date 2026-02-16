@@ -112,7 +112,9 @@
       "Bash(done)",
       "Bash(sips:*)",
       "Bash(uuidgen:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(ssh-keygen:*)",
+      "Bash(pbcopy:*)"
     ],
     "defaultMode": "acceptEdits"
   },
