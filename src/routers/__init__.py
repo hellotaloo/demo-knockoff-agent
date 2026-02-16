@@ -24,7 +24,7 @@ from .auth import router as auth_router
 from .workspaces import router as workspaces_router
 from .vapi import router as vapi_router
 from .teams import router as teams_router
-from .workflow_poc import router as workflow_poc_router
+from .architecture import router as architecture_router
 
 __all__ = [
     "health_router",
@@ -50,5 +50,5 @@ __all__ = [
     "workspaces_router",
     "vapi_router",
     "teams_router",
-    "workflow_poc_router",
+    "architecture_router",
 ]

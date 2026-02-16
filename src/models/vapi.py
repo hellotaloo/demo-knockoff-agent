@@ -42,6 +42,11 @@ class VapiCallObject(BaseModel):
     startedAt: Optional[Union[str, int, float]] = None  # ISO string or Unix ms
     endedAt: Optional[Union[str, int, float]] = None  # ISO string or Unix ms
     cost: Optional[float] = None
+    # Duration fields - VAPI may send these directly
+    durationSeconds: Optional[float] = None
+    duration: Optional[float] = None  # Alias used by some VAPI versions
+    # Cost breakdown may contain duration info
+    costBreakdown: Optional[dict] = None
     # Custom metadata passed via assistantOverrides.variableValues
     metadata: Optional[dict] = None
 

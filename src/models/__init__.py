@@ -17,6 +17,7 @@ from .vacancy import (
     AgentsResponse,
     RecruiterSummary,
     ClientSummary,
+    ApplicantSummary,
     VacancyResponse,
     VacancyStatsResponse,
     DashboardStatsResponse,
@@ -159,6 +160,16 @@ from .workspace import (
     WorkspaceInvitationResponse,
 )
 
+# Architecture models
+from .architecture import (
+    ArchitectureNode,
+    ArchitectureEdge,
+    ArchitectureGroup,
+    ArchitectureStats,
+    ArchitectureMetadata,
+    ArchitectureResponse,
+)
+
 __all__ = [
     # Common
     "PaginatedResponse",
@@ -172,6 +183,7 @@ __all__ = [
     "AgentsResponse",
     "RecruiterSummary",
     "ClientSummary",
+    "ApplicantSummary",
     "VacancyResponse",
     "VacancyStatsResponse",
     "DashboardStatsResponse",
@@ -266,4 +278,11 @@ __all__ = [
     "WorkspaceMemberUpdate",
     "WorkspaceInvitationCreate",
     "WorkspaceInvitationResponse",
+    # Architecture
+    "ArchitectureNode",
+    "ArchitectureEdge",
+    "ArchitectureGroup",
+    "ArchitectureStats",
+    "ArchitectureMetadata",
+    "ArchitectureResponse",
 ]

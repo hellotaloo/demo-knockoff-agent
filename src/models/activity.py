@@ -86,6 +86,7 @@ class ActivityResponse(BaseModel):
     """Response model for an activity."""
     id: str
     candidate_id: str
+    candidate_name: Optional[str] = None  # Included when fetching vacancy timelines
     application_id: Optional[str] = None
     vacancy_id: Optional[str] = None
     event_type: str

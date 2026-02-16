@@ -31,10 +31,10 @@ class ApplicationResponse(BaseModel):
     synced: bool
     synced_at: Optional[datetime] = None
     # Score summary
-    overall_score: Optional[int] = None  # Average of all scores (0-100)
+    open_questions_score: Optional[int] = None  # Average of all scores (0-100)
     knockout_passed: int = 0  # Number of knockout questions passed
     knockout_total: int = 0  # Total knockout questions
-    qualification_count: int = 0  # Number of qualification questions answered
+    open_questions_total: int = 0  # Total open/qualification questions
     summary: Optional[str] = None  # AI-generated executive summary
     interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit"
     meeting_slots: Optional[list[str]] = None  # Available meeting slots for qualified candidates

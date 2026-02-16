@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 import asyncpg
 from src.repositories import VacancyRepository
 from src.models import VacancyResponse, ChannelsResponse, AgentStatusResponse, AgentsResponse, VacancyStatsResponse, DashboardStatsResponse
-from src.models.vacancy import RecruiterSummary, ClientSummary
+from src.models.vacancy import RecruiterSummary, ClientSummary, ApplicantSummary
 
 
 class VacancyService:
@@ -17,12 +17,34 @@ class VacancyService:
         self.repo = VacancyRepository(pool)
     
     @staticmethod
-    def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
+    def build_applicant_summary(row: asyncpg.Record) -> ApplicantSummary:
+        """Build an ApplicantSummary from an application record."""
+        return ApplicantSummary(
+            id=str(row["id"]),
+            name=row["name"],
+            phone=row["phone"],
+            channel=row["channel"],
+            status=row["status"],
+            qualified=row["qualified"],
+            score=float(row["score"]) if row["score"] is not None else None,
+            started_at=row["started_at"],
+            completed_at=row["completed_at"]
+        )
+
+    @staticmethod
+    def build_vacancy_response(
+        row: asyncpg.Record,
+        applicant_rows: list[asyncpg.Record] = None
+    ) -> VacancyResponse:
         """
         Build a VacancyResponse model from a database row.
 
         Calculates effective channel states and is_online status based on
         published state and active channels.
+
+        Args:
+            row: The vacancy database row
+            applicant_rows: Optional list of applicant records for this vacancy
         """
         # Calculate effective channel states
         voice_active = row["voice_enabled"] or False
@@ -59,6 +81,14 @@ class VacancyService:
                 logo=row["c_logo"]
             )
 
+        # Build applicants list
+        applicants = []
+        if applicant_rows:
+            applicants = [
+                VacancyService.build_applicant_summary(app_row)
+                for app_row in applicant_rows
+            ]
+
         return VacancyResponse(
             id=str(row["id"]),
             title=row["title"],
@@ -71,6 +101,7 @@ class VacancyService:
             source=row["source"],
             source_id=row["source_id"],
             has_screening=row["has_screening"],
+            published_at=row["published_at"],
             is_online=effective_is_online,
             channels=ChannelsResponse(
                 voice=voice_active,
@@ -80,7 +111,16 @@ class VacancyService:
             agents=AgentsResponse(
                 prescreening=AgentStatusResponse(
                     exists=row["has_screening"],
-                    status="online" if row["is_online"] else ("offline" if row["has_screening"] else None)
+                    status="online" if row["is_online"] else ("offline" if row["has_screening"] else None),
+                    # Include stats for prescreening agent
+                    total_screenings=row["candidates_count"] if row["has_screening"] else None,
+                    qualified_count=row["qualified_count"] if row["has_screening"] else None,
+                    qualification_rate=(
+                        int(row["qualified_count"] / row["candidates_count"] * 100)
+                        if row["has_screening"] and row["candidates_count"] > 0
+                        else None
+                    ),
+                    last_activity_at=row["last_activity_at"] if row["has_screening"] else None
                 ),
                 preonboarding=AgentStatusResponse(
                     exists=row["preonboarding_agent_enabled"] or False,
@@ -91,13 +131,13 @@ class VacancyService:
                     status=None  # No online/offline concept for insights yet
                 )
             ),
-            recruiter_id=str(recruiter_id) if recruiter_id else None,
             recruiter=recruiter,
-            client_id=str(client_id) if client_id else None,
             client=client,
+            applicants=applicants,
             candidates_count=row["candidates_count"],
             completed_count=row["completed_count"],
             qualified_count=row["qualified_count"],
+            avg_score=float(row["avg_score"]) if row["avg_score"] is not None else None,
             last_activity_at=row["last_activity_at"]
         )
     

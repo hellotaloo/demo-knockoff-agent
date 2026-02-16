@@ -13,7 +13,7 @@ import json
 
 from src.database import get_db_pool
 from src.services import DemoService
-from src.services.workflow_poc_service import WorkflowPocService
+from src.services.workflow_service import WorkflowService
 from src.repositories import ConversationRepository
 
 logger = logging.getLogger(__name__)
@@ -276,7 +276,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 async def reset_demo_data(
     reseed: bool = Query(True, description="Reseed with demo data after reset"),
     activities: bool = Query(True, description="Include activities in reseed (only used if reseed=true)"),
-    workflow_activities: bool = Query(False, description="Include workflow activities dashboard demo data")
+    workflow_activities: bool = Query(True, description="Include workflow activities dashboard demo data")
 ):
     """Clear all vacancies, applications, candidates, and pre-screenings, optionally reseed with demo data."""
     pool = await get_db_pool()
@@ -324,9 +324,9 @@ async def reset_demo_data(
             await conn.execute("DELETE FROM ats.recruiters")
             await conn.execute("DELETE FROM ats.clients")
 
-            # Delete workflow_poc (activities dashboard)
+            # Delete workflows (activities dashboard)
             try:
-                await conn.execute("DELETE FROM ats.workflow_poc")
+                await conn.execute("DELETE FROM ats.workflows")
             except Exception:
                 pass  # Table may not exist yet
 
@@ -343,7 +343,7 @@ async def reset_demo_data(
 
     # Optionally seed workflow activities (activities dashboard)
     if workflow_activities:
-        workflow_service = WorkflowPocService(pool)
+        workflow_service = WorkflowService(pool)
         await workflow_service.ensure_table()
 
         # Get created vacancies and candidates for context
@@ -403,6 +403,7 @@ async def reset_demo_data(
             await workflow_service.create(
                 workflow_type=data["workflow_type"],
                 context=data["context"],
+                initial_step="waiting",  # Demo data starts in waiting step
                 timeout_seconds=data["timeout_seconds"],
             )
             created_workflows += 1

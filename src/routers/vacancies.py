@@ -31,9 +31,18 @@ async def list_vacancies(
     repo: VacancyRepository = Depends(get_vacancy_repo),
     service: VacancyService = Depends(get_vacancy_service)
 ):
-    """List all vacancies with optional filtering."""
+    """List all vacancies with optional filtering, including linked applicants."""
     rows, total = await repo.list_with_stats(status=status, source=source, limit=limit, offset=offset)
-    vacancies = [service.build_vacancy_response(row) for row in rows]
+
+    # Fetch applicants for all vacancies in one query
+    vacancy_ids = [row["id"] for row in rows]
+    applicants_by_vacancy = await repo.get_applicants_by_vacancy_ids(vacancy_ids)
+
+    # Build responses with applicants
+    vacancies = [
+        service.build_vacancy_response(row, applicants_by_vacancy.get(row["id"], []))
+        for row in rows
+    ]
 
     return {
         "vacancies": vacancies,
@@ -49,20 +58,24 @@ async def get_vacancy(
     repo: VacancyRepository = Depends(get_vacancy_repo),
     service: VacancyService = Depends(get_vacancy_service)
 ):
-    """Get a single vacancy by ID with activity timeline."""
+    """Get a single vacancy by ID with activity timeline and applicants."""
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     row = await repo.get_by_id(vacancy_uuid)
 
     if not row:
         raise HTTPException(status_code=404, detail="Vacancy not found")
 
+    # Fetch applicants for this vacancy
+    applicants_by_vacancy = await repo.get_applicants_by_vacancy_ids([vacancy_uuid])
+    applicant_rows = applicants_by_vacancy.get(vacancy_uuid, [])
+
     # Get activity timeline for this vacancy
     pool = await get_db_pool()
     activity_service = ActivityService(pool)
     timeline = await activity_service.get_vacancy_activities(vacancy_id, limit=50)
 
-    # Build base response and add timeline
-    base_response = service.build_vacancy_response(row)
+    # Build base response with applicants and add timeline
+    base_response = service.build_vacancy_response(row, applicant_rows)
     return VacancyDetailResponse(
         **base_response.model_dump(),
         timeline=timeline

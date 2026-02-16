@@ -17,6 +17,7 @@ from src.models.vacancy import (
 )
 from src.repositories.agent_vacancy_repo import AgentVacancyRepository
 from src.database import get_db_pool
+from src.services.workflow_service import WorkflowService
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +38,25 @@ async def get_navigation_counts(
     Get lightweight counts for navigation sidebar.
     Returns vacancy counts by agent status without fetching full vacancy data.
     """
+    pool = await get_db_pool()
+    workflow_service = WorkflowService(pool)
+
     row = await repo.get_counts()
+    activities = await workflow_service.get_counts()
+
     return NavigationCountsResponse(
         prescreening={
             "new": row["prescreening_new"],
             "generated": row["prescreening_generated"],
+            "published": row["prescreening_published"],
             "archived": row["prescreening_archived"]
         },
         preonboarding={
             "new": row["preonboarding_new"],
             "generated": row["preonboarding_generated"],
             "archived": row["preonboarding_archived"]
-        }
+        },
+        activities=activities
     )
 
 
@@ -90,6 +98,7 @@ def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
         source=row.get("source"),
         source_id=row.get("source_id"),
         has_screening=row["has_screening"],
+        published_at=row.get("published_at"),
         is_online=row.get("is_online"),
         channels=ChannelsResponse(
             voice=row.get("voice_enabled") or False,
@@ -123,7 +132,7 @@ def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
 
 @router.get("/prescreening/vacancies")
 async def list_prescreening_vacancies(
-    status: Literal["new", "generated", "archived"] = Query(..., description="Agent status filter"),
+    status: Literal["new", "generated", "published", "archived"] = Query(..., description="Agent status filter"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo)

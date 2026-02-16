@@ -4,6 +4,15 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-02-16** — Enhanced `AgentStatusResponse` with stats: `total_screenings`, `qualified_count`, `qualification_rate`, `last_activity_at` (populated for prescreening agent)
+- **2026-02-16** — Added `candidate_name` field to ActivityResponse in vacancy timelines (`GET /vacancies/{vacancy_id}`)
+- **2026-02-16** — Added `applicants` array to VacancyResponse (lightweight ApplicantSummary for candidates who did pre-screening)
+- **2026-02-16** — Removed redundant `recruiter_id` and `client_id` fields from VacancyResponse (use `recruiter.id` and `client.id` instead)
+- **2026-02-16** — Added `GET /architecture` endpoint for backend architecture visualization (returns JSON for frontend graph rendering)
+- **2026-02-16** — Added `activities` field to NavigationCountsResponse (`GET /agents/counts`) with `active` and `stuck` counts
+- **2026-02-16** — Added `active_count` field to TasksResponse for counting non-stuck active tasks
+- **2026-02-15** — Added `workflow_steps` array to TaskRow for visual workflow progress representation; enables frontend to render step indicators
+- **2026-02-15** — Added `step_detail` field to TaskRow for granular workflow status (e.g., "WhatsApp gesprek", "Gesprek verwerken"); `current_step_label` now shows simple English labels ("In Progress", "Processing")
 - **2026-02-15** — Added lightweight `GET /agents/counts` endpoint for navigation sidebar counts
 - **2026-02-15** — Renamed endpoints: `/activities` → `/monitoring` (event log), new `/api/activities/tasks` (active workflow tasks)
 - **2026-02-15** — Added `workflow_activities` query param to `/demo/reset` for seeding dashboard demo data
@@ -53,8 +62,9 @@ Complete API reference for the Taloo recruitment screening platform.
 19. [Scheduling](#scheduling)
 20. [ElevenLabs](#elevenlabs)
 21. [Activities](#activities)
-22. [Demo](#demo)
-23. [Error Reference](#error-reference)
+22. [Architecture](#architecture)
+23. [Demo](#demo)
+24. [Error Reference](#error-reference)
 
 ---
 
@@ -365,6 +375,11 @@ interface ChannelsResponse {
 interface AgentStatusResponse {
   exists: boolean;         // True if agent is generated/configured
   status: "online" | "offline" | null;  // Agent status (null if not applicable)
+  // Stats (populated for prescreening agent when exists=true)
+  total_screenings?: number;    // Total number of screenings
+  qualified_count?: number;     // Number of qualified candidates
+  qualification_rate?: number;  // Percentage (0-100)
+  last_activity_at?: string;    // ISO timestamp of last screening activity
 }
 
 interface AgentsResponse {
@@ -391,6 +406,18 @@ interface ClientSummary {
   logo?: string;
 }
 
+interface ApplicantSummary {
+  id: string;
+  name: string;
+  phone?: string;
+  channel: "voice" | "whatsapp" | "cv";
+  status: "active" | "processing" | "completed";
+  qualified: boolean;
+  score?: number;        // Average qualification score (0-100)
+  started_at: string;
+  completed_at?: string;
+}
+
 interface VacancyResponse {
   id: string;
   title: string;
@@ -403,16 +430,17 @@ interface VacancyResponse {
   source?: VacancySource;
   source_id?: string;
   has_screening: boolean;
+  published_at?: string;  // ISO timestamp when pre-screening was published (null = draft)
   is_online?: boolean;
   channels: ChannelsResponse;
   agents: AgentsResponse;
-  recruiter_id?: string;         // UUID - foreign key to recruiters table
-  recruiter?: RecruiterSummary;  // Full recruiter info (if assigned)
-  client_id?: string;            // UUID - foreign key to clients table
-  client?: ClientSummary;        // Full client info (if assigned)
+  recruiter?: RecruiterSummary;   // Full recruiter info (if assigned) - use recruiter.id for ID
+  client?: ClientSummary;         // Full client info (if assigned) - use client.id for ID
+  applicants: ApplicantSummary[]; // Candidates who completed pre-screening (excludes test applications)
   candidates_count: number;
   completed_count: number;
   qualified_count: number;
+  avg_score?: number;             // Average qualification score across all applications
   last_activity_at?: string;
 }
 
@@ -499,13 +527,13 @@ interface ApplicationResponse {
   started_at: string;
   completed_at?: string;
   interaction_seconds: number;
-  answers: QuestionAnswerResponse[];
+  answers: QuestionAnswerResponse[];  // Always includes ALL questions, even if not answered yet
   synced: boolean;
   synced_at?: string;
-  overall_score?: number;
+  open_questions_score?: number;
   knockout_passed: number;
   knockout_total: number;
-  qualification_count: number;
+  open_questions_total: number;
   summary?: string;
   interview_slot?: string;
   meeting_slots?: string[];
@@ -775,6 +803,7 @@ interface CandidateApplicationSummary {
 interface ActivityResponse {
   id: string;
   candidate_id: string;
+  candidate_name?: string;  // Included in vacancy timelines (GET /vacancies/{vacancy_id})
   application_id?: string;
   vacancy_id?: string;
   event_type: string;  // screening_started, qualified, disqualified, interview_scheduled, etc.
@@ -987,14 +1016,15 @@ List vacancies by pre-screening agent status.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `status` | string | Yes | - | Filter: `new`, `generated`, or `archived` |
+| `status` | string | Yes | - | Filter: `new`, `generated`, `published`, or `archived` |
 | `limit` | number | No | 50 | Results per page (1-100) |
 | `offset` | number | No | 0 | Pagination offset |
 
 **Status Definitions:**
 
 - `new`: No pre-screening record (questions not generated yet)
-- `generated`: Has pre-screening record (questions exist, can be online/offline)
+- `generated`: Has pre-screening record but NOT published (draft)
+- `published`: Has pre-screening record AND published (can be online/offline)
 - `archived`: Vacancy status is 'closed' or 'filled'
 
 **Response:**
@@ -1086,6 +1116,10 @@ interface NavigationCountsResponse {
     generated: number;
     archived: number;
   };
+  activities: {
+    active: number;   // Active workflows (not stuck)
+    stuck: number;    // Workflows with no update for > 1 hour
+  };
 }
 ```
 
@@ -1100,6 +1134,10 @@ interface NavigationCountsResponse {
     "new": 7,
     "generated": 0,
     "archived": 2
+  },
+  "activities": {
+    "active": 5,
+    "stuck": 2
   }
 }
 ```
@@ -2772,24 +2810,33 @@ Get all active workflow tasks as a table view.
 **Response:**
 
 ```typescript
+interface WorkflowStep {
+  id: string;                    // Step identifier (e.g., "in_progress", "processing")
+  label: string;                 // Dutch display label (e.g., "Gesprek", "Verwerken")
+  status: "completed" | "current" | "pending" | "failed";
+}
+
 interface TaskRow {
   id: string;                    // Workflow instance ID
   candidate_name?: string;       // From context
   vacancy_title?: string;        // From context
   workflow_type: string;         // pre_screening, document_collection, scheduling
   workflow_type_label: string;   // Human-readable: "Pre-screening", "Document Collection"
-  current_step: string;          // Raw step: waiting, knockout, complete
-  current_step_label: string;    // Human-readable: "Knockout vraag 2/3", "Wacht op ID kaart"
+  current_step: string;          // Raw step: in_progress, processing, complete
+  current_step_label: string;    // Human-readable step: "In Progress", "Processing", "Complete"
+  step_detail?: string;          // Granular detail: "WhatsApp gesprek", "Gesprek verwerken" (null when not applicable)
   status: string;                // active, stuck, completed
   is_stuck: boolean;             // True if no update > 1 hour
   updated_at: string;            // ISO timestamp
   time_ago: string;              // "2 min ago", "1 hour ago"
+  workflow_steps: WorkflowStep[]; // Visual workflow progress for rendering step indicators
 }
 
 interface TasksResponse {
   tasks: TaskRow[];
   total: number;
   stuck_count: number;           // Number of stuck tasks in result set
+  active_count: number;          // Number of active (non-stuck) tasks
 }
 ```
 
@@ -2804,29 +2851,64 @@ interface TasksResponse {
       "vacancy_title": "Operator Mengafdeling",
       "workflow_type": "pre_screening",
       "workflow_type_label": "Pre-screening",
-      "current_step": "waiting",
-      "current_step_label": "Knockout vraag 2/3",
+      "current_step": "in_progress",
+      "current_step_label": "In Progress",
+      "step_detail": "WhatsApp gesprek",
       "status": "active",
       "is_stuck": false,
       "updated_at": "2026-02-15T08:50:27.231819+00:00",
-      "time_ago": "just now"
+      "time_ago": "just now",
+      "workflow_steps": [
+        { "id": "in_progress", "label": "Gesprek", "status": "current" },
+        { "id": "processing", "label": "Verwerken", "status": "pending" },
+        { "id": "processed", "label": "Notificaties", "status": "pending" },
+        { "id": "complete", "label": "Afgerond", "status": "pending" }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-5e6f-7890-abcd-ef1234567890",
+      "candidate_name": "Marie Claes",
+      "vacancy_title": "Magazijnier",
+      "workflow_type": "pre_screening",
+      "workflow_type_label": "Pre-screening",
+      "current_step": "processing",
+      "current_step_label": "Processing",
+      "step_detail": "Gesprek verwerken",
+      "status": "active",
+      "is_stuck": false,
+      "updated_at": "2026-02-15T08:48:00.000000+00:00",
+      "time_ago": "2 min ago",
+      "workflow_steps": [
+        { "id": "in_progress", "label": "Gesprek", "status": "completed" },
+        { "id": "processing", "label": "Verwerken", "status": "current" },
+        { "id": "processed", "label": "Notificaties", "status": "pending" },
+        { "id": "complete", "label": "Afgerond", "status": "pending" }
+      ]
     },
     {
       "id": "bae9bfa2-6fda-40d3-8078-61fc5cb6b2ab",
       "candidate_name": "Anna Vermeersch",
-      "vacancy_title": "Magazijnier",
+      "vacancy_title": "Heftruckchauffeur",
       "workflow_type": "document_collection",
       "workflow_type_label": "Document Collection",
       "current_step": "waiting",
-      "current_step_label": "Wacht op Rijbewijs",
+      "current_step_label": "Waiting",
+      "step_detail": "Wacht op Rijbewijs",
       "status": "stuck",
       "is_stuck": true,
       "updated_at": "2026-02-15T07:10:00.000000+00:00",
-      "time_ago": "1 hour ago"
+      "time_ago": "1 hour ago",
+      "workflow_steps": [
+        { "id": "request_sent", "label": "Verzoek", "status": "completed" },
+        { "id": "waiting", "label": "Wachten", "status": "current" },
+        { "id": "verifying", "label": "Verifiëren", "status": "pending" },
+        { "id": "complete", "label": "Afgerond", "status": "pending" }
+      ]
     }
   ],
   "total": 15,
-  "stuck_count": 2
+  "stuck_count": 1,
+  "active_count": 14
 }
 ```
 
@@ -2845,6 +2927,210 @@ interface TasksResponse {
 | `pre_screening` | Pre-screening | WhatsApp/voice screening conversation |
 | `document_collection` | Document Collection | ID/license/certificate collection |
 | `scheduling` | Interview Planning | Calendar scheduling |
+
+**Pre-Screening Steps:**
+
+| Step (`current_step`) | Label (`current_step_label`) | Detail (`step_detail`) |
+|----------------------|------------------------------|------------------------|
+| `in_progress` | "In Progress" | "WhatsApp gesprek" or "Voice gesprek" |
+| `processing` | "Processing" | "Gesprek verwerken" |
+| `processed` | "Processed" | "Notificaties verzonden" |
+| `complete` | "Complete" | `null` |
+| `failed` | "Failed" | "Kandidaat niet gekwalificeerd" |
+| `timed_out` | "Timed Out" | "Geen reactie ontvangen" |
+
+**Document Collection Steps:**
+
+| Step (`current_step`) | Label (`current_step_label`) | Detail (`step_detail`) |
+|----------------------|------------------------------|------------------------|
+| `waiting` | "Waiting" | "Wacht op {document_type}" |
+| `verifying` | "Verifying" | "{document_type} verifiëren" |
+| `waiting_backside` | "Waiting" | "Wacht op achterkant" |
+| `complete` | "Complete" | `null` |
+| `expired` | "Expired" | "Verzoek verlopen" |
+| `timed_out` | "Timed Out" | "Geen reactie ontvangen" |
+
+**Pre-Screening Flow:**
+
+```
+Outbound API    Conversation ends    Transcript done    Notifications
+     │                 │                   │                 │
+     ▼                 ▼                   ▼                 ▼
+in_progress ──────► processing ──────► processed ──────► complete
+```
+
+**Example Pre-Screening Task:**
+
+```json
+{
+  "id": "62f965e5-2db5-41dd-8a93-22a9754395b4",
+  "candidate_name": "Luuk Mulder",
+  "vacancy_title": "Winkelmedewerker Bakkerij",
+  "workflow_type": "pre_screening",
+  "workflow_type_label": "Pre-screening",
+  "current_step": "in_progress",
+  "current_step_label": "In Progress",
+  "step_detail": "WhatsApp gesprek",
+  "status": "active",
+  "is_stuck": false,
+  "updated_at": "2026-02-15T20:22:40.400578+00:00",
+  "time_ago": "5 min ago",
+  "workflow_steps": [
+    { "id": "in_progress", "label": "Gesprek", "status": "current" },
+    { "id": "processing", "label": "Verwerken", "status": "pending" },
+    { "id": "processed", "label": "Notificaties", "status": "pending" },
+    { "id": "complete", "label": "Afgerond", "status": "pending" }
+  ]
+}
+```
+
+**Workflow Step Visualization:**
+
+The `workflow_steps` array enables rendering a visual progress indicator:
+
+```
+Pre-screening:
+  ● Gesprek → ○ Verwerken → ○ Notificaties → ○ Afgerond
+  ↑ current
+
+Document Collection:
+  ✓ Verzoek → ● Wachten → ○ Verifiëren → ○ Afgerond
+  ↑ completed  ↑ current
+```
+
+Step status values:
+- `completed`: Step is done (render as checkmark or filled circle)
+- `current`: Currently active step (render highlighted)
+- `pending`: Not yet reached (render as empty circle)
+- `failed`: Step failed (render as error/red)
+
+---
+
+## Architecture
+
+### GET /architecture
+
+Get the backend architecture as JSON for visualization.
+
+Returns all components (routers, services, repositories, agents, external integrations), their relationships, and layer groupings suitable for rendering with graph libraries like React Flow, D3.js, or vis.js.
+
+**Auth:** None
+
+**Response:**
+
+```typescript
+interface ArchitectureNode {
+  id: string;              // Unique identifier (e.g., "router:vacancies", "service:vacancy")
+  type: string;            // Component type: "router", "service", "repository", "agent", "external"
+  name: string;            // Display name (e.g., "VacancyService")
+  layer: string;           // Layer: "api", "service", "repository", "agent", "external"
+  file_path?: string;      // Relative file path (e.g., "src/routers/vacancies.py")
+  description?: string;    // Brief description
+  metadata?: object;       // Additional info (e.g., model name for agents)
+}
+
+interface ArchitectureEdge {
+  source: string;          // Source node id
+  target: string;          // Target node id
+  type: string;            // Relationship: "uses", "calls", "integrates", "stores"
+  label?: string;          // Edge label (e.g., "webhook", "config")
+}
+
+interface ArchitectureGroup {
+  id: string;              // Group id (e.g., "api")
+  name: string;            // Display name (e.g., "API Layer")
+  layer: string;           // Layer identifier
+  color?: string;          // Suggested color (e.g., "#4CAF50")
+}
+
+interface ArchitectureStats {
+  routers: number;
+  services: number;
+  repositories: number;
+  agents: number;
+  external: number;
+}
+
+interface ArchitectureResponse {
+  nodes: ArchitectureNode[];
+  edges: ArchitectureEdge[];
+  groups: ArchitectureGroup[];
+  metadata: {
+    stats: ArchitectureStats;
+  };
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "nodes": [
+    {
+      "id": "router:vacancies",
+      "type": "router",
+      "name": "Vacancies",
+      "layer": "api",
+      "file_path": "src/routers/vacancies.py",
+      "description": "Vacancy CRUD and listing"
+    },
+    {
+      "id": "service:vacancy",
+      "type": "service",
+      "name": "VacancyService",
+      "layer": "service",
+      "file_path": "src/services/vacancy_service.py",
+      "description": "Vacancy business logic and stats"
+    },
+    {
+      "id": "agent:transcript_processor",
+      "type": "agent",
+      "name": "Transcript Processor",
+      "layer": "agent",
+      "file_path": "transcript_processor/agent.py",
+      "description": "Analyzes voice call transcripts",
+      "metadata": {"model": "gemini-2.0-flash"}
+    },
+    {
+      "id": "external:vapi",
+      "type": "external",
+      "name": "VAPI",
+      "layer": "external",
+      "description": "Voice AI platform for phone screening"
+    }
+  ],
+  "edges": [
+    {"source": "router:vacancies", "target": "service:vacancy", "type": "uses"},
+    {"source": "service:vacancy", "target": "repo:vacancy", "type": "uses"},
+    {"source": "router:vapi", "target": "external:vapi", "type": "integrates", "label": "webhook"}
+  ],
+  "groups": [
+    {"id": "api", "name": "API Layer", "layer": "api", "color": "#4CAF50"},
+    {"id": "service", "name": "Services", "layer": "service", "color": "#2196F3"},
+    {"id": "repository", "name": "Repositories", "layer": "repository", "color": "#FF9800"},
+    {"id": "agent", "name": "AI Agents", "layer": "agent", "color": "#9C27B0"},
+    {"id": "external", "name": "External Services", "layer": "external", "color": "#607D8B"}
+  ],
+  "metadata": {
+    "stats": {
+      "routers": 23,
+      "services": 19,
+      "repositories": 12,
+      "agents": 9,
+      "external": 6
+    }
+  }
+}
+```
+
+**Frontend Usage:**
+
+The response structure is designed to work with popular graph visualization libraries:
+
+- **React Flow**: Map nodes directly, use `groups` for grouping nodes
+- **D3.js Force Graph**: Use `nodes` and `edges` (as links)
+- **vis.js Network**: Direct mapping with clustering support
+- **Cytoscape.js**: Compatible node/edge structure
 
 ---
 
@@ -2885,7 +3171,7 @@ Reset all data and optionally reseed.
 |------|------|----------|---------|-------------|
 | `reseed` | boolean | No | `true` | Reseed with demo data after reset |
 | `activities` | boolean | No | `true` | Include agent activities in reseed |
-| `workflow_activities` | boolean | No | `false` | Include activities dashboard demo data (workflow tasks) |
+| `workflow_activities` | boolean | No | `true` | Include activities dashboard demo data (workflow tasks) |
 
 **Response:**
 

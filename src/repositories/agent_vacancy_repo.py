@@ -4,7 +4,7 @@ Agent vacancy repository - handles vacancy listing by agent status.
 import asyncpg
 from typing import Optional, Tuple, Literal
 
-AgentStatus = Literal["new", "generated", "archived"]
+AgentStatus = Literal["new", "generated", "published", "archived"]
 
 
 class AgentVacancyRepository:
@@ -30,10 +30,17 @@ class AgentVacancyRepository:
         # Build status-specific conditions
         if status == "archived":
             status_condition = "v.status IN ('closed', 'filled')"
+        elif status == "published":
+            status_condition = """
+                v.status NOT IN ('closed', 'filled')
+                AND ps.id IS NOT NULL
+                AND ps.published_at IS NOT NULL
+            """
         elif status == "generated":
             status_condition = """
                 v.status NOT IN ('closed', 'filled')
                 AND ps.id IS NOT NULL
+                AND ps.published_at IS NULL
             """
         else:  # new
             status_condition = """
@@ -179,7 +186,8 @@ class AgentVacancyRepository:
             SELECT
                 -- Pre-screening counts
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NULL) as prescreening_new,
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL) as prescreening_generated,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL AND ps.published_at IS NULL) as prescreening_generated,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL AND ps.published_at IS NOT NULL) as prescreening_published,
                 COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as prescreening_archived,
                 -- Pre-onboarding counts
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND (v.preonboarding_agent_enabled IS NULL OR v.preonboarding_agent_enabled = false)) as preonboarding_new,

@@ -233,9 +233,17 @@ class ActivityService:
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
 
+        # Build candidate name from first/last name if available (vacancy timeline queries)
+        candidate_name = None
+        if row.get("candidate_first_name") or row.get("candidate_last_name"):
+            first = row.get("candidate_first_name") or ""
+            last = row.get("candidate_last_name") or ""
+            candidate_name = f"{first} {last}".strip() or None
+
         return ActivityResponse(
             id=str(row["id"]),
             candidate_id=str(row["candidate_id"]),
+            candidate_name=candidate_name,
             application_id=str(row["application_id"]) if row["application_id"] else None,
             vacancy_id=str(row["vacancy_id"]) if row["vacancy_id"] else None,
             event_type=row["event_type"],

@@ -8,6 +8,7 @@ against pre-screening interview questions.
 from google.adk.agents.llm_agent import Agent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
+from google.adk.planners import BuiltInPlanner
 from google.genai import types
 from dataclasses import dataclass
 from typing import Optional
@@ -28,9 +29,10 @@ class KnockoutResult:
     id: str
     question_text: str
     answer: str
-    passed: bool
-    score: int  # 100 if passed, 0 if failed
-    rating: str  # "excellent" if passed, "weak" if failed
+    status: str  # "passed", "failed", "needs_review"
+    passed: Optional[bool]  # True, False, or None (needs review)
+    score: int  # 100 if passed, 0 if failed, 50 if needs_review
+    rating: str  # "excellent", "weak", or "needs_review"
 
 
 @dataclass
@@ -74,6 +76,7 @@ class TranscriptProcessorResult:
     knockout_results: list[KnockoutResult]
     qualification_results: list[QualificationResult]
     overall_passed: bool
+    needs_human_review: bool  # True if ANY knockout has status "needs_review"
     notes: str
     summary: str = ""  # One-sentence executive summary for recruiter
     interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit" if no option worked
@@ -98,19 +101,38 @@ Je ontvangt:
 Voor elke knockout vraag:
 - Zoek in het transcript waar deze vraag gesteld werd
 - Identificeer het antwoord van de kandidaat (role: "user")
-- Bepaal of het antwoord POSITIEF of NEGATIEF is
+- Bepaal of het antwoord BEVESTIGEND, ONTKENNEND, of ONDUIDELIJK is
 
-POSITIEVE indicatoren (passed=true):
-- "ja", "ja hoor", "jawel", "ja zeker", "absoluut"
-- "dat klopt", "zeker", "uiteraard", "natuurlijk"
-- "ik heb...", "ik kan...", "ik ben..." (bevestigend)
+BELANGRIJK: Antwoorden die duidelijk bevestigend of ontkennend zijn, tellen als ja of neen.
+Interpreteer de BETEKENIS, niet alleen exacte woorden.
 
-NEGATIEVE indicatoren (passed=false):
-- "nee", "nee sorry", "helaas niet", "nog niet"
-- "ik heb geen...", "ik kan niet...", "ik ben niet..."
-- Twijfelachtige antwoorden zonder duidelijke bevestiging
+### STATUS: "passed" (bevestigend)
+- Expliciete ja: "ja", "ja hoor", "jawel", "ja zeker"
+- Informele bevestigingen: "zeker", "tuurlijk", "absoluut", "uiteraard", "natuurlijk"
+- Korte positieve reacties: "goed", "oké", "prima", "akkoord", "in orde", "top"
+- Probleemloze bevestigingen: "dat is geen probleem", "geen issue", "geen probleem"
+- Bevestigende uitspraken: "dat klopt", "klopt", "correct"
+- Capaciteitsbevestigingen: "ik kan daar geraken", "ik heb...", "ik kan...", "ik ben..."
 
-Bij twijfel: kies voor passed=false (veilige kant)
+### STATUS: "failed" (ontkennend)
+- Expliciete nee: "nee", "nee sorry", "helaas niet", "nog niet"
+- Onmogelijkheid: "dat gaat niet", "ik kan daar niet geraken", "ik mag niet werken"
+- Negatieve uitspraken: "ik heb geen...", "ik kan niet...", "ik ben niet..."
+- Kandidaat bevestigt expliciet dat hij/zij NIET aan de eis voldoet
+
+### STATUS: "needs_review" (onduidelijk - menselijke controle nodig)
+Gebruik dit ALLEEN wanneer:
+- Het antwoord is vaag of dubbelzinnig (bijv. "misschien", "soms", "het hangt ervan af")
+- Het antwoord gaat niet direct over de vraag
+- De kandidaat geeft een lang antwoord zonder duidelijke ja of nee
+- Je bent oprecht onzeker over de intentie van de kandidaat
+- Het transcript is onduidelijk of incompleet op dit punt
+
+CONTEXT IS BELANGRIJK:
+- Als de voice agent de vraag accepteerde en doorging naar de volgende vraag,
+  dan was het antwoord waarschijnlijk bevestigend → "passed"
+- Als de voice agent vroeg om bevestiging en de kandidaat werd afgewezen → "failed"
+- Alleen bij ECHTE onduidelijkheid → "needs_review"
 
 ## KWALIFICATIE VRAGEN EVALUATIE
 Voor elke kwalificatie vraag:
@@ -132,20 +154,6 @@ Schrijf een korte motivatie (2-3 zinnen) die uitlegt:
 - Wat was minder goed of ontbrak (negatieve punten)
 - Wat had de kandidaat moeten noemen voor een perfecte score van 100%
 
-## INTERVIEW SLOT EXTRACTIE
-Zoek in het transcript of er een gesprek is ingepland:
-- De agent biedt meestal meerdere opties aan (bijv. "maandag om 10 uur, maandag om 14 uur, of dinsdag om 11 uur")
-- De kandidaat kiest een optie of geeft aan dat geen enkele optie past
-
-Je krijgt de GESPREKSDATUM mee om relatieve dagen om te zetten naar een echte datum.
-Bijvoorbeeld: als het gesprek op vrijdag 31 januari 2025 was en de kandidaat kiest "dinsdag om 11 uur", 
-dan is dat dinsdag 4 februari 2025 om 11:00.
-
-Mogelijke waarden voor interview_slot:
-- ISO 8601 datetime (bijv. "2025-02-04T11:00:00") als een optie is gekozen
-- "none_fit" als de kandidaat aangeeft dat geen enkele optie past
-- null als er geen gesprek over inplannen in het transcript staat
-
 ## OUTPUT FORMAAT
 Antwoord ALLEEN met een JSON object in dit exacte formaat:
 
@@ -156,7 +164,13 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
       "id": "ko_1",
       "question_text": "de originele vraag",
       "answer": "het antwoord van de kandidaat uit het transcript",
-      "passed": true
+      "status": "passed"
+    },
+    {
+      "id": "ko_2",
+      "question_text": "andere vraag",
+      "answer": "vaag antwoord",
+      "status": "needs_review"
     }
   ],
   "qualification_results": [
@@ -170,21 +184,21 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
     }
   ],
   "overall_passed": true,
+  "needs_human_review": true,
   "notes": "Korte samenvatting van de evaluatie",
-  "summary": "Eén zin executive summary voor de recruiter over deze kandidaat",
-  "interview_slot": "2025-02-04T11:00:00"
+  "summary": "Eén zin executive summary voor de recruiter over deze kandidaat"
 }
 ```
 
 ## BELANGRIJKE REGELS
-1. overall_passed = true ALLEEN als ALLE knockout vragen passed=true zijn
-2. Als een vraag niet in het transcript voorkomt, gebruik answer="[Vraag niet beantwoord]" en passed=false / score=0
-3. Citeer het antwoord zo letterlijk mogelijk uit het transcript
-4. Wees strikt maar eerlijk in je evaluatie
-5. De notes moeten kort en zakelijk zijn (max 2 zinnen)
-6. De summary is een bondige, professionele zin voor recruiters die de essentie van de kandidaat samenvat (bijv. "Ervaren magazijnmedewerker met rijbewijs en flexibele beschikbaarheid, maar beperkte ervaring met reachtruck.")
-7. interview_slot moet een ISO 8601 datetime zijn (bijv. "2025-02-04T11:00:00"), bereken de echte datum op basis van de gespreksdatum en de gekozen dag/tijd
-8. Als geen optie paste: interview_slot = "none_fit", als niet besproken: interview_slot = null
+1. overall_passed = true als ALLE knockout vragen status "passed" of "needs_review" hebben (geen "failed")
+2. overall_passed = false als MINSTENS ÉÉN knockout vraag status "failed" heeft
+3. needs_human_review = true als MINSTENS ÉÉN knockout vraag status "needs_review" heeft
+4. Als een vraag niet in het transcript voorkomt, gebruik answer="[Vraag niet beantwoord]" en status="needs_review"
+5. Citeer het antwoord zo letterlijk mogelijk uit het transcript
+6. Wees eerlijk in je evaluatie - gebruik "needs_review" bij twijfel, niet "failed"
+7. De notes moeten kort en zakelijk zijn (max 2 zinnen)
+8. De summary is een bondige, professionele zin voor recruiters die de essentie van de kandidaat samenvat (bijv. "Ervaren magazijnmedewerker met rijbewijs en flexibele beschikbaarheid, maar beperkte ervaring met reachtruck.")
 9. Antwoord ALLEEN met JSON, geen andere tekst
 """
 
@@ -193,12 +207,22 @@ Antwoord ALLEEN met een JSON object in dit exacte formaat:
 # Agent and Runner Setup
 # =============================================================================
 
-# Create the transcript processor agent
+# Create the transcript processor agent with thinking enabled for better reasoning
 transcript_processor_agent = Agent(
     name="transcript_processor",
     model="gemini-3-pro-preview",
     instruction=INSTRUCTION,
     description="Agent for analyzing voice call transcripts and evaluating candidate responses",
+    planner=BuiltInPlanner(
+        thinking_config=types.ThinkingConfig(
+            include_thoughts=True,
+            thinking_budget=1024,
+        )
+    ),
+    generate_content_config=types.GenerateContentConfig(
+        max_output_tokens=8192,  # Ensure enough tokens for full JSON response
+        temperature=0.1,  # Low temperature for consistent structured output
+    ),
 )
 
 # Session service for running the agent
@@ -405,6 +429,7 @@ Geef je evaluatie als JSON."""
             knockout_results=[],
             qualification_results=[],
             overall_passed=False,
+            needs_human_review=True,  # Flag for review when parsing fails
             notes="Fout bij het verwerken van het transcript",
             raw_response=response_text
         )
@@ -412,15 +437,29 @@ Geef je evaluatie als JSON."""
     # Convert to result objects
     knockout_results = []
     for kr in parsed.get("knockout_results", []):
-        passed = kr.get("passed", False)
-        # Knockout: passed = 100/excellent, failed = 0/weak
+        status = kr.get("status", "needs_review")
+        # Derive passed and score from status
+        if status == "passed":
+            passed = True
+            score = 100
+            rating = "excellent"
+        elif status == "failed":
+            passed = False
+            score = 0
+            rating = "weak"
+        else:  # needs_review
+            passed = None
+            score = 50
+            rating = "needs_review"
+
         knockout_results.append(KnockoutResult(
             id=kr.get("id", ""),
             question_text=kr.get("question_text", ""),
             answer=kr.get("answer", ""),
+            status=status,
             passed=passed,
-            score=100 if passed else 0,
-            rating="excellent" if passed else "weak"
+            score=score,
+            rating=rating
         ))
     
     qualification_results = []
@@ -437,18 +476,29 @@ Geef je evaluatie als JSON."""
             motivation=qr.get("motivation", "")
         ))
     
+    # Compute overall_passed and needs_human_review from knockout results
+    # overall_passed = true if no knockout has status "failed"
+    # needs_human_review = true if any knockout has status "needs_review"
+    has_failed = any(kr.status == "failed" for kr in knockout_results)
+    has_needs_review = any(kr.status == "needs_review" for kr in knockout_results)
+
+    # Use parsed value as fallback, but prefer computed logic
+    overall_passed = not has_failed if knockout_results else parsed.get("overall_passed", False)
+    needs_human_review = has_needs_review
+
     result = TranscriptProcessorResult(
         knockout_results=knockout_results,
         qualification_results=qualification_results,
-        overall_passed=parsed.get("overall_passed", False),
+        overall_passed=overall_passed,
+        needs_human_review=needs_human_review,
         notes=parsed.get("notes", ""),
         summary=parsed.get("summary", ""),
         interview_slot=parsed.get("interview_slot"),
         raw_response=response_text
     )
     
-    logger.info(f"Processing complete: overall_passed={result.overall_passed}")
-    logger.info(f"Knockout results: {len(knockout_results)}")
+    logger.info(f"Processing complete: overall_passed={result.overall_passed}, needs_human_review={result.needs_human_review}")
+    logger.info(f"Knockout results: {len(knockout_results)} (passed: {sum(1 for kr in knockout_results if kr.status == 'passed')}, failed: {sum(1 for kr in knockout_results if kr.status == 'failed')}, needs_review: {sum(1 for kr in knockout_results if kr.status == 'needs_review')})")
     logger.info(f"Qualification results: {len(qualification_results)}")
     logger.info("=" * 60)
     

@@ -36,7 +36,7 @@ class ApplicationService:
         score_count = 0
         knockout_passed = 0
         knockout_total = 0
-        qualification_count = 0
+        open_questions_total = 0
         
         # Process all questions, merging with answers where available
         for q in all_questions:
@@ -51,8 +51,9 @@ class ApplicationService:
                 else:
                     legacy_id = f"qual_{q['position'] + 1}"
                 existing_answer = answer_map.get(legacy_id)
-            
+
             if existing_answer:
+                # Question has been answered
                 answers.append(QuestionAnswerResponse(
                     question_id=existing_answer["question_id"],
                     question_text=existing_answer["question_text"],
@@ -63,21 +64,33 @@ class ApplicationService:
                     rating=existing_answer.get("rating"),
                     motivation=existing_answer.get("motivation")
                 ))
-                
+
                 # Update statistics
                 if q["question_type"] == "knockout":
                     knockout_total += 1
                     if existing_answer.get("passed"):
                         knockout_passed += 1
                 else:
-                    qualification_count += 1
+                    open_questions_total += 1
                     if existing_answer.get("score") is not None:
                         total_score += existing_answer["score"]
                         score_count += 1
+            else:
+                # Question not yet answered - include it anyway for admin panel visibility
+                answers.append(QuestionAnswerResponse(
+                    question_id=q_id,
+                    question_text=q["question_text"],
+                    question_type=q["question_type"],
+                    answer=None,
+                    passed=None,
+                    score=None,
+                    rating=None,
+                    motivation=None
+                ))
         
-        # Calculate average score
-        avg_score = round(total_score / score_count, 1) if score_count > 0 else None
-        
+        # Calculate open questions score (average of qualification question scores)
+        open_questions_score = round(total_score / score_count) if score_count > 0 else None
+
         return ApplicationResponse(
             id=str(app_row["id"]),
             vacancy_id=str(app_row["vacancy_id"]),
@@ -96,8 +109,8 @@ class ApplicationService:
             answers=answers,
             knockout_passed=knockout_passed,
             knockout_total=knockout_total,
-            qualification_count=qualification_count,
-            avg_score=avg_score
+            open_questions_total=open_questions_total,
+            open_questions_score=open_questions_score
         )
     
     async def list_applications(

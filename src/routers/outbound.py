@@ -15,6 +15,7 @@ from src.database import get_db_pool
 from src.config import TWILIO_WHATSAPP_NUMBER, VAPI_API_KEY, logger
 from src.services.whatsapp_service import send_whatsapp_message
 from src.services.vapi_service import get_vapi_service
+from src.workflows import get_orchestrator
 from pre_screening_whatsapp_agent import create_simple_agent
 
 router = APIRouter(tags=["Outbound Screening"])
@@ -311,6 +312,29 @@ async def _initiate_voice_screening(
             )
             logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, vapi_call_id={result.get('call_id')}, is_test={is_test}")
 
+            # Create workflow to track the screening
+            try:
+                orchestrator = await get_orchestrator()
+                workflow_id = await orchestrator.create_workflow(
+                    workflow_type="pre_screening",
+                    context={
+                        "channel": "voice",
+                        "conversation_id": result.get("call_id"),
+                        "candidate_name": candidate_name,
+                        "candidate_phone": phone_normalized,
+                        "vacancy_id": vacancy_id,
+                        "vacancy_title": vacancy_title,
+                        "pre_screening_id": pre_screening_id,
+                        "application_id": application_id,
+                    },
+                    initial_step="in_progress",
+                    timeout_seconds=4 * 3600,  # 4 hour SLA - item becomes stuck when breached
+                )
+                logger.info(f"Created workflow {workflow_id} for voice screening")
+            except Exception as e:
+                logger.error(f"Failed to create workflow for voice screening: {e}")
+                # Don't fail the screening if workflow creation fails
+
             # Application stays 'active' while call is in progress
             # Status will change to 'processing' when transcript analysis starts,
             # then 'completed' when analysis finishes
@@ -464,6 +488,29 @@ async def _initiate_whatsapp_screening(
         )
 
         logger.info(f"WhatsApp screening initiated for vacancy {vacancy_id}, conversation {conversation_id}, is_test={is_test}")
+
+        # Create workflow to track the screening
+        try:
+            orchestrator = await get_orchestrator()
+            workflow_id = await orchestrator.create_workflow(
+                workflow_type="pre_screening",
+                context={
+                    "channel": "whatsapp",
+                    "conversation_id": str(conversation_id),
+                    "candidate_name": candidate_name,
+                    "candidate_phone": phone_normalized,
+                    "vacancy_id": vacancy_id,
+                    "vacancy_title": vacancy_title,
+                    "pre_screening_id": pre_screening_id,
+                    "application_id": application_id,
+                },
+                initial_step="in_progress",
+                timeout_seconds=4 * 3600,  # 4 hour SLA - item becomes stuck when breached
+            )
+            logger.info(f"Created workflow {workflow_id} for WhatsApp screening")
+        except Exception as e:
+            logger.error(f"Failed to create workflow for WhatsApp screening: {e}")
+            # Don't fail the screening if workflow creation fails
 
         return OutboundScreeningResponse(
             success=True,

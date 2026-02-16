@@ -18,7 +18,13 @@ async def get_db_pool() -> asyncpg.Pool:
     if _db_pool is None:
         # Convert SQLAlchemy URL to asyncpg format
         raw_url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
-        _db_pool = await asyncpg.create_pool(raw_url, min_size=1, max_size=10)
+        _db_pool = await asyncpg.create_pool(
+            raw_url,
+            min_size=1,
+            max_size=10,
+            command_timeout=60,                     # Query timeout (seconds)
+            max_inactive_connection_lifetime=30.0,  # Discard idle connections before they go stale
+        )
         logger.info("Database connection pool created")
     return _db_pool
 

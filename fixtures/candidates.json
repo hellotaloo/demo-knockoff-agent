@@ -34,5 +34,65 @@
     "availability": "unknown",
     "available_from": null,
     "rating": null
+  },
+  {
+    "phone": "+32474567804",
+    "email": "lisa.devos@email.be",
+    "first_name": "Lisa",
+    "last_name": "De Vos",
+    "full_name": "Lisa De Vos",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  },
+  {
+    "phone": "+32475678905",
+    "email": "kevin.maes@gmail.com",
+    "first_name": "Kevin",
+    "last_name": "Maes",
+    "full_name": "Kevin Maes",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  },
+  {
+    "phone": "+32476789006",
+    "email": "anna.vermeersch@outlook.be",
+    "first_name": "Anna",
+    "last_name": "Vermeersch",
+    "full_name": "Anna Vermeersch",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  },
+  {
+    "phone": "+32477890107",
+    "email": "pieter.jansen@email.be",
+    "first_name": "Pieter",
+    "last_name": "Jansen",
+    "full_name": "Pieter Jansen",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
+  },
+  {
+    "phone": "+32478901208",
+    "email": "sarah.goossens@gmail.com",
+    "first_name": "Sarah",
+    "last_name": "Goossens",
+    "full_name": "Sarah Goossens",
+    "source": "import",
+    "status": "new",
+    "availability": "unknown",
+    "available_from": null,
+    "rating": null
   }
 ]

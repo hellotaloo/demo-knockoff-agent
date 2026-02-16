@@ -20,6 +20,7 @@ from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
 from src.services.screening_notes_integration_service import trigger_screening_notes_integration
 from src.database import get_db_pool
+from src.workflows import get_orchestrator
 from transcript_processor import process_transcript
 
 logger = logging.getLogger(__name__)
@@ -343,7 +344,8 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
     screening_conv = await pool.fetchrow(
         """
         SELECT sc.id, sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone,
-               sc.candidate_name, sc.is_test, v.title as vacancy_title
+               sc.candidate_name, sc.is_test, sc.application_id, sc.candidate_id,
+               v.title as vacancy_title
         FROM ats.screening_conversations sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
@@ -440,7 +442,20 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
     # Calculate call duration from timestamps
     # VAPI can send timestamps as ISO strings or Unix milliseconds
     call_duration = 0
-    if call.startedAt and call.endedAt:
+
+    # Debug: Log available call fields to understand VAPI payload structure
+    logger.info(f"VAPI call fields: startedAt={call.startedAt}, endedAt={call.endedAt}, "
+                f"durationSeconds={getattr(call, 'durationSeconds', None)}, "
+                f"duration={getattr(call, 'duration', None)}, cost={call.cost}")
+
+    # Priority 1: Use direct durationSeconds field if available
+    if hasattr(call, 'durationSeconds') and call.durationSeconds:
+        call_duration = int(call.durationSeconds)
+        logger.info(f"VAPI call duration from durationSeconds: {call_duration}s")
+    elif hasattr(call, 'duration') and call.duration:
+        call_duration = int(call.duration)
+        logger.info(f"VAPI call duration from duration: {call_duration}s")
+    elif call.startedAt and call.endedAt:
         try:
             # Handle both string (ISO) and numeric (Unix ms) timestamps
             if isinstance(call.startedAt, (int, float)):
@@ -454,29 +469,41 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
                 ended = datetime.fromisoformat(call.endedAt.replace("Z", "+00:00"))
 
             call_duration = int((ended - started).total_seconds())
+            logger.info(f"VAPI call duration from timestamps: {call_duration}s")
         except Exception as e:
-            logger.warning(f"Failed to calculate call duration: {e}")
-            pass
+            logger.warning(f"Failed to calculate call duration from timestamps: {e}")
+
+    # Fallback: Calculate duration from transcript messages' secondsFromStart
+    # The last message's secondsFromStart gives us the approximate call duration
+    if call_duration == 0 and transcript:
+        max_seconds = 0
+        for msg in transcript:
+            secs = msg.get("time_in_call_secs", 0)
+            if secs and secs > max_seconds:
+                max_seconds = secs
+        if max_seconds > 0:
+            call_duration = int(max_seconds)
+            logger.info(f"VAPI call duration from transcript (fallback): {call_duration}s")
 
     call_date = datetime.now().strftime("%Y-%m-%d")
 
-    # Find existing application and set status to 'processing'
+    # Find existing application from screening_conversation (reliable link)
+    # Previously used phone-based lookup which could match wrong application when same phone used for multiple candidates
     existing_app = None
-    if candidate_phone:
-        existing_app = await pool.fetchrow(
-            """
-            SELECT id, candidate_id FROM ats.applications
-            WHERE vacancy_id = $1 AND candidate_phone = $2 AND channel = 'voice' AND status != 'completed'
-            """,
-            vacancy_id, candidate_phone
-        )
+    application_id = screening_conv["application_id"]
+    candidate_id = screening_conv["candidate_id"]
 
-    if existing_app:
-        await pool.execute(
-            "UPDATE ats.applications SET status = 'processing' WHERE id = $1",
-            existing_app["id"]
+    if application_id:
+        existing_app = await pool.fetchrow(
+            "SELECT id, candidate_id FROM ats.applications WHERE id = $1",
+            application_id
         )
-        logger.info(f"Application {existing_app['id']} status -> processing")
+        if existing_app:
+            await pool.execute(
+                "UPDATE ats.applications SET status = 'processing' WHERE id = $1",
+                existing_app["id"]
+            )
+            logger.info(f"Application {existing_app['id']} status -> processing")
 
     # Process transcript with AI
     result = await process_transcript(
@@ -485,6 +512,23 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
         qualification_questions=qualification_questions,
         call_date=call_date,
     )
+
+    # Look up interview_slot from scheduled_interviews table (created during conversation)
+    interview_slot = None
+    scheduled = await pool.fetchrow(
+        "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
+        call_id
+    )
+    if scheduled:
+        from zoneinfo import ZoneInfo
+        try:
+            hour = int(scheduled["selected_time"].replace("u", "").replace("h", ""))
+            tz = ZoneInfo("Europe/Brussels")
+            dt = datetime.combine(scheduled["selected_date"], datetime.min.time(), tzinfo=tz).replace(hour=hour)
+            interview_slot = dt.isoformat()
+        except Exception as e:
+            logger.warning(f"Could not parse interview slot for VAPI: {e}")
+            interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
 
     # Store results in transaction
     async with pool.acquire() as conn:
@@ -503,7 +547,7 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
                     call_duration,
                     call_id,
                     result.summary,
-                    result.interview_slot,
+                    interview_slot,
                     application_id
                 )
                 logger.info(f"Updated application {application_id} with status=completed")
@@ -518,7 +562,7 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
                     """,
                     vacancy_id, candidate_name, candidate_phone,
                     result.overall_passed, call_duration, call_id,
-                    result.summary, result.interview_slot, is_test
+                    result.summary, interview_slot, is_test
                 )
                 application_id = app_row["id"]
                 logger.info(f"Created new application {application_id} with status=completed")
@@ -569,16 +613,16 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
 
     logger.info(f"VAPI call {call_id} processed: application {application_id}")
 
-    # Log activity
-    candidate_id = existing_app["candidate_id"] if existing_app else None
-    if candidate_id:
+    # Log activity (use candidate_id from screening_conv, fallback to existing_app)
+    activity_candidate_id = candidate_id or (existing_app["candidate_id"] if existing_app else None)
+    if activity_candidate_id:
         activity_service = ActivityService(pool)
         scores = [qr.score for qr in result.qualification_results if qr.score is not None]
         avg_score = round(sum(scores) / len(scores)) if scores else None
 
         event_type = ActivityEventType.QUALIFIED if result.overall_passed else ActivityEventType.DISQUALIFIED
         await activity_service.log(
-            candidate_id=str(candidate_id),
+            candidate_id=str(activity_candidate_id),
             event_type=event_type,
             application_id=str(application_id),
             vacancy_id=str(vacancy_id),
@@ -597,6 +641,29 @@ async def _handle_end_of_call(payload_dict: dict) -> dict:
             recruiter_email=os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"),
         ))
         logger.info(f"📄 Triggered screening notes integration for application {application_id}")
+
+    # Notify workflow orchestrator - triggers notifications if qualified + scheduled
+    try:
+        orchestrator = await get_orchestrator()
+        workflow = await orchestrator.find_by_context("conversation_id", call_id)
+
+        if workflow:
+            await orchestrator.handle_event(
+                workflow_id=workflow["id"],
+                event="screening_completed",
+                payload={
+                    "qualified": result.overall_passed,
+                    "interview_slot": interview_slot,
+                    "application_id": str(application_id),
+                    "summary": result.summary,
+                },
+            )
+            logger.info(f"Workflow {workflow['id']}: screening_completed event handled")
+        else:
+            logger.debug(f"No workflow found for call_id {call_id} - skipping orchestrator")
+    except Exception as e:
+        logger.error(f"Failed to notify workflow orchestrator: {e}")
+        # Don't fail the webhook if orchestrator fails
 
     return {
         "status": "processed",

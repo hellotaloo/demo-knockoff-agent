@@ -31,6 +31,7 @@ from src.database import get_db_pool
 from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
 from src.services.whatsapp_service import send_whatsapp_message
 from src.services.screening_notes_integration_service import trigger_screening_notes_integration
+from src.workflows import get_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,16 @@ async def _process_whatsapp_conversation(
         )
         logger.info(f"🔄 Application {existing_app['id']} status -> processing")
 
+    # Update workflow to 'processing' step
+    try:
+        orchestrator = await get_orchestrator()
+        workflow = await orchestrator.find_by_context("conversation_id", str(conversation_id))
+        if workflow:
+            await orchestrator.service.update_step(workflow["id"], "processing")
+            logger.info(f"🔄 Workflow {workflow['id']} step -> processing")
+    except Exception as e:
+        logger.warning(f"Could not update workflow to processing: {e}")
+
     # Process transcript (AI analysis happens here)
     call_date = datetime.now().strftime("%Y-%m-%d")
     result = await process_transcript(
@@ -190,6 +201,23 @@ async def _process_whatsapp_conversation(
     first_msg = messages[0]["created_at"]
     last_msg = messages[-1]["created_at"]
     duration_seconds = int((last_msg - first_msg).total_seconds()) if first_msg and last_msg else 0
+
+    # Look up interview_slot from scheduled_interviews table (created during conversation)
+    interview_slot = None
+    scheduled = await pool.fetchrow(
+        "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
+        str(conversation_id)
+    )
+    if scheduled:
+        from zoneinfo import ZoneInfo
+        try:
+            hour = int(scheduled["selected_time"].replace("u", "").replace("h", ""))
+            tz = ZoneInfo("Europe/Brussels")
+            dt = datetime.combine(scheduled["selected_date"], datetime.min.time(), tzinfo=tz).replace(hour=hour)
+            interview_slot = dt.isoformat()
+        except Exception as e:
+            logger.warning(f"Could not parse interview slot: {e}")
+            interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -207,7 +235,7 @@ async def _process_whatsapp_conversation(
                     result.overall_passed,
                     duration_seconds,
                     result.summary,
-                    result.interview_slot,
+                    interview_slot,
                     application_id
                 )
                 logger.info(f"✅ Application {application_id} status -> completed")
@@ -227,7 +255,7 @@ async def _process_whatsapp_conversation(
                     result.overall_passed,
                     duration_seconds,
                     result.summary,
-                    result.interview_slot,
+                    interview_slot,
                     is_test
                 )
                 application_id = app_row["id"]
@@ -337,6 +365,48 @@ async def _process_whatsapp_conversation(
             recruiter_email=os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"),
         ))
         logger.info(f"📄 Triggered screening notes integration for application {application_id}")
+
+    # Notify workflow orchestrator that screening is complete
+    # This triggers unified notification handling (WhatsApp confirmation + Teams notification)
+    try:
+        orchestrator = await get_orchestrator()
+        workflow = await orchestrator.find_by_context("conversation_id", str(conversation_id))
+        if workflow:
+            # Get interview_slot from scheduled_interviews table (created during conversation)
+            interview_slot = None
+            scheduled = await pool.fetchrow(
+                "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
+                str(conversation_id)
+            )
+            if scheduled:
+                from zoneinfo import ZoneInfo
+                try:
+                    hour = int(scheduled["selected_time"].replace("u", "").replace("h", ""))
+                    tz = ZoneInfo("Europe/Brussels")
+                    dt = datetime.combine(scheduled["selected_date"], datetime.min.time(), tzinfo=tz).replace(hour=hour)
+                    interview_slot = dt.isoformat()
+                except Exception as e:
+                    logger.warning(f"Could not parse interview slot: {e}")
+                    interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
+
+            await orchestrator.handle_event(
+                workflow_id=workflow["id"],
+                event="screening_completed",
+                payload={
+                    "qualified": result.overall_passed,
+                    "interview_slot": interview_slot,
+                    "application_id": str(application_id),
+                    "candidate_name": candidate_name,
+                    "candidate_phone": candidate_phone,
+                    "summary": result.summary,
+                },
+            )
+            logger.info(f"✅ Workflow event sent for conversation {conversation_id}")
+        else:
+            logger.debug(f"No workflow found for conversation {conversation_id} (legacy flow)")
+    except Exception as e:
+        logger.error(f"❌ Failed to notify workflow orchestrator: {e}")
+        # Don't fail the whole process if workflow notification fails
 
 
 async def _save_whatsapp_scheduled_interview(
@@ -1144,6 +1214,16 @@ async def elevenlabs_webhook(request: Request):
         )
         logger.info(f"🔄 Application {existing_app['id']} status -> processing")
 
+    # Update workflow to 'processing' step
+    try:
+        orchestrator = await get_orchestrator()
+        workflow = await orchestrator.find_by_context("conversation_id", data.conversation_id)
+        if workflow:
+            await orchestrator.service.update_step(workflow["id"], "processing")
+            logger.info(f"🔄 Workflow {workflow['id']} step -> processing")
+    except Exception as e:
+        logger.warning(f"Could not update workflow to processing for voice: {e}")
+
     # Process transcript with the agent (AI analysis happens here)
     result = await process_transcript(
         transcript=data.transcript,
@@ -1151,6 +1231,23 @@ async def elevenlabs_webhook(request: Request):
         qualification_questions=qualification_questions,
         call_date=call_date,
     )
+
+    # Look up interview_slot from scheduled_interviews table (created during conversation)
+    interview_slot = None
+    scheduled = await pool.fetchrow(
+        "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
+        data.conversation_id
+    )
+    if scheduled:
+        from zoneinfo import ZoneInfo
+        try:
+            hour = int(scheduled["selected_time"].replace("u", "").replace("h", ""))
+            tz = ZoneInfo("Europe/Brussels")
+            dt = datetime.combine(scheduled["selected_date"], datetime.min.time(), tzinfo=tz).replace(hour=hour)
+            interview_slot = dt.isoformat()
+        except Exception as e:
+            logger.warning(f"Could not parse interview slot for voice: {e}")
+            interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -1170,7 +1267,7 @@ async def elevenlabs_webhook(request: Request):
                     call_duration,
                     data.conversation_id,
                     result.summary,
-                    result.interview_slot,
+                    interview_slot,
                     application_id
                 )
                 logger.info(f"Updated existing application {application_id} for phone {candidate_phone} with status=completed")
@@ -1191,7 +1288,7 @@ async def elevenlabs_webhook(request: Request):
                     call_duration,
                     data.conversation_id,
                     result.summary,
-                    result.interview_slot
+                    interview_slot
                 )
                 application_id = app_row["id"]
                 logger.info(f"Created new application {application_id}")
@@ -1327,6 +1424,48 @@ async def elevenlabs_webhook(request: Request):
             recruiter_email=os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"),
         ))
         logger.info(f"📄 Triggered screening notes integration for application {application_id}")
+
+    # Notify workflow orchestrator that screening is complete
+    # This triggers unified notification handling (WhatsApp confirmation + Teams notification)
+    try:
+        orchestrator = await get_orchestrator()
+        workflow = await orchestrator.find_by_context("conversation_id", data.conversation_id)
+        if workflow:
+            # Get interview_slot from scheduled_interviews table (created during conversation)
+            interview_slot = None
+            scheduled = await pool.fetchrow(
+                "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
+                data.conversation_id
+            )
+            if scheduled:
+                from zoneinfo import ZoneInfo
+                try:
+                    hour = int(scheduled["selected_time"].replace("u", "").replace("h", ""))
+                    tz = ZoneInfo("Europe/Brussels")
+                    dt = datetime.combine(scheduled["selected_date"], datetime.min.time(), tzinfo=tz).replace(hour=hour)
+                    interview_slot = dt.isoformat()
+                except Exception as e:
+                    logger.warning(f"Could not parse interview slot for voice: {e}")
+                    interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
+
+            await orchestrator.handle_event(
+                workflow_id=workflow["id"],
+                event="screening_completed",
+                payload={
+                    "qualified": result.overall_passed,
+                    "interview_slot": interview_slot,
+                    "application_id": str(application_id),
+                    "candidate_name": candidate_name,
+                    "candidate_phone": candidate_phone,
+                    "summary": result.summary,
+                },
+            )
+            logger.info(f"✅ Workflow event sent for voice conversation {data.conversation_id}")
+        else:
+            logger.debug(f"No workflow found for voice conversation {data.conversation_id} (legacy flow)")
+    except Exception as e:
+        logger.error(f"❌ Failed to notify workflow orchestrator for voice: {e}")
+        # Don't fail the whole process if workflow notification fails
 
     response = {
         "status": "processed",

@@ -112,7 +112,7 @@ from src.routers import (
     workspaces_router,
     vapi_router,
     teams_router,
-    workflow_poc_router,
+    architecture_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -145,15 +145,59 @@ logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 # Global session manager
 session_manager: Optional[SessionManager] = None
 
+# Background task for workflow timer processing
+_workflow_ticker_task: Optional[asyncio.Task] = None
+
 
 # ============================================================================
 # Application Lifecycle
 # ============================================================================
 
+async def _workflow_ticker_loop():
+    """Background task that processes workflow timers every 60 seconds."""
+    from src.services.workflow_service import WorkflowService
+    from src.workflows.orchestrator import get_orchestrator
+
+    logger.info("🕐 Workflow ticker started (processing timers every 60s)")
+
+    # Process immediately on startup, then every 60 seconds
+    first_run = True
+
+    while True:
+        try:
+            if not first_run:
+                await asyncio.sleep(60)
+            first_run = False
+
+            pool = await get_db_pool()
+            service = WorkflowService(pool)
+            result = await service.process_timers()
+
+            # Handle auto triggers via orchestrator
+            if result.get("auto_triggers"):
+                orchestrator = await get_orchestrator()
+                for trigger in result["auto_triggers"]:
+                    try:
+                        logger.info(f"🤖 AUTO-TRIGGER (delayed): {trigger['workflow_type']} | step={trigger['step']} | id={trigger['id'][:8]}")
+                        await orchestrator.handle_event(trigger["id"], "auto", {})
+                    except Exception as e:
+                        logger.error(f"🕐 Failed to trigger auto event for {trigger['id']}: {e}")
+
+            if result["processed"] > 0:
+                logger.info(f"🕐 Workflow ticker: processed {result['processed']} timers")
+        except asyncio.CancelledError:
+            logger.info("🕐 Workflow ticker stopped")
+            break
+        except Exception as e:
+            logger.error(f"🕐 Workflow ticker error: {e}")
+            # Continue running despite errors
+            first_run = False  # Ensure we don't retry immediately on error
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle - create session services on startup."""
-    global session_manager
+    global session_manager, _workflow_ticker_task
 
     # Initialize SessionManager
     session_manager = SessionManager(DATABASE_URL)
@@ -207,8 +251,19 @@ async def lifespan(app: FastAPI):
     data_query_router_module.set_session_manager(session_manager)
     document_collection_router_module.set_session_manager(session_manager)
 
+    # Start background workflow ticker
+    _workflow_ticker_task = asyncio.create_task(_workflow_ticker_loop())
+
     yield
+
     # Cleanup on shutdown
+    if _workflow_ticker_task:
+        _workflow_ticker_task.cancel()
+        try:
+            await _workflow_ticker_task
+        except asyncio.CancelledError:
+            pass
+
     await close_db_pool()
 
 
@@ -253,7 +308,7 @@ app.include_router(auth_router)
 app.include_router(workspaces_router)
 app.include_router(vapi_router)
 app.include_router(teams_router)
-app.include_router(workflow_poc_router)
+app.include_router(architecture_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

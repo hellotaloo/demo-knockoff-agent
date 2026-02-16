@@ -105,7 +105,13 @@
       "Bash(npm run lint:*)",
       "Bash(npx eslint:*)",
       "Bash(zip:*)",
-      "Bash(unzip:*)"
+      "Bash(unzip:*)",
+      "Bash(ping6:*)",
+      "Bash(host:*)",
+      "Bash(fi)",
+      "Bash(done)",
+      "Bash(sips:*)",
+      "Bash(uuidgen:*)"
     ],
     "defaultMode": "acceptEdits"
   },

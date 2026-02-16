@@ -139,33 +139,46 @@ class ActivityRepository:
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
         """
-        List activities for a vacancy.
+        List activities for a vacancy with candidate names.
 
         Returns:
-            Tuple of (activity rows, total count)
+            Tuple of (activity rows with candidate info, total count)
         """
-        conditions = ["vacancy_id = $1"]
+        conditions = ["a.vacancy_id = $1"]
         params = [vacancy_id]
         param_idx = 2
 
         if event_types:
-            conditions.append(f"event_type = ANY(${param_idx})")
+            conditions.append(f"a.event_type = ANY(${param_idx})")
             params.append(event_types)
             param_idx += 1
 
         where_clause = " AND ".join(conditions)
 
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.agent_activities WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM ats.agent_activities a WHERE {where_clause}",
             *params
         )
 
         query = f"""
-            SELECT id, candidate_id, application_id, vacancy_id, event_type,
-                   channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.agent_activities
+            SELECT
+                a.id,
+                a.candidate_id,
+                a.application_id,
+                a.vacancy_id,
+                a.event_type,
+                a.channel,
+                a.actor_type,
+                a.actor_id,
+                a.metadata,
+                a.summary,
+                a.created_at,
+                c.first_name AS candidate_first_name,
+                c.last_name AS candidate_last_name
+            FROM ats.agent_activities a
+            LEFT JOIN ats.candidates c ON a.candidate_id = c.id
             WHERE {where_clause}
-            ORDER BY created_at DESC
+            ORDER BY a.created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
         params.extend([limit, offset])

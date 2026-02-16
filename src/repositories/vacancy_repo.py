@@ -59,6 +59,7 @@ class VacancyRepository:
                    c.id as c_id, c.name as c_name, c.location as c_location,
                    c.industry as c_industry, c.logo as c_logo,
                    (ps.id IS NOT NULL) as has_screening,
+                   ps.published_at,
                    CASE
                        WHEN ps.published_at IS NULL THEN NULL
                        ELSE ps.is_online
@@ -69,6 +70,7 @@ class VacancyRepository:
                    COALESCE(app_stats.candidates_count, 0) as candidates_count,
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
+                   app_stats.avg_score,
                    app_stats.last_activity_at
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
@@ -79,7 +81,13 @@ class VacancyRepository:
                     COUNT(*) as candidates_count,
                     COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
                     COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                    MAX(COALESCE(completed_at, started_at)) as last_activity_at
+                    MAX(COALESCE(completed_at, started_at)) as last_activity_at,
+                    (
+                        SELECT ROUND(AVG(ans.score)::numeric, 1)
+                        FROM ats.application_answers ans
+                        JOIN ats.applications app ON app.id = ans.application_id
+                        WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
+                    ) as avg_score
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
@@ -106,6 +114,7 @@ class VacancyRepository:
                    c.id as c_id, c.name as c_name, c.location as c_location,
                    c.industry as c_industry, c.logo as c_logo,
                    (ps.id IS NOT NULL) as has_screening,
+                   ps.published_at,
                    CASE
                        WHEN ps.published_at IS NULL THEN NULL
                        ELSE ps.is_online
@@ -116,6 +125,7 @@ class VacancyRepository:
                    COALESCE(app_stats.candidates_count, 0) as candidates_count,
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
+                   app_stats.avg_score,
                    app_stats.last_activity_at
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
@@ -126,7 +136,13 @@ class VacancyRepository:
                     COUNT(*) as candidates_count,
                     COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
                     COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                    MAX(COALESCE(completed_at, started_at)) as last_activity_at
+                    MAX(COALESCE(completed_at, started_at)) as last_activity_at,
+                    (
+                        SELECT ROUND(AVG(ans.score)::numeric, 1)
+                        FROM ats.application_answers ans
+                        JOIN ats.applications app ON app.id = ans.application_id
+                        WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
+                    ) as avg_score
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
@@ -187,3 +203,44 @@ class VacancyRepository:
         """
 
         return await self.pool.fetchrow(stats_query)
+
+    async def get_applicants_by_vacancy_ids(
+        self, vacancy_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[asyncpg.Record]]:
+        """
+        Fetch applicants for multiple vacancies in a single query.
+        Returns a dict mapping vacancy_id -> list of applicant records.
+        """
+        if not vacancy_ids:
+            return {}
+
+        query = """
+            SELECT
+                a.id,
+                a.vacancy_id,
+                a.candidate_name as name,
+                a.candidate_phone as phone,
+                a.channel,
+                a.status,
+                a.qualified,
+                a.started_at,
+                a.completed_at,
+                (
+                    SELECT ROUND(AVG(ans.score)::numeric, 1)
+                    FROM ats.application_answers ans
+                    WHERE ans.application_id = a.id AND ans.score IS NOT NULL
+                ) as score
+            FROM ats.applications a
+            WHERE a.vacancy_id = ANY($1)
+              AND a.is_test = false
+            ORDER BY a.started_at DESC
+        """
+
+        rows = await self.pool.fetch(query, vacancy_ids)
+
+        # Group by vacancy_id
+        result: dict[uuid.UUID, list[asyncpg.Record]] = {vid: [] for vid in vacancy_ids}
+        for row in rows:
+            result[row["vacancy_id"]].append(row)
+
+        return result
