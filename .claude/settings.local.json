@@ -111,7 +111,8 @@
       "Bash(fi)",
       "Bash(done)",
       "Bash(sips:*)",
-      "Bash(uuidgen:*)"
+      "Bash(uuidgen:*)",
+      "Bash(git config:*)"
     ],
     "defaultMode": "acceptEdits"
   },
