@@ -259,3 +259,36 @@ class PreScreeningRepository:
             "UPDATE ats.pre_screenings SET is_online = $1, updated_at = NOW() WHERE id = $2",
             is_online, pre_screening_id
         )
+
+    # -------------------------------------------------------------------------
+    # Interview Analysis
+    # -------------------------------------------------------------------------
+
+    async def get_analysis_result(self, pre_screening_id: uuid.UUID) -> Optional[dict]:
+        """Get cached interview analysis result."""
+        import json as _json
+        row = await self.pool.fetchval(
+            "SELECT analysis_result FROM ats.pre_screenings WHERE id = $1",
+            pre_screening_id
+        )
+        if row is None:
+            return None
+        # asyncpg returns JSONB as a string or dict depending on version
+        if isinstance(row, str):
+            return _json.loads(row)
+        return row
+
+    async def save_analysis_result(self, pre_screening_id: uuid.UUID, result: dict):
+        """Save interview analysis result as JSONB."""
+        import json as _json
+        await self.pool.execute(
+            "UPDATE ats.pre_screenings SET analysis_result = $1::jsonb, updated_at = NOW() WHERE id = $2",
+            _json.dumps(result), pre_screening_id
+        )
+
+    async def clear_analysis_result(self, pre_screening_id: uuid.UUID):
+        """Clear cached analysis result (called when questions change)."""
+        await self.pool.execute(
+            "UPDATE ats.pre_screenings SET analysis_result = NULL WHERE id = $1",
+            pre_screening_id
+        )

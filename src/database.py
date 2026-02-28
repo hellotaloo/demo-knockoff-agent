@@ -13,19 +13,35 @@ _db_pool: Optional[asyncpg.Pool] = None
 
 
 async def get_db_pool() -> asyncpg.Pool:
-    """Get or create the database connection pool."""
+    """Get or create the database connection pool.
+
+    Pool configuration optimized for Supabase Session Mode Pooler:
+    - setup callback validates connections on acquire (like SQLAlchemy pool_pre_ping)
+    - max_inactive_connection_lifetime matches Supabase pooler timeout (~5 min)
+    - min_size=2 pre-warms connections to avoid cold start latency
+    """
     global _db_pool
     if _db_pool is None:
         # Convert SQLAlchemy URL to asyncpg format
         raw_url = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+
+        async def setup_connection(conn):
+            """Validate connection on acquire - equivalent to pool_pre_ping.
+
+            This prevents stale connections from being returned to callers
+            when Supabase's pooler has terminated them due to inactivity.
+            """
+            await conn.execute("SELECT 1")
+
         _db_pool = await asyncpg.create_pool(
             raw_url,
-            min_size=1,
-            max_size=10,
-            command_timeout=60,                     # Query timeout (seconds)
-            max_inactive_connection_lifetime=30.0,  # Discard idle connections before they go stale
+            min_size=2,                              # Pre-warm connections
+            max_size=15,                             # Room for concurrent requests
+            command_timeout=60,                      # Query timeout (seconds)
+            max_inactive_connection_lifetime=300.0,  # Match Supabase pooler timeout (~5 min)
+            setup=setup_connection,                  # Validate on each acquire
         )
-        logger.info("Database connection pool created")
+        logger.info("Database connection pool created (min=2, max=15, idle_lifetime=300s)")
     return _db_pool
 
 
@@ -202,6 +218,141 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                 -- Add the new check constraint with 'cv' included
                 EXECUTE format('ALTER TABLE %I.applications ADD CONSTRAINT applications_channel_check CHECK (channel IN (''voice'', ''whatsapp'', ''cv''))', target_schema);
             END $$;
+        """)
+
+        # =====================================================================
+        # Ontology tables
+        # =====================================================================
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.ontology_types (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                slug        VARCHAR(50) NOT NULL,
+                name        VARCHAR(100) NOT NULL,
+                name_plural VARCHAR(100),
+                description TEXT,
+                icon        VARCHAR(50),
+                color       VARCHAR(7),
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                is_system   BOOLEAN NOT NULL DEFAULT false,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_ontology_type_workspace_slug UNIQUE (workspace_id, slug)
+            );
+        """)
+
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.ontology_entities (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                type_id     UUID NOT NULL REFERENCES ats.ontology_types(id) ON DELETE CASCADE,
+                name        VARCHAR(200) NOT NULL,
+                description TEXT,
+                icon        VARCHAR(50),
+                color       VARCHAR(7),
+                external_id VARCHAR(255),
+                metadata    JSONB NOT NULL DEFAULT '{}',
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                is_active   BOOLEAN NOT NULL DEFAULT true,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_ontology_entity_workspace_name UNIQUE (workspace_id, type_id, name)
+            );
+        """)
+
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.ontology_relation_types (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                slug        VARCHAR(50) NOT NULL,
+                name        VARCHAR(100) NOT NULL,
+                source_type_id UUID REFERENCES ats.ontology_types(id) ON DELETE SET NULL,
+                target_type_id UUID REFERENCES ats.ontology_types(id) ON DELETE SET NULL,
+                is_system   BOOLEAN NOT NULL DEFAULT false,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_ontology_reltype_workspace_slug UNIQUE (workspace_id, slug)
+            );
+        """)
+
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.ontology_relations (
+                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workspace_id    UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                source_entity_id UUID NOT NULL REFERENCES ats.ontology_entities(id) ON DELETE CASCADE,
+                target_entity_id UUID NOT NULL REFERENCES ats.ontology_entities(id) ON DELETE CASCADE,
+                relation_type_id UUID NOT NULL REFERENCES ats.ontology_relation_types(id) ON DELETE CASCADE,
+                metadata        JSONB NOT NULL DEFAULT '{}',
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_ontology_relation UNIQUE (source_entity_id, target_entity_id, relation_type_id),
+                CONSTRAINT chk_no_self_relation CHECK (source_entity_id != target_entity_id)
+            );
+        """)
+
+        # Ontology indexes
+        await pool.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ontology_types_workspace ON ats.ontology_types(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_entities_workspace ON ats.ontology_entities(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_entities_type ON ats.ontology_entities(type_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_entities_workspace_type ON ats.ontology_entities(workspace_id, type_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_entities_external ON ats.ontology_entities(workspace_id, external_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_relations_workspace ON ats.ontology_relations(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_relations_source ON ats.ontology_relations(source_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_relations_target ON ats.ontology_relations(target_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_relations_type ON ats.ontology_relations(relation_type_id);
+            CREATE INDEX IF NOT EXISTS idx_ontology_relation_types_workspace ON ats.ontology_relation_types(workspace_id);
+        """)
+
+        # Ontology seed function
+        await pool.execute("""
+            CREATE OR REPLACE FUNCTION ats.seed_ontology_defaults(p_workspace_id UUID)
+            RETURNS void AS $$
+            DECLARE
+                v_category_type_id UUID;
+                v_function_type_id UUID;
+                v_document_type_id UUID;
+                v_skill_type_id UUID;
+            BEGIN
+                INSERT INTO ats.ontology_types (workspace_id, slug, name, name_plural, icon, color, sort_order, is_system) VALUES
+                    (p_workspace_id, 'category',      'Categorie',    'Categorieën',   'folder',       '#8B5CF6', 0, true),
+                    (p_workspace_id, 'job_function',   'Functie',      'Functies',      'briefcase',    '#3B82F6', 1, true),
+                    (p_workspace_id, 'document_type',  'Documenttype', 'Documenttypes', 'file-text',    '#10B981', 2, true),
+                    (p_workspace_id, 'skill',          'Vaardigheid',  'Vaardigheden',  'star',         '#F59E0B', 3, true),
+                    (p_workspace_id, 'requirement',    'Vereiste',     'Vereisten',     'check-circle', '#EF4444', 4, true)
+                ON CONFLICT (workspace_id, slug) DO NOTHING;
+
+                SELECT id INTO v_category_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'category';
+                SELECT id INTO v_function_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'job_function';
+                SELECT id INTO v_document_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'document_type';
+                SELECT id INTO v_skill_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'skill';
+
+                INSERT INTO ats.ontology_relation_types (workspace_id, slug, name, source_type_id, target_type_id, is_system) VALUES
+                    (p_workspace_id, 'belongs_to',  'Behoort tot',      v_function_type_id, v_category_type_id, true),
+                    (p_workspace_id, 'requires',    'Vereist',           v_function_type_id, v_document_type_id, true),
+                    (p_workspace_id, 'has_skill',   'Heeft vaardigheid', v_function_type_id, v_skill_type_id,    true)
+                ON CONFLICT (workspace_id, slug) DO NOTHING;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+
+        # Seed defaults for all existing workspaces
+        await pool.execute("""
+            DO $$
+            DECLARE
+                ws RECORD;
+            BEGIN
+                FOR ws IN SELECT id FROM ats.workspaces LOOP
+                    PERFORM ats.seed_ontology_defaults(ws.id);
+                END LOOP;
+            END $$;
+        """)
+
+        logger.info("Ontology tables and seed data initialized")
+
+        # Add analysis_result JSONB column to pre_screenings (for interview analysis cache)
+        await pool.execute("""
+            ALTER TABLE ats.pre_screenings
+            ADD COLUMN IF NOT EXISTS analysis_result JSONB DEFAULT NULL;
         """)
 
         logger.info("Schema migrations completed")

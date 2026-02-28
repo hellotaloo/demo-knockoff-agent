@@ -124,3 +124,18 @@ class VapiCreateCallResponse(BaseModel):
     status: str
     phoneNumberId: Optional[str] = None
     squadId: Optional[str] = None
+
+
+class VapiWebCallRequest(BaseModel):
+    """Request model for creating VAPI web call session (browser-based simulation)."""
+    vacancy_id: str
+    candidate_name: str = "Test Kandidaat"  # Dummy default for simulation
+    first_name: Optional[str] = None  # Extracted from candidate_name if not provided
+
+
+class VapiWebCallResponse(BaseModel):
+    """Response with config for frontend to start web call via VAPI SDK."""
+    success: bool
+    squad_id: str
+    vapi_public_key: str
+    assistant_overrides: dict  # Contains variableValues with questions

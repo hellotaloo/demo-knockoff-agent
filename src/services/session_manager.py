@@ -26,7 +26,18 @@ class SessionManager:
 
     def __init__(self, database_url: str):
         self.database_url = database_url
-        self.connect_args = {"statement_cache_size": 0}  # Supabase compatibility
+        # SQLAlchemy engine kwargs optimized for Supabase Session Mode Pooler
+        # - pool_pre_ping: Validates connections before use (prevents stale connection errors)
+        # - pool_recycle: Recycle connections every 5 min (match Supabase pooler timeout)
+        # - pool_size: Smaller pools per service to avoid connection exhaustion
+        # - connect_args: Disable statement caching for Supabase compatibility
+        self.engine_kwargs = {
+            "pool_pre_ping": True,
+            "pool_recycle": 300,
+            "pool_size": 3,
+            "max_overflow": 5,
+            "connect_args": {"statement_cache_size": 0},
+        }
 
         # Session services
         self.session_service: Optional[DatabaseSessionService] = None
@@ -46,9 +57,9 @@ class SessionManager:
         """Create the main session service."""
         self.session_service = DatabaseSessionService(
             db_url=self.database_url,
-            connect_args=self.connect_args
+            **self.engine_kwargs
         )
-        logger.info("Created session service")
+        logger.info("Created session service (pool_pre_ping=True, pool_recycle=300s)")
         return self.session_service
 
     def create_interview_session_service(
@@ -59,7 +70,7 @@ class SessionManager:
         """Create interview generator session service and runners."""
         self.interview_session_service = DatabaseSessionService(
             db_url=self.database_url,
-            connect_args=self.connect_args
+            **self.engine_kwargs
         )
 
         # Full thinking agent for initial generation
@@ -86,7 +97,7 @@ class SessionManager:
         """Create recruiter analyst session service and runner."""
         self.analyst_session_service = DatabaseSessionService(
             db_url=self.database_url,
-            connect_args=self.connect_args
+            **self.engine_kwargs
         )
         self.analyst_runner = Runner(
             agent=recruiter_analyst_agent,
@@ -100,9 +111,9 @@ class SessionManager:
         """Create document collection session service."""
         self.document_session_service = DatabaseSessionService(
             db_url=self.database_url,
-            connect_args=self.connect_args
+            **self.engine_kwargs
         )
-        logger.info("Created document collection session service")
+        logger.info("Created document collection session service (pool_pre_ping=True)")
         return self.document_session_service
 
     async def safe_append_event(

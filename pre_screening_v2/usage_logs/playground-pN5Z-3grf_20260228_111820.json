@@ -1,0 +1,16 @@
+{
+  "room": "playground-pN5Z-3grf",
+  "timestamp": "20260228_111820",
+  "candidate_name": "Mark Verbeke",
+  "job_title": "Bakkerij Medewerker",
+  "llm_prompt_tokens": 5084,
+  "llm_completion_tokens": 245,
+  "tts_characters": 764,
+  "stt_audio_duration": 42.049999999999955,
+  "cost_usd": {
+    "llm": 0.002426,
+    "tts": 0.008595,
+    "stt": 0.005396,
+    "total": 0.016417
+  }
+}

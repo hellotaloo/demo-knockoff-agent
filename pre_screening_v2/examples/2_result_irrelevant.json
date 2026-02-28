@@ -1,0 +1,25 @@
+{
+  "_description": "Candidate gave too many irrelevant/trolling answers. Conversation ended after reaching MAX_IRRELEVANT (3).",
+
+  "call_id": "call_pqr678",
+  "status": "irrelevant",
+  "consent_given": true,
+  "voicemail_detected": false,
+  "passed_knockout": false,
+  "interested_in_alternatives": false,
+
+  "knockout_answers": [
+    {
+      "question_id": "q1",
+      "question_text": "Mag je wettelijk werken in Belgie?",
+      "result": "irrelevant",
+      "raw_answer": "Kandidaat gaf onzinnige antwoorden.",
+      "candidate_note": ""
+    }
+  ],
+
+  "open_answers": [],
+
+  "chosen_timeslot": null,
+  "scheduling_preference": null
+}

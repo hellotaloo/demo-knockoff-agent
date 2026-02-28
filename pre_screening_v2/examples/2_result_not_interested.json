@@ -1,0 +1,26 @@
+{
+  "_description": "Candidate failed knockout and declined alternative vacancies.",
+
+  "call_id": "call_vwx234",
+  "status": "not_interested",
+  "consent_given": true,
+  "voicemail_detected": false,
+  "passed_knockout": false,
+  "interested_in_alternatives": false,
+
+  "knockout_answers": [
+    {
+      "question_id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "question_text": "Mag je wettelijk werken in Belgie?",
+      "result": "fail",
+      "raw_answer": "Nee, ik heb geen werkvergunning.",
+      "candidate_note": ""
+    }
+  ],
+
+  "open_answers": [],
+
+  "chosen_timeslot": null,
+  "scheduling_preference": null
+}

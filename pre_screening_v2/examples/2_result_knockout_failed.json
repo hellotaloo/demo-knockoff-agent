@@ -1,0 +1,56 @@
+{
+  "_description": "Candidate fails a knockout question. Agent offers alternative vacancies, candidate is interested and answers the alternative questions. Note: alternative questions (alt1-alt3) are hardcoded in the agent, not provided by the backend — so they have no internal_id.",
+
+  "call_id": "call_ghi789",
+  "status": "knockout_failed",
+  "consent_given": true,
+  "voicemail_detected": false,
+  "passed_knockout": false,
+  "interested_in_alternatives": true,
+
+  "knockout_answers": [
+    {
+      "question_id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "question_text": "Mag je wettelijk werken in Belgie?",
+      "result": "pass",
+      "raw_answer": "Ja.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "q2",
+      "internal_id": "ko_7d4c1e",
+      "question_text": "Heb je ervaring met werken in een bakkerij of in de verkoop?",
+      "result": "fail",
+      "raw_answer": "Nee, ik heb geen ervaring in die sector.",
+      "candidate_note": ""
+    }
+  ],
+
+  "open_answers": [
+    {
+      "question_id": "alt1",
+      "internal_id": null,
+      "question_text": "In welke regio zoek je werk?",
+      "answer_summary": "Antwerpen en omgeving.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "alt2",
+      "internal_id": null,
+      "question_text": "Zoek je fulltime, parttime of flex?",
+      "answer_summary": "Fulltime.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "alt3",
+      "internal_id": null,
+      "question_text": "Heb je ervaring in een bepaalde sector?",
+      "answer_summary": "Logistiek, heeft 3 jaar in een magazijn gewerkt.",
+      "candidate_note": ""
+    }
+  ],
+
+  "chosen_timeslot": null,
+  "scheduling_preference": null
+}

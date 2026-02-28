@@ -8,7 +8,7 @@ from uuid import UUID
 import asyncpg
 
 from src.auth.supabase_client import supabase_auth
-from src.auth.jwt import verify_supabase_token, extract_user_id, extract_email, extract_user_metadata
+from src.auth.jwt import verify_supabase_token_async, extract_user_id, extract_email, extract_user_metadata
 from src.auth.exceptions import AuthenticationError, InvalidTokenError
 from src.repositories import UserProfileRepository, WorkspaceRepository, WorkspaceMembershipRepository
 
@@ -146,7 +146,7 @@ class AuthService:
             Tuple of (user_dict, workspaces_list)
         """
         # Verify token and extract claims
-        payload = verify_supabase_token(access_token)
+        payload = await verify_supabase_token_async(access_token)
         auth_user_id = extract_user_id(payload)
         email = extract_email(payload)
         metadata = extract_user_metadata(payload)

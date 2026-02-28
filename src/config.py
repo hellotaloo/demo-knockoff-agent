@@ -40,6 +40,7 @@ ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")  # Master voice agen
 
 # VAPI Configuration
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
+VAPI_PUBLIC_KEY = os.environ.get("VAPI_PUBLIC_KEY")  # Public key safe for frontend (web calls)
 VAPI_SQUAD_ID = os.environ.get("VAPI_SQUAD_ID", "c43899f8-59fa-4886-85d6-02bed3ed325d")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 VAPI_WEBHOOK_SECRET = os.environ.get("VAPI_WEBHOOK_SECRET", "")
@@ -54,6 +55,18 @@ SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+# LiveKit Configuration
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL")
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET")
+SIP_OUTBOUND_TRUNK_ID = os.environ.get("SIP_OUTBOUND_TRUNK_ID")
+LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "pre-screening")
+LIVEKIT_WEBHOOK_SECRET = os.environ.get("LIVEKIT_WEBHOOK_SECRET", "")
+BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "")
+
+# ATS Simulator Configuration
+ATS_SIMULATOR_URL = os.environ.get("ATS_SIMULATOR_URL", "http://localhost:8080/ats-simulator")
 
 # ============================================================================
 # Logging Configuration

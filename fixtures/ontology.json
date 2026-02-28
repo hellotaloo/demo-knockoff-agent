@@ -1,0 +1,245 @@
+{
+  "categories": [
+    {
+      "name": "Transport",
+      "description": "Transport en logistiek van goederen over de weg",
+      "icon": "truck",
+      "color": "#3B82F6"
+    },
+    {
+      "name": "Logistics",
+      "description": "Magazijn- en opslaglogistiek",
+      "icon": "warehouse",
+      "color": "#F59E0B"
+    },
+    {
+      "name": "Healthcare",
+      "description": "Gezondheidszorg en medische beroepen",
+      "icon": "heart-pulse",
+      "color": "#EC4899"
+    },
+    {
+      "name": "Office",
+      "description": "Kantoor- en administratieve functies",
+      "icon": "building-2",
+      "color": "#6B7280"
+    },
+    {
+      "name": "Techniek",
+      "description": "Technische en industriële functies",
+      "icon": "wrench",
+      "color": "#8B5CF6"
+    }
+  ],
+  "job_functions": [
+    {
+      "name": "Chauffeur CE",
+      "description": "Vrachtwagenchauffeur met CE-rijbewijs voor nationaal en internationaal transport.\nVerantwoordelijk voor het veilig vervoeren van goederen en het naleven van rij- en rusttijden.",
+      "icon": "truck",
+      "category": "Transport"
+    },
+    {
+      "name": "Chauffeur C",
+      "description": "Vrachtwagenchauffeur met C-rijbewijs voor nationaal transport.\nVerantwoordelijk voor het bezorgen van goederen binnen België.",
+      "icon": "truck",
+      "category": "Transport"
+    },
+    {
+      "name": "Magazijnmedewerker",
+      "description": "Verantwoordelijk voor het ontvangen, opslaan en verzenden van goederen in het magazijn.",
+      "icon": "package",
+      "category": "Logistics"
+    },
+    {
+      "name": "Heftruckchauffeur",
+      "description": "Bedient heftrucks voor het verplaatsen van goederen in magazijnen en op laadkaaien.",
+      "icon": "forklift",
+      "category": "Logistics"
+    },
+    {
+      "name": "Verpleegkundige",
+      "description": "Biedt medische zorg en ondersteuning aan patiënten in ziekenhuizen of thuiszorg.",
+      "icon": "stethoscope",
+      "category": "Healthcare"
+    },
+    {
+      "name": "Callcenter Agent",
+      "description": "Behandelt inkomende en uitgaande telefoongesprekken voor klantenservice.",
+      "icon": "headset",
+      "category": "Office"
+    },
+    {
+      "name": "Elektricien",
+      "description": "Installeert, onderhoudt en repareert elektrische installaties.",
+      "icon": "zap",
+      "category": "Techniek"
+    },
+    {
+      "name": "Loodgieter",
+      "description": "Installeert en repareert sanitaire installaties en leidingwerk.",
+      "icon": "droplets",
+      "category": "Techniek"
+    },
+    {
+      "name": "Zorgkundige",
+      "description": "Ondersteunt verpleegkundigen bij de dagelijkse verzorging van patiënten.",
+      "icon": "heart-handshake",
+      "category": "Healthcare"
+    },
+    {
+      "name": "Receptionist",
+      "description": "Ontvangt bezoekers en beheert telefonische communicatie aan de receptie.",
+      "icon": "phone",
+      "category": "Office"
+    },
+    {
+      "name": "Orderpicker",
+      "description": "Verzamelt bestellingen in het magazijn voor verzending.",
+      "icon": "scan-barcode",
+      "category": "Logistics"
+    },
+    {
+      "name": "Koerier",
+      "description": "Bezorgt pakketten en documenten binnen een bepaald gebied.",
+      "icon": "bike",
+      "category": "Transport"
+    }
+  ],
+  "document_types": [
+    {
+      "name": "Identiteitskaart",
+      "description": "Officieel identiteitsbewijs (eID of paspoort)",
+      "icon": "id-card"
+    },
+    {
+      "name": "Rijbewijs CE",
+      "description": "Rijbewijs categorie CE voor vrachtwagens met aanhanger",
+      "icon": "credit-card"
+    },
+    {
+      "name": "Rijbewijs C",
+      "description": "Rijbewijs categorie C voor vrachtwagens",
+      "icon": "credit-card"
+    },
+    {
+      "name": "Code 95",
+      "description": "Vakbekwaamheid voor beroepschauffeurs (5-jaarlijkse verlenging)",
+      "icon": "badge-check"
+    },
+    {
+      "name": "ADR Certificaat",
+      "description": "Certificaat voor het vervoer van gevaarlijke stoffen",
+      "icon": "alert-triangle"
+    },
+    {
+      "name": "VCA Certificaat",
+      "description": "Veiligheids Certificaat Aannemers - basisveiligheid",
+      "icon": "shield-check"
+    },
+    {
+      "name": "Heftruckcertificaat",
+      "description": "Attest voor het besturen van een heftruck",
+      "icon": "file-badge"
+    },
+    {
+      "name": "Diploma Verpleegkunde",
+      "description": "Bachelor of graduaat diploma verpleegkunde",
+      "icon": "graduation-cap"
+    },
+    {
+      "name": "RIZIV Nummer",
+      "description": "Registratienummer bij het RIZIV voor zorgverleners",
+      "icon": "hash"
+    },
+    {
+      "name": "Medisch Attest",
+      "description": "Medisch geschiktheidsattest voor de functie",
+      "icon": "file-heart"
+    },
+    {
+      "name": "Rijbewijs B",
+      "description": "Rijbewijs categorie B voor personenwagens",
+      "icon": "credit-card"
+    },
+    {
+      "name": "Uittreksel Strafregister",
+      "description": "Bewijs van goed gedrag en zeden (model 596.1)",
+      "icon": "file-search"
+    },
+    {
+      "name": "BA-4 Attest",
+      "description": "Attest voor gewaarschuwde persoon elektrische installaties",
+      "icon": "zap"
+    },
+    {
+      "name": "BA-5 Attest",
+      "description": "Attest voor vakbekwame persoon elektrische installaties",
+      "icon": "zap"
+    },
+    {
+      "name": "EHBO Brevet",
+      "description": "Brevet eerste hulp bij ongevallen",
+      "icon": "cross"
+    }
+  ],
+  "requirements": {
+    "Chauffeur CE": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "Rijbewijs CE", "requirement_type": "verplicht", "priority": 2},
+      {"document": "Code 95", "requirement_type": "verplicht", "priority": 3},
+      {"document": "ADR Certificaat", "requirement_type": "voorwaardelijk", "priority": 4, "condition": "Bij gevaarlijk transport"},
+      {"document": "Medisch Attest", "requirement_type": "gewenst", "priority": 5}
+    ],
+    "Chauffeur C": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "Rijbewijs C", "requirement_type": "verplicht", "priority": 2},
+      {"document": "Code 95", "requirement_type": "verplicht", "priority": 3},
+      {"document": "Medisch Attest", "requirement_type": "gewenst", "priority": 4}
+    ],
+    "Magazijnmedewerker": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "VCA Certificaat", "requirement_type": "voorwaardelijk", "priority": 2, "condition": "Bij werken op grote sites"},
+      {"document": "Heftruckcertificaat", "requirement_type": "gewenst", "priority": 3}
+    ],
+    "Heftruckchauffeur": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "Heftruckcertificaat", "requirement_type": "verplicht", "priority": 2},
+      {"document": "VCA Certificaat", "requirement_type": "verplicht", "priority": 3},
+      {"document": "Medisch Attest", "requirement_type": "gewenst", "priority": 4}
+    ],
+    "Verpleegkundige": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "Diploma Verpleegkunde", "requirement_type": "verplicht", "priority": 2},
+      {"document": "RIZIV Nummer", "requirement_type": "verplicht", "priority": 3},
+      {"document": "Medisch Attest", "requirement_type": "voorwaardelijk", "priority": 4, "condition": "Bij ziekenhuiswerk"}
+    ],
+    "Callcenter Agent": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1}
+    ],
+    "Elektricien": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "BA-5 Attest", "requirement_type": "verplicht", "priority": 2},
+      {"document": "VCA Certificaat", "requirement_type": "verplicht", "priority": 3}
+    ],
+    "Loodgieter": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "VCA Certificaat", "requirement_type": "voorwaardelijk", "priority": 2, "condition": "Bij werken op bouwsites"}
+    ],
+    "Zorgkundige": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "RIZIV Nummer", "requirement_type": "verplicht", "priority": 2},
+      {"document": "Uittreksel Strafregister", "requirement_type": "verplicht", "priority": 3}
+    ],
+    "Receptionist": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1}
+    ],
+    "Orderpicker": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "VCA Certificaat", "requirement_type": "gewenst", "priority": 2}
+    ],
+    "Koerier": [
+      {"document": "Identiteitskaart", "requirement_type": "verplicht", "priority": 1},
+      {"document": "Rijbewijs B", "requirement_type": "verplicht", "priority": 2}
+    ]
+  }
+}

@@ -61,6 +61,14 @@ class WorkflowOrchestrator:
             handle_screening_completed,
             handle_send_notifications,
         )
+        from src.workflows.vacancy_setup import (
+            STEP_CONFIG as VACANCY_SETUP_STEP_CONFIG,
+            handle_questions_saved,
+            handle_run_analysis,
+            handle_recruiter_approved,
+            handle_auto_publish,
+            handle_send_published_notification,
+        )
 
         # Pre-screening workflow handlers
         # Both voice and WhatsApp use the same handlers - channel is in context
@@ -69,9 +77,17 @@ class WorkflowOrchestrator:
         # Auto-triggered after screening_completed advances to "processed"
         self.handlers[("pre_screening", "processed", "auto")] = handle_send_notifications
 
+        # Vacancy setup workflow handlers
+        self.handlers[("vacancy_setup", "generating", "questions_saved")] = handle_questions_saved
+        self.handlers[("vacancy_setup", "analyzing", "auto")] = handle_run_analysis
+        self.handlers[("vacancy_setup", "awaiting_review", "recruiter_approved")] = handle_recruiter_approved
+        self.handlers[("vacancy_setup", "publishing", "auto")] = handle_auto_publish
+        self.handlers[("vacancy_setup", "notifying", "auto")] = handle_send_published_notification
+
         # Step config per workflow type (for timeouts)
         self.step_configs = {
             "pre_screening": PRE_SCREENING_STEP_CONFIG,
+            "vacancy_setup": VACANCY_SETUP_STEP_CONFIG,
         }
 
         logger.info(f"Registered {len(self.handlers)} workflow handlers")

@@ -11,7 +11,7 @@ import asyncpg
 from fastapi import Depends, Header
 
 from src.database import get_db_pool
-from src.auth.jwt import verify_supabase_token, extract_user_id, extract_email, extract_user_metadata
+from src.auth.jwt import verify_supabase_token_async, extract_user_id, extract_email, extract_user_metadata
 from src.auth.exceptions import (
     AuthenticationError,
     InvalidTokenError,
@@ -281,7 +281,7 @@ async def get_current_user(
             return {"user": user.email}
     """
     token = extract_token(authorization)
-    payload = verify_supabase_token(token)
+    payload = await verify_supabase_token_async(token)
 
     auth_user_id = extract_user_id(payload)
     email = extract_email(payload)

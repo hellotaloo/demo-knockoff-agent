@@ -1,0 +1,64 @@
+{
+  "_description": "Happy path: candidate passes all knockouts, answers open questions, and books a timeslot.",
+
+  "call_id": "call_abc123",
+  "status": "completed",
+  "consent_given": true,
+  "voicemail_detected": false,
+  "passed_knockout": true,
+  "interested_in_alternatives": false,
+
+  "knockout_answers": [
+    {
+      "question_id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "question_text": "Mag je wettelijk werken in Belgie?",
+      "result": "pass",
+      "raw_answer": "Ja, ik heb een Belgische nationaliteit.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "q2",
+      "internal_id": "ko_7d4c1e",
+      "question_text": "Heb je ervaring met werken in een bakkerij of in de verkoop?",
+      "result": "pass",
+      "raw_answer": "Ja, ik heb 2 jaar in een bakkerij gewerkt.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "q3",
+      "internal_id": "ko_5b8f0a",
+      "question_text": "Ben je beschikbaar om in het weekend te werken?",
+      "result": "pass",
+      "raw_answer": "Ja, geen probleem.",
+      "candidate_note": ""
+    }
+  ],
+
+  "open_answers": [
+    {
+      "question_id": "oq1",
+      "internal_id": "oq_a1b2c3",
+      "question_text": "Waarom wil je in een bakkerij werken?",
+      "answer_summary": "Kandidaat heeft passie voor bakken en werkt graag met mensen.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "oq2",
+      "internal_id": "oq_d4e5f6",
+      "question_text": "Wat zijn je sterke punten voor deze functie?",
+      "answer_summary": "Ervaring met klanten, vroege vogel, werkt graag in team.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "oq3",
+      "internal_id": "oq_g7h8i9",
+      "question_text": "Wanneer zou je kunnen starten?",
+      "answer_summary": "Kan volgende week al beginnen.",
+      "candidate_note": ""
+    }
+  ],
+
+  "chosen_timeslot": "woensdag 5 maart om 11 uur",
+  "scheduling_preference": null
+}

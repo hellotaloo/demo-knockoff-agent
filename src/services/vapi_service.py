@@ -207,6 +207,99 @@ class VapiService:
                 "status": "failed",
             }
 
+    def create_web_call_config(
+        self,
+        first_name: str,
+        vacancy_id: str,
+        vacancy_title: str,
+        knockout_questions: Optional[list[dict]] = None,
+        qualification_questions: Optional[list[dict]] = None,
+        pre_screening_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Create configuration for VAPI web call (browser-based simulation).
+
+        This is used for testing voice calls in the browser without a real phone call.
+        Returns the squad_id and assistant_overrides for the frontend to use with
+        vapi.start(null, assistantOverrides, squadId).
+
+        Args:
+            first_name: Candidate's first name (for greeting)
+            vacancy_id: UUID of the vacancy
+            vacancy_title: Title of the vacancy for context
+            knockout_questions: List of knockout questions with question_text and ideal_answer
+            qualification_questions: List of qualification questions
+            pre_screening_id: Optional pre-screening UUID
+
+        Returns:
+            dict with squad_id and assistant_overrides (contains variableValues)
+        """
+        knockout_questions = knockout_questions or []
+        qualification_questions = qualification_questions or []
+
+        greeting = get_dutch_greeting()
+
+        # Format questions as strings for LiquidJS variables (same as create_outbound_call)
+        ko_formatted = "\n\n".join([
+            f"{i+1}. {q['question_text']}"
+            for i, q in enumerate(knockout_questions)
+        ]) if knockout_questions else ""
+
+        qual_formatted = "\n\n".join([
+            f"{i+1}. {q['question_text']}"
+            for i, q in enumerate(qualification_questions)
+        ]) if qualification_questions else ""
+
+        # Extract first questions for first message use
+        first_knockout_question = knockout_questions[0]["question_text"] if knockout_questions else ""
+
+        # Build first qualification question with contextual prefix
+        if qualification_questions:
+            first_q = qualification_questions[0]["question_text"]
+            first_q_lower = first_q.lower()
+            experience_keywords = ["ervaring", "experience", "gewerkt", "worked", "gedaan", "functie", "job", "werk"]
+            if any(keyword in first_q_lower for keyword in experience_keywords):
+                first_qualification_question = f"We beginnen met je ervaring. {first_q}"
+            else:
+                first_qualification_question = f"Eerste vraag. {first_q}"
+        else:
+            first_qualification_question = ""
+
+        # Build variable values for LiquidJS templates in VAPI dashboard prompts
+        variable_values = {
+            "greeting": greeting,
+            "first_name": first_name,
+            "candidate_id": "web-simulation",  # Dummy ID for web calls
+            "vacancy_id": vacancy_id,
+            "vacancy_title": vacancy_title,
+            "knockout_questions": ko_formatted,
+            "qualification_questions": qual_formatted,
+            "first_knockout_question": first_knockout_question,
+            "first_qualification_question": first_qualification_question,
+        }
+        if pre_screening_id:
+            variable_values["pre_screening_id"] = pre_screening_id
+
+        assistant_overrides = {
+            "variableValues": variable_values,
+        }
+
+        # Override server URL if configured (for environment-specific webhooks)
+        if self.server_url:
+            assistant_overrides["server"] = {
+                "url": self.server_url,
+                "timeoutSeconds": 20,
+            }
+
+        logger.info(f"Web call config created: greeting={greeting}, first_name={first_name}, "
+                   f"knockout_questions={len(knockout_questions)} items, "
+                   f"qualification_questions={len(qualification_questions)} items")
+
+        return {
+            "squad_id": self.squad_id,
+            "assistant_overrides": assistant_overrides,
+        }
+
 
 # Singleton instance for convenience
 _vapi_service: Optional[VapiService] = None

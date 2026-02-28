@@ -43,14 +43,14 @@ class SupabaseAuthClient:
         Generate the Google OAuth authorization URL.
 
         Args:
-            redirect_to: Optional URL to redirect after successful auth
+            redirect_to: Optional URL to redirect after successful auth (unused, always goes to /auth/callback)
 
         Returns:
             The full OAuth authorization URL
         """
         params = {
             "provider": "google",
-            "redirect_to": redirect_to or f"{FRONTEND_URL}/auth/callback",
+            "redirect_to": f"{FRONTEND_URL}/auth/callback",
         }
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{self.base_url}/authorize?{query_string}"

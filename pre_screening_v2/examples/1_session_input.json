@@ -1,0 +1,59 @@
+{
+  "_description": "What the backend sends to dispatch the agent. This is the SessionInput serialized as JSON and passed via LiveKit job metadata.",
+
+  "call_id": "call_abc123",
+  "candidate_name": "Mark Verbeke",
+  "candidate_known": false,
+  "require_consent": true,
+  "allow_escalation": true,
+  "candidate_record": null,
+
+  "job_title": "Bakkerij Medewerker",
+  "office_location": "Antwerpen Centrum",
+  "office_address": "Mechelsesteenweg nummer 27",
+
+  "knockout_questions": [
+    {
+      "id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "text": "Mag je wettelijk werken in Belgie?",
+      "context": "",
+      "data_key": "work_permit"
+    },
+    {
+      "id": "q2",
+      "internal_id": "ko_7d4c1e",
+      "text": "Heb je ervaring met werken in een bakkerij of in de verkoop?",
+      "context": "",
+      "data_key": "relevant_experience"
+    },
+    {
+      "id": "q3",
+      "internal_id": "ko_5b8f0a",
+      "text": "Ben je beschikbaar om in het weekend te werken?",
+      "context": "2 a 3 weekends per maand is prima.",
+      "data_key": "weekend_available"
+    }
+  ],
+
+  "open_questions": [
+    {
+      "id": "oq1",
+      "internal_id": "oq_a1b2c3",
+      "text": "Waarom wil je in een bakkerij werken?",
+      "description": "Motivatievraag"
+    },
+    {
+      "id": "oq2",
+      "internal_id": "oq_d4e5f6",
+      "text": "Wat zijn je sterke punten voor deze functie?",
+      "description": "Sterke punten"
+    },
+    {
+      "id": "oq3",
+      "internal_id": "oq_g7h8i9",
+      "text": "Wanneer zou je kunnen starten?",
+      "description": "Beschikbaarheid"
+    }
+  ]
+}

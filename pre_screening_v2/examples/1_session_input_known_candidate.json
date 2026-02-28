@@ -1,0 +1,59 @@
+{
+  "_description": "Known candidate with pre-filled answers from CRM. The agent skips knockout questions that already have answers and skips scheduling if there's an existing booking.",
+
+  "call_id": "call_def456",
+  "candidate_name": "Sophie De Smet",
+  "candidate_known": true,
+  "require_consent": false,
+  "allow_escalation": true,
+  "candidate_record": {
+    "known_answers": {
+      "work_permit": "ja",
+      "relevant_experience": "ja"
+    },
+    "existing_booking_date": null
+  },
+
+  "job_title": "Bakkerij Medewerker",
+  "office_location": "Gent Sint-Pieters",
+  "office_address": "Koningin Maria Hendrikaplein 1",
+
+  "knockout_questions": [
+    {
+      "id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "text": "Mag je wettelijk werken in Belgie?",
+      "context": "",
+      "data_key": "work_permit"
+    },
+    {
+      "id": "q2",
+      "internal_id": "ko_7d4c1e",
+      "text": "Heb je ervaring met werken in een bakkerij of in de verkoop?",
+      "context": "",
+      "data_key": "relevant_experience"
+    },
+    {
+      "id": "q3",
+      "internal_id": "ko_5b8f0a",
+      "text": "Ben je beschikbaar om in het weekend te werken?",
+      "context": "2 a 3 weekends per maand is prima.",
+      "data_key": "weekend_available"
+    }
+  ],
+
+  "open_questions": [
+    {
+      "id": "oq1",
+      "internal_id": "oq_a1b2c3",
+      "text": "Waarom wil je in een bakkerij werken?",
+      "description": "Motivatievraag"
+    },
+    {
+      "id": "oq2",
+      "internal_id": "oq_d4e5f6",
+      "text": "Wanneer zou je kunnen starten?",
+      "description": "Beschikbaarheid"
+    }
+  ]
+}

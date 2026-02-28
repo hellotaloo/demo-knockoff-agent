@@ -1,0 +1,26 @@
+{
+  "_description": "Candidate couldn't answer a knockout question after multiple attempts. Turn counter reached MAX_TURNS (4).",
+
+  "call_id": "call_stu901",
+  "status": "unclear",
+  "consent_given": true,
+  "voicemail_detected": false,
+  "passed_knockout": false,
+  "interested_in_alternatives": false,
+
+  "knockout_answers": [
+    {
+      "question_id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "question_text": "Mag je wettelijk werken in Belgie?",
+      "result": "unclear",
+      "raw_answer": "Kandidaat kon de vraag niet beantwoorden",
+      "candidate_note": ""
+    }
+  ],
+
+  "open_answers": [],
+
+  "chosen_timeslot": null,
+  "scheduling_preference": null
+}

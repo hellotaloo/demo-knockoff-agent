@@ -13,6 +13,7 @@ from .agent_vacancy_repo import AgentVacancyRepository
 from .user_repo import UserProfileRepository
 from .workspace_repo import WorkspaceRepository
 from .membership_repo import WorkspaceMembershipRepository
+from .ontology_repo import OntologyRepository
 
 __all__ = [
     "VacancyRepository",
@@ -27,4 +28,5 @@ __all__ = [
     "UserProfileRepository",
     "WorkspaceRepository",
     "WorkspaceMembershipRepository",
+    "OntologyRepository",
 ]

@@ -121,5 +121,4 @@ def register_exception_handlers(app):
         register_exception_handlers(app)
     """
     app.add_exception_handler(TalooException, taloo_exception_handler)
-    # Optionally add a catch-all handler for debugging
-    # app.add_exception_handler(Exception, generic_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)

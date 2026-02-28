@@ -94,6 +94,56 @@ async def teams_webhook(request: Request):
             except Exception as send_error:
                 logger.error(f"Failed to send reply: {send_error}", exc_info=True)
 
+        elif activity_type == "invoke":
+            # Adaptive Card action (e.g., approve button clicked)
+            action_data = activity.get("value", {}).get("action", {})
+            # Fallback: some Bot Framework versions put data directly in value
+            if not action_data:
+                action_data = activity.get("value", {})
+
+            action_name = action_data.get("action", "")
+            service_url = parsed["service_url"]
+            conversation_id = parsed["conversation"]["id"]
+            bot_id = parsed["recipient"]["id"]
+            user_name = parsed["from"]["name"] or "Recruiter"
+
+            logger.info(f"Teams invoke from {user_name}: action={action_name}, data={action_data}")
+
+            if action_name == "approve_vacancy_setup":
+                workflow_id = action_data.get("workflow_id")
+                vacancy_id = action_data.get("vacancy_id")
+
+                if workflow_id:
+                    try:
+                        from src.workflows.orchestrator import get_orchestrator
+                        orchestrator = await get_orchestrator()
+                        result = await orchestrator.handle_event(
+                            workflow_id, "recruiter_approved", {"approved_by": user_name}
+                        )
+                        logger.info(f"Recruiter {user_name} approved vacancy_setup workflow {workflow_id[:8]}")
+
+                        # Send confirmation reply
+                        try:
+                            activity_id = parsed["id"]
+                            await teams_service.reply_to_activity(
+                                service_url=service_url,
+                                conversation_id=conversation_id,
+                                activity_id=activity_id,
+                                message=f"✅ Goedgekeurd door {user_name}. Pre-screening wordt gepubliceerd...",
+                                bot_id=bot_id,
+                            )
+                        except Exception as reply_error:
+                            logger.warning(f"Failed to send approval confirmation: {reply_error}")
+
+                    except Exception as wf_error:
+                        logger.error(f"Failed to handle recruiter approval: {wf_error}", exc_info=True)
+
+            # Return invoke response (required by Bot Framework for Adaptive Card actions)
+            return {
+                "status": 200,
+                "body": {"statusCode": 200, "type": "application/vnd.microsoft.activity.message", "value": "OK"},
+            }
+
         elif activity_type == "conversationUpdate":
             # Bot was added to a conversation or members changed
             logger.info(f"Conversation update: {parsed['conversation']}")

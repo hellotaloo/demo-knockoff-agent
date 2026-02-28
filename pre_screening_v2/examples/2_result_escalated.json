@@ -1,0 +1,34 @@
+{
+  "_description": "Candidate requests to speak with a real recruiter during screening. Partial results are saved.",
+
+  "call_id": "call_jkl012",
+  "status": "escalated",
+  "consent_given": true,
+  "voicemail_detected": false,
+  "passed_knockout": false,
+  "interested_in_alternatives": false,
+
+  "knockout_answers": [
+    {
+      "question_id": "q1",
+      "internal_id": "ko_9f3a2b",
+      "question_text": "Mag je wettelijk werken in Belgie?",
+      "result": "pass",
+      "raw_answer": "Ja.",
+      "candidate_note": ""
+    },
+    {
+      "question_id": "q2",
+      "internal_id": "ko_7d4c1e",
+      "question_text": "Heb je ervaring met werken in een bakkerij of in de verkoop?",
+      "result": "recruiter_requested",
+      "raw_answer": "Kandidaat wil met recruiter praten",
+      "candidate_note": "Kandidaat had vragen over het exacte salaris en wil dit bespreken."
+    }
+  ],
+
+  "open_answers": [],
+
+  "chosen_timeslot": null,
+  "scheduling_preference": null
+}

@@ -4,6 +4,11 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-02-28** — Replaced VAPI voice provider with LiveKit pre-screening v2 agent; added `POST /webhook/livekit/call-result` endpoint for receiving structured call results; outbound voice calls now dispatch via LiveKit SIP
+- **2026-02-28** — Added ATS Simulator endpoints (`GET /ats-simulator/api/v1/vacancies`, `GET /ats-simulator/api/v1/recruiters`, `GET /ats-simulator/api/v1/clients`) and `POST /demo/import-ats` for simulated ATS integration; demo seed now imports via ATS API instead of direct DB inserts
+- **2026-02-28** — Added Interview Analysis endpoints (`POST /pre-screenings/{id}/analyze`, `GET /pre-screenings/{id}/analysis`) with per-question clarity scoring, knockout ambiguity checks, drop-off risk, funnel data, and one-liner summary for Teams notifications
+- **2026-02-19** — Added Ontology endpoints for workspace knowledge graph management (entity types, entities, relation types, relations, graph visualization)
+- **2026-02-17** — Added `POST /screening/web-call` endpoint for browser-based VAPI voice simulation (no database records created, for testing/demo only)
 - **2026-02-16** — Enhanced `AgentStatusResponse` with stats: `total_screenings`, `qualified_count`, `qualification_rate`, `last_activity_at` (populated for prescreening agent)
 - **2026-02-16** — Added `candidate_name` field to ActivityResponse in vacancy timelines (`GET /vacancies/{vacancy_id}`)
 - **2026-02-16** — Added `applicants` array to VacancyResponse (lightweight ApplicantSummary for candidates who did pre-screening)
@@ -63,8 +68,10 @@ Complete API reference for the Taloo recruitment screening platform.
 20. [ElevenLabs](#elevenlabs)
 21. [Activities](#activities)
 22. [Architecture](#architecture)
-23. [Demo](#demo)
-24. [Error Reference](#error-reference)
+23. [Ontology](#ontology)
+24. [ATS Simulator](#ats-simulator)
+25. [Demo](#demo)
+26. [Error Reference](#error-reference)
 
 ---
 
@@ -1380,6 +1387,96 @@ interface StatusUpdateResponse {
 
 ---
 
+## Interview Analysis
+
+Evaluates pre-screening interview questions for quality, clarity, drop-off risk, and provides actionable tips.
+
+### `POST /pre-screenings/{pre_screening_id}/analyze`
+
+Run interview analysis. If `questions` and `vacancy` are provided in the body, uses those (draft mode — result not persisted). Otherwise loads from DB and caches the result.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pre_screening_id` | UUID | The pre-screening configuration ID |
+
+**Request Body (optional):**
+
+```json
+{
+  "questions": [
+    { "id": "ko_1", "text": "Mag je wettelijk werken in België?", "type": "knockout" },
+    { "id": "qual_1", "text": "Hoe goed ben je met cijfers?", "type": "qualifying" }
+  ],
+  "vacancy": { "id": "v1", "title": "Bakkerijmedewerker", "description": "..." }
+}
+```
+
+**Response (200):**
+
+```json
+{
+  "summary": {
+    "completionRate": 64,
+    "avgTimeSeconds": 107,
+    "verdict": "good",
+    "verdictHeadline": "Dit interview is goed opgebouwd",
+    "verdictDescription": "De knockout-vragen zijn helder en snel te beantwoorden...",
+    "oneLiner": "Goed interview met heldere knockout-vragen, let op bij de open kwalificatievragen."
+  },
+  "questions": [
+    {
+      "questionId": "ko_1",
+      "completionRate": 98,
+      "avgTimeSeconds": 8,
+      "dropOffRisk": "low",
+      "clarityScore": 95,
+      "tip": null
+    }
+  ],
+  "funnel": [
+    { "step": "Start", "candidates": 200 },
+    { "step": "ko_1", "candidates": 196 },
+    { "step": "Voltooid", "candidates": 128 }
+  ]
+}
+```
+
+**Field Reference:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `summary.completionRate` | int (0-100) | Estimated % of candidates completing the full interview |
+| `summary.avgTimeSeconds` | int | Estimated total duration in seconds |
+| `summary.verdict` | `"excellent"` \| `"good"` \| `"needs_work"` \| `"poor"` | Overall quality rating |
+| `summary.verdictHeadline` | string | Dutch headline for the UI banner |
+| `summary.verdictDescription` | string | 1-2 sentence Dutch explanation with actionable advice |
+| `summary.oneLiner` | string | Single Dutch sentence for Teams notifications |
+| `questions[].questionId` | string | Maps to input question ID (ko_N / qual_N) |
+| `questions[].completionRate` | int (0-100) | Cumulative completion rate at this question |
+| `questions[].avgTimeSeconds` | int | Estimated seconds for this question |
+| `questions[].dropOffRisk` | `"low"` \| `"medium"` \| `"high"` | Risk level |
+| `questions[].clarityScore` | int (0-100) | Clarity and unambiguity score |
+| `questions[].tip` | string \| null | Improvement suggestion in Dutch, null if fine |
+| `funnel[].step` | string | `"Start"`, question ID, or `"Voltooid"` |
+| `funnel[].candidates` | int | Simulated remaining candidates (starts at 200) |
+
+### `GET /pre-screenings/{pre_screening_id}/analysis`
+
+Get cached analysis result. Returns 404 if no analysis has been run yet.
+
+**Response (200):** Same shape as POST response above.
+
+**Errors:**
+
+| Status | Description |
+|--------|-------------|
+| 404 | No analysis found (run POST first) |
+| 400 | Invalid pre-screening ID format |
+
+---
+
 ## Interviews
 
 ### Vacancy Snippet Linking
@@ -1955,7 +2052,145 @@ interface OutboundScreeningResponse {
 | 400 | WhatsApp agent not configured |
 | 404 | Vacancy not found |
 | 500 | ELEVENLABS_API_KEY required |
+| 500 | LIVEKIT_URL not configured |
 | 500 | TWILIO_WHATSAPP_NUMBER not configured |
+
+---
+
+### POST /webhook/livekit/call-result
+
+Receive structured call results from the LiveKit pre-screening v2 voice agent.
+
+Called by the agent's `_on_session_complete` callback when a call ends. Processes results into `application_answers`, updates application status, fires workflow events, and triggers notifications.
+
+**Auth:** `X-Webhook-Secret` header (must match `LIVEKIT_WEBHOOK_SECRET` env var)
+
+**Request Body:**
+
+```typescript
+interface LiveKitCallResultPayload {
+  call_id: string;                    // Room name used as correlation key
+  status: string;                     // "completed" | "voicemail" | "not_interested" | "knockout_failed" | "escalated" | "unclear" | "irrelevant" | "incomplete"
+  consent_given?: boolean;
+  voicemail_detected: boolean;
+  passed_knockout: boolean;
+  interested_in_alternatives: boolean;
+  knockout_answers: {
+    question_id: string;
+    internal_id: string;              // DB question UUID for round-tripping
+    question_text: string;
+    result: string;                   // "pass" | "fail" | "unclear" | "irrelevant" | "recruiter_requested"
+    raw_answer: string;
+    candidate_note: string;
+  }[];
+  open_answers: {
+    question_id: string;
+    internal_id: string;
+    question_text: string;
+    answer_summary: string;
+    candidate_note: string;
+  }[];
+  chosen_timeslot?: string;           // e.g. "dinsdag 4 maart om 10 uur"
+  scheduling_preference?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  status: "processed";
+  application_id: string;
+  qualified: boolean;
+  call_id: string;
+}
+```
+
+---
+
+### POST /screening/web-call
+
+Create a VAPI web call session for browser-based voice simulation.
+
+This is for testing/demo purposes only - no database records are created. Returns configuration for the frontend to use with VAPI Web SDK to start a voice call directly in the browser.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface VapiWebCallRequest {
+  vacancy_id: string;
+  candidate_name?: string;  // Default: "Test Kandidaat"
+  first_name?: string;      // Extracted from candidate_name if not provided
+}
+```
+
+**Response:**
+
+```typescript
+interface VapiWebCallResponse {
+  success: boolean;
+  squad_id: string;              // VAPI squad ID for the call
+  vapi_public_key: string;       // Public key for VAPI Web SDK initialization
+  assistant_overrides: {
+    variableValues: {
+      greeting: string;          // Dutch time-based greeting
+      first_name: string;
+      vacancy_id: string;
+      vacancy_title: string;
+      knockout_questions: string;      // Formatted list of knockout questions
+      qualification_questions: string; // Formatted list of qualification questions
+      first_knockout_question: string;
+      first_qualification_question: string;
+      pre_screening_id: string;
+    };
+    server?: {
+      url: string;
+      timeoutSeconds: number;
+    };
+  };
+}
+```
+
+**Frontend Usage:**
+
+```typescript
+import Vapi from '@vapi-ai/web';
+
+// 1. Get config from backend
+const response = await fetch('/api/screening/web-call', {
+  method: 'POST',
+  body: JSON.stringify({ vacancy_id: '...', candidate_name: 'Test' })
+});
+const config = await response.json();
+
+// 2. Initialize VAPI with public key
+const vapi = new Vapi(config.vapi_public_key);
+
+// 3. Start call with squad (pass null for first two params when using squad)
+vapi.start(null, config.assistant_overrides, config.squad_id);
+
+// 4. Handle events
+vapi.on('call-start', () => console.log('Call started'));
+vapi.on('call-end', () => console.log('Call ended'));
+vapi.on('message', (msg) => {
+  if (msg.type === 'transcript') {
+    console.log(`${msg.role}: ${msg.transcript}`);
+  }
+});
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | Invalid vacancy ID format |
+| 400 | No pre-screening configured for this vacancy |
+| 400 | Pre-screening is not published yet |
+| 400 | Pre-screening is offline |
+| 404 | Vacancy not found |
+| 500 | VAPI_PUBLIC_KEY not configured |
 
 ---
 
@@ -3134,6 +3369,147 @@ The response structure is designed to work with popular graph visualization libr
 
 ---
 
+## ATS Simulator
+
+Simulates an external Applicant Tracking System (e.g., Salesforce) API. Serves fixture data through realistic REST endpoints with different field names than internal models.
+
+### GET /ats-simulator/api/v1/vacancies
+
+List vacancies from the simulated ATS.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `page` | integer | No | `1` | Page number |
+| `page_size` | integer | No | `50` | Items per page (max 100) |
+| `status` | string | No | - | Filter: `active`, `inactive`, `draft` |
+
+**Response:**
+
+```typescript
+interface ATSVacancyListResponse {
+  data: ATSVacancy[];
+  total_count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+interface ATSVacancy {
+  external_id: string;       // e.g. "sf-1633942"
+  title: string;
+  company_name: string;
+  work_location: string | null;
+  description_html: string | null;
+  status: string;            // "active", "inactive", "draft"
+  created_date: string | null;
+  recruiter_email: string | null;
+  client_name: string | null;
+}
+```
+
+---
+
+### GET /ats-simulator/api/v1/recruiters
+
+List recruiters from the simulated ATS.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `page` | integer | No | `1` | Page number |
+| `page_size` | integer | No | `50` | Items per page (max 100) |
+
+**Response:**
+
+```typescript
+interface ATSRecruiterListResponse {
+  data: ATSRecruiter[];
+  total_count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+interface ATSRecruiter {
+  external_id: string;
+  full_name: string;
+  email: string | null;
+  phone_number: string | null;
+  department: string | null;  // maps to internal "team"
+  job_title: string | null;   // maps to internal "role"
+  photo_url: string | null;
+  active: boolean;
+}
+```
+
+---
+
+### GET /ats-simulator/api/v1/clients
+
+List clients/companies from the simulated ATS.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `page` | integer | No | `1` | Page number |
+| `page_size` | integer | No | `50` | Items per page (max 100) |
+
+**Response:**
+
+```typescript
+interface ATSClientListResponse {
+  data: ATSClient[];
+  total_count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+}
+
+interface ATSClient {
+  external_id: string;
+  company_name: string;       // maps to internal "name"
+  headquarters: string | null; // maps to internal "location"
+  sector: string | null;       // maps to internal "industry"
+  logo_url: string | null;
+}
+```
+
+---
+
+### POST /demo/import-ats
+
+Trigger a streaming import from the ATS simulator. Returns an SSE stream with per-vacancy progress events.
+
+**Auth:** None
+
+**Response:** `text/event-stream` (Server-Sent Events)
+
+See [brief.md](brief.md) for full SSE event documentation and frontend implementation guide.
+
+**Event types:** `status`, `vacancy_importing`, `vacancy_imported`, `complete`, `error`
+
+**Example stream:**
+```
+data: {"type": "status", "step": "connecting", "message": "Verbinding maken met ATS..."}
+data: {"type": "status", "step": "recruiters", "message": "5 recruiters geïmporteerd", "count": 5}
+data: {"type": "vacancy_importing", "index": 0, "total": 7, "source_id": "sf-1633942", "title": "Operator Mengafdeling"}
+data: {"type": "vacancy_imported", "index": 0, "total": 7, "id": "uuid", "source_id": "sf-1633942", "title": "Operator Mengafdeling", "skipped": false}
+data: {"type": "complete", "result": {"recruiters_imported": 5, "clients_imported": 7, "vacancies_imported": 7, "errors": []}}
+data: [DONE]
+```
+
+---
+
 ## Demo
 
 ### POST /demo/seed
@@ -3234,3 +3610,237 @@ interface ValidationErrorResponse {
 | `Pre-screening is offline` | Screening is toggled off | Set `is_online: true` |
 | `Session not found` | Invalid or expired session | Start new session |
 | `Invalid signature` | HMAC validation failed | Check webhook secret |
+
+---
+
+## Ontology
+
+Workspace-scoped knowledge graph for defining categories, job functions, document types, skills, and their relationships.
+
+All endpoints are prefixed with `/workspaces/{workspace_id}/ontology`.
+
+**Permissions**: All workspace members can read. Only **owner** and **admin** can create, update, or delete.
+
+### Overview
+
+#### `GET /workspaces/{workspace_id}/ontology`
+
+Returns ontology overview with type counts and totals.
+
+**Response:**
+```json
+{
+  "types": [
+    {
+      "id": "uuid",
+      "workspace_id": "uuid",
+      "slug": "category",
+      "name": "Categorie",
+      "name_plural": "Categorieën",
+      "description": null,
+      "icon": "folder",
+      "color": "#8B5CF6",
+      "sort_order": 0,
+      "is_system": true,
+      "entity_count": 5,
+      "created_at": "2026-02-19T10:00:00Z",
+      "updated_at": "2026-02-19T10:00:00Z"
+    }
+  ],
+  "total_entities": 45,
+  "total_relations": 32
+}
+```
+
+### Graph
+
+#### `GET /workspaces/{workspace_id}/ontology/graph`
+
+Returns the full ontology graph for visualization (all active nodes and edges).
+
+**Response:**
+```json
+{
+  "nodes": [
+    {
+      "id": "uuid",
+      "name": "Chauffeur CE",
+      "type_slug": "job_function",
+      "type_name": "Functie",
+      "icon": "briefcase",
+      "color": "#3B82F6",
+      "description": "Vrachtwagenchauffeur met CE-rijbewijs",
+      "metadata": {},
+      "external_id": null
+    }
+  ],
+  "edges": [
+    {
+      "id": "uuid",
+      "source": "entity-uuid-1",
+      "target": "entity-uuid-2",
+      "relation_type": "requires",
+      "relation_label": "Vereist",
+      "metadata": { "requirement_type": "verplicht", "priority": 1 }
+    }
+  ],
+  "types": [ "...OntologyTypeResponse[]" ],
+  "stats": { "category": 5, "job_function": 12, "document_type": 24 }
+}
+```
+
+### Entity Types
+
+#### `GET /workspaces/{workspace_id}/ontology/types`
+
+List all entity types with entity counts.
+
+#### `POST /workspaces/{workspace_id}/ontology/types`
+
+Create a custom entity type. Requires admin+.
+
+**Request:**
+```json
+{
+  "slug": "certification",
+  "name": "Certificaat",
+  "name_plural": "Certificaten",
+  "icon": "award",
+  "color": "#F97316",
+  "sort_order": 5
+}
+```
+
+#### `PATCH /workspaces/{workspace_id}/ontology/types/{type_id}`
+
+Update an entity type (name, icon, color, etc.). Requires admin+.
+
+#### `DELETE /workspaces/{workspace_id}/ontology/types/{type_id}`
+
+Delete a custom entity type. System types cannot be deleted. Requires admin+.
+
+### Entities
+
+#### `GET /workspaces/{workspace_id}/ontology/entities`
+
+List entities with optional filtering.
+
+**Query params:**
+- `type` — Filter by type slug (e.g., `job_function`)
+- `search` — Search by name (ILIKE)
+- `active` — Filter by active status (default: `true`)
+- `limit` / `offset` — Pagination
+
+**Response:** `PaginatedResponse[OntologyEntityResponse]`
+
+#### `POST /workspaces/{workspace_id}/ontology/entities`
+
+Create an entity. Requires admin+.
+
+**Request:**
+```json
+{
+  "type_slug": "job_function",
+  "name": "Chauffeur CE",
+  "description": "Vrachtwagenchauffeur met CE-rijbewijs",
+  "icon": "truck",
+  "color": "#3B82F6",
+  "external_id": "SF-12345",
+  "metadata": {},
+  "sort_order": 0
+}
+```
+
+#### `GET /workspaces/{workspace_id}/ontology/entities/{entity_id}`
+
+Get entity detail including all its relations.
+
+#### `PATCH /workspaces/{workspace_id}/ontology/entities/{entity_id}`
+
+Update entity fields. Requires admin+.
+
+#### `DELETE /workspaces/{workspace_id}/ontology/entities/{entity_id}`
+
+Soft-delete (sets `is_active=false`). Relations remain but are filtered from queries. Requires admin+.
+
+### Relation Types
+
+#### `GET /workspaces/{workspace_id}/ontology/relation-types`
+
+List all relation types.
+
+#### `POST /workspaces/{workspace_id}/ontology/relation-types`
+
+Create a custom relation type. Requires admin+.
+
+**Request:**
+```json
+{
+  "slug": "depends_on",
+  "name": "Afhankelijk van",
+  "source_type_slug": "requirement",
+  "target_type_slug": "skill"
+}
+```
+
+### Relations
+
+#### `GET /workspaces/{workspace_id}/ontology/relations`
+
+List relations with optional filtering.
+
+**Query params:**
+- `source_id` — Filter by source entity UUID
+- `target_id` — Filter by target entity UUID
+- `type` — Filter by relation type slug
+
+#### `POST /workspaces/{workspace_id}/ontology/relations`
+
+Create a relation. Requires admin+. Validates type constraints.
+
+**Request:**
+```json
+{
+  "source_entity_id": "uuid",
+  "target_entity_id": "uuid",
+  "relation_type_slug": "requires",
+  "metadata": {
+    "requirement_type": "verplicht",
+    "priority": 1,
+    "condition": null
+  }
+}
+```
+
+**Metadata fields for `requires` relations:**
+- `requirement_type` — `"verplicht"` | `"voorwaardelijk"` | `"gewenst"`
+- `priority` — Integer ordering
+- `condition` — Optional condition text (e.g., "Bij gevaarlijk transport")
+
+#### `PATCH /workspaces/{workspace_id}/ontology/relations/{relation_id}`
+
+Update relation metadata. Requires admin+.
+
+#### `DELETE /workspaces/{workspace_id}/ontology/relations/{relation_id}`
+
+Hard-delete a relation. Requires admin+.
+
+### Default Seeded Types
+
+Every new workspace is seeded with:
+
+| Slug | Name | Icon | Color |
+|------|------|------|-------|
+| `category` | Categorie | folder | #8B5CF6 |
+| `job_function` | Functie | briefcase | #3B82F6 |
+| `document_type` | Documenttype | file-text | #10B981 |
+| `skill` | Vaardigheid | star | #F59E0B |
+| `requirement` | Vereiste | check-circle | #EF4444 |
+
+### Default Seeded Relation Types
+
+| Slug | Name | Source → Target |
+|------|------|-----------------|
+| `belongs_to` | Behoort tot | job_function → category |
+| `requires` | Vereist | job_function → document_type |
+| `has_skill` | Heeft vaardigheid | job_function → skill |

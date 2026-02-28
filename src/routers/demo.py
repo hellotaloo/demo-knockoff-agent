@@ -3,16 +3,19 @@ Demo Data Management router.
 
 Handles seeding and resetting demo data for development and testing.
 Demo data is loaded from fixtures/ directory - edit JSON files there.
+ATS-sourced data (recruiters, clients, vacancies) is imported via the ATS simulator.
 """
+import asyncio
 import uuid
 import logging
 from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Query
-from fixtures import load_candidates, load_vacancies, load_applications, load_pre_screenings, load_recruiters, load_clients, load_activities
+from fixtures import load_candidates, load_applications, load_pre_screenings, load_activities, load_ontology
 import json
 
 from src.database import get_db_pool
 from src.services import DemoService
+from src.services.ats_import_service import ATSImportService, get_import_progress, clear_import_progress
 from src.services.workflow_service import WorkflowService
 from src.repositories import ConversationRepository
 
@@ -26,56 +29,42 @@ router = APIRouter(tags=["Demo Data"])
 
 @router.post("/demo/seed")
 async def seed_demo_data(activities: bool = Query(True, description="Include activities in seed")):
-    """Populate the database with demo candidates, vacancies, applications, and pre-screenings."""
+    """Seed base data (candidates, ontology). Vacancies are imported separately via POST /demo/import-ats."""
     pool = await get_db_pool()
 
-    # Load fixtures from JSON files
+    # Load fixtures from JSON files (non-ATS data only)
     candidates_data = load_candidates()
-    vacancies_data = load_vacancies()
     applications_data = load_applications()
     pre_screenings_data = load_pre_screenings()
-    recruiters_data = load_recruiters()
-    clients_data = load_clients()
     activities_data = load_activities() if activities else []
 
     created_candidates = []
     created_vacancies = []
     created_applications = []
     created_pre_screenings = []
-    created_recruiters = []
-    created_clients = []
     created_skills = 0
     created_activities = 0
 
+    # Query any existing vacancies/recruiters/clients (from a prior ATS import)
+    async with pool.acquire() as conn:
+        vacancy_rows = await conn.fetch(
+            "SELECT id, title FROM ats.vacancies WHERE workspace_id = $1 ORDER BY created_at",
+            DEFAULT_WORKSPACE_ID,
+        )
+        created_vacancies = [{"id": str(r["id"]), "title": r["title"]} for r in vacancy_rows]
+
+        recruiter_rows = await conn.fetch("SELECT id, email FROM ats.recruiters")
+        recruiter_email_to_id = {r["email"]: r["id"] for r in recruiter_rows if r["email"]}
+
+        client_rows = await conn.fetch(
+            "SELECT id, name FROM ats.clients WHERE workspace_id = $1",
+            DEFAULT_WORKSPACE_ID,
+        )
+        client_name_to_id = {r["name"]: r["id"] for r in client_rows}
+
+    # Seed non-ATS data (candidates, applications, pre-screenings, etc.)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Insert recruiters first
-            recruiter_email_to_id = {}
-            for rec in recruiters_data:
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.recruiters (name, email, phone, team, role, avatar_url, is_active)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    RETURNING id
-                """, rec["name"], rec.get("email"), rec.get("phone"),
-                    rec.get("team"), rec.get("role"), rec.get("avatar_url"),
-                    rec.get("is_active", True))
-                recruiter_id = row["id"]
-                created_recruiters.append({"id": str(recruiter_id), "name": rec["name"]})
-                if rec.get("email"):
-                    recruiter_email_to_id[rec["email"]] = recruiter_id
-
-            # Insert clients
-            client_name_to_id = {}
-            for cli in clients_data:
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.clients (name, location, industry, logo, workspace_id)
-                    VALUES ($1, $2, $3, $4, $5)
-                    RETURNING id
-                """, cli["name"], cli.get("location"), cli.get("industry"), cli.get("logo"), DEFAULT_WORKSPACE_ID)
-                client_id = row["id"]
-                created_clients.append({"id": str(client_id), "name": cli["name"]})
-                client_name_to_id[cli["name"]] = client_id
-
             # Insert candidates (central registry)
             for cand in candidates_data:
                 # Parse available_from date if present
@@ -110,26 +99,6 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                     """, candidate_id, skill["skill_name"],
                         skill.get("skill_category"), skill.get("score"), "import")
                     created_skills += 1
-
-            # Insert vacancies (with optional recruiter and client links)
-            for vac in vacancies_data:
-                # Look up recruiter_id by email if present
-                recruiter_id = None
-                if vac.get("recruiter_email"):
-                    recruiter_id = recruiter_email_to_id.get(vac["recruiter_email"])
-
-                # Look up client_id by name if present
-                client_id = None
-                if vac.get("client_name"):
-                    client_id = client_name_to_id.get(vac["client_name"])
-
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.vacancies (title, company, location, description, status, source, source_id, recruiter_id, client_id, workspace_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    RETURNING id
-                """, vac["title"], vac["company"], vac["location"], vac["description"],
-                    vac["status"], vac["source"], vac["source_id"], recruiter_id, client_id, DEFAULT_WORKSPACE_ID)
-                created_vacancies.append({"id": str(row["id"]), "title": vac["title"]})
 
             # Insert applications (with candidate_id linked)
             for app_data in applications_data:
@@ -258,17 +227,113 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 
                 created_activities += 1
 
+            # ---- Ontology demo data ----
+            ontology_data = load_ontology()
+            created_ontology_entities = 0
+            created_ontology_relations = 0
+
+            # Ensure ontology types are seeded for default workspace
+            await conn.execute("SELECT ats.seed_ontology_defaults($1)", DEFAULT_WORKSPACE_ID)
+
+            # Look up type IDs
+            type_rows = await conn.fetch(
+                "SELECT id, slug FROM ats.ontology_types WHERE workspace_id = $1",
+                DEFAULT_WORKSPACE_ID,
+            )
+            type_map = {r["slug"]: r["id"] for r in type_rows}
+
+            # Look up relation type IDs
+            rel_type_rows = await conn.fetch(
+                "SELECT id, slug FROM ats.ontology_relation_types WHERE workspace_id = $1",
+                DEFAULT_WORKSPACE_ID,
+            )
+            rel_type_map = {r["slug"]: r["id"] for r in rel_type_rows}
+
+            # Track entity name → id for building relations
+            entity_name_to_id = {}
+
+            # Insert categories
+            for i, cat in enumerate(ontology_data.get("categories", [])):
+                row = await conn.fetchrow("""
+                    INSERT INTO ats.ontology_entities (workspace_id, type_id, name, description, icon, color, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (workspace_id, type_id, name) DO UPDATE SET description = EXCLUDED.description
+                    RETURNING id
+                """, DEFAULT_WORKSPACE_ID, type_map["category"],
+                    cat["name"], cat.get("description"), cat.get("icon"), cat.get("color"), i)
+                entity_name_to_id[cat["name"]] = row["id"]
+                created_ontology_entities += 1
+
+            # Insert document types
+            for i, doc in enumerate(ontology_data.get("document_types", [])):
+                row = await conn.fetchrow("""
+                    INSERT INTO ats.ontology_entities (workspace_id, type_id, name, description, icon, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (workspace_id, type_id, name) DO UPDATE SET description = EXCLUDED.description
+                    RETURNING id
+                """, DEFAULT_WORKSPACE_ID, type_map["document_type"],
+                    doc["name"], doc.get("description"), doc.get("icon"), i)
+                entity_name_to_id[doc["name"]] = row["id"]
+                created_ontology_entities += 1
+
+            # Insert job functions
+            for i, func in enumerate(ontology_data.get("job_functions", [])):
+                row = await conn.fetchrow("""
+                    INSERT INTO ats.ontology_entities (workspace_id, type_id, name, description, icon, sort_order)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (workspace_id, type_id, name) DO UPDATE SET description = EXCLUDED.description
+                    RETURNING id
+                """, DEFAULT_WORKSPACE_ID, type_map["job_function"],
+                    func["name"], func.get("description"), func.get("icon"), i)
+                entity_name_to_id[func["name"]] = row["id"]
+                created_ontology_entities += 1
+
+                # Create belongs_to relation (function → category)
+                if func.get("category") and func["category"] in entity_name_to_id:
+                    await conn.execute("""
+                        INSERT INTO ats.ontology_relations
+                            (workspace_id, source_entity_id, target_entity_id, relation_type_id, metadata)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (source_entity_id, target_entity_id, relation_type_id) DO NOTHING
+                    """, DEFAULT_WORKSPACE_ID, row["id"],
+                        entity_name_to_id[func["category"]], rel_type_map["belongs_to"], "{}")
+                    created_ontology_relations += 1
+
+            # Insert document requirements (function → document relations)
+            for func_name, reqs in ontology_data.get("requirements", {}).items():
+                func_id = entity_name_to_id.get(func_name)
+                if not func_id:
+                    continue
+                for req in reqs:
+                    doc_id = entity_name_to_id.get(req["document"])
+                    if not doc_id:
+                        continue
+                    metadata = {
+                        "requirement_type": req["requirement_type"],
+                        "priority": req["priority"],
+                    }
+                    if req.get("condition"):
+                        metadata["condition"] = req["condition"]
+                    await conn.execute("""
+                        INSERT INTO ats.ontology_relations
+                            (workspace_id, source_entity_id, target_entity_id, relation_type_id, metadata)
+                        VALUES ($1, $2, $3, $4, $5)
+                        ON CONFLICT (source_entity_id, target_entity_id, relation_type_id) DO NOTHING
+                    """, DEFAULT_WORKSPACE_ID, func_id, doc_id, rel_type_map["requires"],
+                        json.dumps(metadata))
+                    created_ontology_relations += 1
+
     return {
         "status": "success",
-        "message": f"Created {len(created_recruiters)} recruiters, {len(created_clients)} clients, {len(created_candidates)} candidates, {created_skills} skills, {len(created_vacancies)} vacancies, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities",
-        "recruiters_count": len(created_recruiters),
-        "clients_count": len(created_clients),
+        "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities, {created_ontology_entities} ontology entities, {created_ontology_relations} ontology relations. Use POST /demo/import-ats to import vacancies from ATS.",
         "candidates_count": len(created_candidates),
         "skills_count": created_skills,
         "vacancies": created_vacancies,
         "applications_count": len(created_applications),
         "pre_screenings": created_pre_screenings,
-        "activities_count": created_activities
+        "activities_count": created_activities,
+        "ontology_entities_count": created_ontology_entities,
+        "ontology_relations_count": created_ontology_relations,
     }
 
 
@@ -279,6 +344,7 @@ async def reset_demo_data(
     workflow_activities: bool = Query(True, description="Include workflow activities dashboard demo data")
 ):
     """Clear all vacancies, applications, candidates, and pre-screenings, optionally reseed with demo data."""
+    clear_import_progress()
     pool = await get_db_pool()
 
     async with pool.acquire() as conn:
@@ -329,6 +395,13 @@ async def reset_demo_data(
                 await conn.execute("DELETE FROM ats.workflows")
             except Exception:
                 pass  # Table may not exist yet
+
+            # Delete ontology data (relations first, then entities; keep types)
+            try:
+                await conn.execute("DELETE FROM ats.ontology_relations")
+                await conn.execute("DELETE FROM ats.ontology_entities")
+            except Exception:
+                pass  # Tables may not exist yet
 
     result = {
         "status": "success",
@@ -413,3 +486,41 @@ async def reset_demo_data(
             result["message"] += f", {created_workflows} workflow activities"
 
     return result
+
+
+@router.post("/demo/import-ats")
+async def trigger_ats_import():
+    """
+    Start an ATS import as a background task.
+
+    Imports recruiters, clients, and vacancies from the ATS simulator,
+    then generates pre-screening questions for each vacancy.
+
+    Poll GET /demo/import-ats/status for progress.
+    """
+    # Don't start a new import if one is already running
+    progress = get_import_progress()
+    if progress and progress.get("status") in ("importing", "generating"):
+        return {"status": "already_running", "message": "Import is already in progress"}
+
+    pool = await get_db_pool()
+    import_service = ATSImportService(pool)
+
+    # Fire and forget — runs in the background
+    asyncio.create_task(import_service.import_and_generate(DEFAULT_WORKSPACE_ID))
+
+    return {"status": "started", "message": "Import gestart. Poll GET /demo/import-ats/status voor voortgang."}
+
+
+@router.get("/demo/import-ats/status")
+async def get_ats_import_status():
+    """
+    Poll for ATS import progress.
+
+    Returns the current state of the import, including per-vacancy generation status.
+    Frontend should poll this every 3 seconds.
+    """
+    progress = get_import_progress()
+    if progress is None:
+        return {"status": "idle", "message": "Geen import actief"}
+    return progress

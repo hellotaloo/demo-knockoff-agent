@@ -83,6 +83,13 @@ from .vapi import (
     VapiCreateCallResponse,
 )
 
+# LiveKit models
+from .livekit import (
+    LiveKitCallResultPayload,
+    LiveKitKnockoutAnswerPayload,
+    LiveKitOpenAnswerPayload,
+)
+
 # CV analysis models
 from .cv import (
     CVQuestionRequest,
@@ -160,6 +167,38 @@ from .workspace import (
     WorkspaceInvitationResponse,
 )
 
+# Ontology models
+from .ontology import (
+    RequirementType,
+    OntologyTypeCreate,
+    OntologyTypeUpdate,
+    OntologyTypeResponse,
+    OntologyEntityCreate,
+    OntologyEntityUpdate,
+    OntologyEntityResponse,
+    OntologyEntityDetailResponse,
+    OntologyRelationTypeCreate,
+    OntologyRelationTypeResponse,
+    OntologyRelationCreate,
+    OntologyRelationUpdate,
+    OntologyRelationResponse,
+    OntologyGraphNode,
+    OntologyGraphEdge,
+    OntologyGraphResponse,
+    OntologyOverviewResponse,
+)
+
+# Interview analysis models
+from .interview_analysis import (
+    AnalysisQuestionInput,
+    AnalysisVacancyInput,
+    InterviewAnalysisRequest,
+    AnalysisSummary,
+    AnalysisQuestionResult,
+    AnalysisFunnelStep,
+    InterviewAnalysisResponse,
+)
+
 # Architecture models
 from .architecture import (
     ArchitectureNode,
@@ -226,6 +265,10 @@ __all__ = [
     "VapiMessagePayload",
     "VapiCreateCallRequest",
     "VapiCreateCallResponse",
+    # LiveKit
+    "LiveKitCallResultPayload",
+    "LiveKitKnockoutAnswerPayload",
+    "LiveKitOpenAnswerPayload",
     # CV
     "CVQuestionRequest",
     "CVAnalyzeRequest",
@@ -278,6 +321,32 @@ __all__ = [
     "WorkspaceMemberUpdate",
     "WorkspaceInvitationCreate",
     "WorkspaceInvitationResponse",
+    # Ontology
+    "RequirementType",
+    "OntologyTypeCreate",
+    "OntologyTypeUpdate",
+    "OntologyTypeResponse",
+    "OntologyEntityCreate",
+    "OntologyEntityUpdate",
+    "OntologyEntityResponse",
+    "OntologyEntityDetailResponse",
+    "OntologyRelationTypeCreate",
+    "OntologyRelationTypeResponse",
+    "OntologyRelationCreate",
+    "OntologyRelationUpdate",
+    "OntologyRelationResponse",
+    "OntologyGraphNode",
+    "OntologyGraphEdge",
+    "OntologyGraphResponse",
+    "OntologyOverviewResponse",
+    # Interview Analysis
+    "AnalysisQuestionInput",
+    "AnalysisVacancyInput",
+    "InterviewAnalysisRequest",
+    "AnalysisSummary",
+    "AnalysisQuestionResult",
+    "AnalysisFunnelStep",
+    "InterviewAnalysisResponse",
     # Architecture
     "ArchitectureNode",
     "ArchitectureEdge",

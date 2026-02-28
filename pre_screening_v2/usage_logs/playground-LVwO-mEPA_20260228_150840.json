@@ -1,0 +1,16 @@
+{
+  "room": "playground-LVwO-mEPA",
+  "timestamp": "20260228_150840",
+  "candidate_name": "Mark Verbeke",
+  "job_title": "Bakkerij Medewerker",
+  "llm_prompt_tokens": 3004,
+  "llm_completion_tokens": 76,
+  "tts_characters": 270,
+  "stt_audio_duration": 11.799999999999985,
+  "cost_usd": {
+    "llm": 0.001323,
+    "tts": 0.003038,
+    "stt": 0.001514,
+    "total": 0.005875
+  }
+}

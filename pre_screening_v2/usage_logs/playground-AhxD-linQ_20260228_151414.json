@@ -1,0 +1,16 @@
+{
+  "room": "playground-AhxD-linQ",
+  "timestamp": "20260228_151414",
+  "candidate_name": "Mark Verbeke",
+  "job_title": "Bakkerij Medewerker",
+  "llm_prompt_tokens": 13425,
+  "llm_completion_tokens": 476,
+  "tts_characters": 1362,
+  "stt_audio_duration": 78.95000000000026,
+  "cost_usd": {
+    "llm": 0.006132,
+    "tts": 0.015323,
+    "stt": 0.010132,
+    "total": 0.031586
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "_description": "Agent detected voicemail. Call ended immediately, no screening performed.",
+
+  "call_id": "call_mno345",
+  "status": "voicemail",
+  "consent_given": null,
+  "voicemail_detected": true,
+  "passed_knockout": false,
+  "interested_in_alternatives": false,
+
+  "knockout_answers": [],
+  "open_answers": [],
+
+  "chosen_timeslot": null,
+  "scheduling_preference": null
+}

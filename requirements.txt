@@ -12,6 +12,6 @@ asyncpg
 elevenlabs
 opencv-python>=4.8.0
 numpy>=1.24.0
-pyjwt>=2.8.0
+pyjwt[crypto]>=2.8.0
 httpx>=0.25.0
 vapi-server-sdk

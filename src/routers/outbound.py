@@ -8,12 +8,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
+from src.models.vapi import VapiWebCallRequest, VapiWebCallResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
 from src.repositories import CandidateRepository
 from src.services import ActivityService
 from src.database import get_db_pool
-from src.config import TWILIO_WHATSAPP_NUMBER, VAPI_API_KEY, logger
+from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, VAPI_PUBLIC_KEY, logger
 from src.services.whatsapp_service import send_whatsapp_message
+from src.services.livekit_service import get_livekit_service
 from src.services.vapi_service import get_vapi_service
 from src.workflows import get_orchestrator
 from pre_screening_whatsapp_agent import create_simple_agent
@@ -235,19 +237,19 @@ async def _initiate_voice_screening(
     is_test: bool = False,
     application_id: Optional[str] = None,
 ) -> OutboundScreeningResponse:
-    """Initiate a voice call screening using VAPI squad with dynamic prompts."""
+    """Initiate a voice call screening using LiveKit pre-screening v2 agent."""
 
-    if not VAPI_API_KEY and not test_conversation_id:
+    if not LIVEKIT_URL and not test_conversation_id:
         raise HTTPException(
             status_code=500,
-            detail="VAPI_API_KEY not configured in environment"
+            detail="LIVEKIT_URL not configured in environment"
         )
 
     try:
         # Normalize phone for database storage
         phone_normalized = phone.lstrip("+")
 
-        # Fetch questions from database (same pattern as WhatsApp agent)
+        # Fetch questions from database (include id for round-tripping via internal_id)
         questions = await pool.fetch(
             """
             SELECT id, question_type, position, question_text, ideal_answer
@@ -259,11 +261,11 @@ async def _initiate_voice_screening(
         )
 
         knockout_questions = [
-            {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
+            {"id": str(q["id"]), "question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
             for q in questions if q["question_type"] == "knockout"
         ]
         qualification_questions = [
-            {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
+            {"id": str(q["id"]), "question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
             for q in questions if q["question_type"] == "qualification"
         ]
 
@@ -277,13 +279,13 @@ async def _initiate_voice_screening(
                 "call_id": test_conversation_id,
                 "status": "test",
             }
-            logger.info(f"TEST MODE: Simulated VAPI call with call_id={test_conversation_id}")
+            logger.info(f"TEST MODE: Simulated call with call_id={test_conversation_id}")
         else:
-            # Use VAPI service for real calls with dynamic prompts
-            vapi_service = get_vapi_service()
-            result = vapi_service.create_outbound_call(
+            # Use LiveKit service for real calls
+            livekit_service = get_livekit_service()
+            result = await livekit_service.create_outbound_call(
                 to_number=phone,
-                first_name=first_name,
+                candidate_name=candidate_name or first_name,
                 candidate_id=candidate_id,
                 vacancy_id=vacancy_id,
                 vacancy_title=vacancy_title,
@@ -294,7 +296,7 @@ async def _initiate_voice_screening(
 
         if result.get("success"):
             # Create conversation record in database to track the call
-            # Store VAPI call_id as session_id for webhook correlation
+            # Store room name as session_id for webhook correlation
             conv_row = await pool.fetchrow(
                 """
                 INSERT INTO ats.screening_conversations
@@ -304,13 +306,13 @@ async def _initiate_voice_screening(
                 """,
                 uuid.UUID(vacancy_id),
                 uuid.UUID(pre_screening_id),
-                result.get("call_id"),  # Use VAPI call_id as session_id
+                result.get("call_id"),
                 candidate_name,
                 phone_normalized,
                 is_test,
                 uuid.UUID(application_id) if application_id else None
             )
-            logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, vapi_call_id={result.get('call_id')}, is_test={is_test}")
+            logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, call_id={result.get('call_id')}, is_test={is_test}")
 
             # Create workflow to track the screening
             try:
@@ -328,24 +330,22 @@ async def _initiate_voice_screening(
                         "application_id": application_id,
                     },
                     initial_step="in_progress",
-                    timeout_seconds=4 * 3600,  # 4 hour SLA - item becomes stuck when breached
+                    timeout_seconds=4 * 3600,  # 4 hour SLA
                 )
                 logger.info(f"Created workflow {workflow_id} for voice screening")
             except Exception as e:
                 logger.error(f"Failed to create workflow for voice screening: {e}")
-                # Don't fail the screening if workflow creation fails
 
             # Application stays 'active' while call is in progress
-            # Status will change to 'processing' when transcript analysis starts,
-            # then 'completed' when analysis finishes
-            logger.info(f"VAPI call initiated, application remains status='active' for phone {phone_normalized}")
+            # Status changes to 'completed' when agent posts results via webhook
+            logger.info(f"LiveKit call dispatched, application remains status='active' for phone {phone_normalized}")
 
         return OutboundScreeningResponse(
             success=result["success"],
             message=result["message"],
             channel=InterviewChannel.VOICE,
             conversation_id=result.get("call_id"),
-            call_sid=result.get("call_id"),  # For backwards compatibility
+            call_sid=result.get("call_id"),
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -522,3 +522,99 @@ async def _initiate_whatsapp_screening(
     except Exception as e:
         logger.error(f"Error initiating WhatsApp screening: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send WhatsApp message: {str(e)}")
+
+
+@router.post("/screening/web-call", response_model=VapiWebCallResponse)
+async def create_web_call_session(request: VapiWebCallRequest):
+    """
+    Create a VAPI web call session for browser-based voice simulation.
+
+    This is for testing/simulation only - no database records are created.
+    Returns the configuration for the frontend to use with VAPI Web SDK:
+    vapi.start(null, assistantOverrides, squadId)
+
+    The web call uses the same squad as phone calls, with questions
+    injected via variableValues.
+    """
+    if not VAPI_PUBLIC_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="VAPI_PUBLIC_KEY not configured in environment"
+        )
+
+    pool = await get_db_pool()
+
+    # Validate vacancy_id
+    try:
+        vacancy_uuid = uuid.UUID(request.vacancy_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {request.vacancy_id}")
+
+    # Get vacancy and pre-screening
+    row = await pool.fetchrow(
+        """
+        SELECT v.id as vacancy_id, v.title as vacancy_title,
+               ps.id as pre_screening_id, ps.is_online, ps.published_at
+        FROM ats.vacancies v
+        LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+        WHERE v.id = $1
+        """,
+        vacancy_uuid
+    )
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Vacancy not found: {request.vacancy_id}")
+
+    if not row["pre_screening_id"]:
+        raise HTTPException(status_code=400, detail="No pre-screening configured for this vacancy")
+
+    if not row["published_at"]:
+        raise HTTPException(status_code=400, detail="Pre-screening is not published yet")
+
+    if not row["is_online"]:
+        raise HTTPException(status_code=400, detail="Pre-screening is offline. Set it online first.")
+
+    # Fetch questions from database
+    questions = await pool.fetch(
+        """
+        SELECT id, question_type, position, question_text, ideal_answer
+        FROM ats.pre_screening_questions
+        WHERE pre_screening_id = $1
+        ORDER BY question_type, position
+        """,
+        row["pre_screening_id"]
+    )
+
+    knockout_questions = [
+        {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
+        for q in questions if q["question_type"] == "knockout"
+    ]
+    qualification_questions = [
+        {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
+        for q in questions if q["question_type"] == "qualification"
+    ]
+
+    logger.info(f"Web call: loaded {len(knockout_questions)} knockout + {len(qualification_questions)} qualification questions")
+
+    # Extract first name from candidate_name if not provided
+    first_name = request.first_name or request.candidate_name.split()[0]
+
+    # Build web call config using VapiService
+    vapi_service = get_vapi_service()
+    config = vapi_service.create_web_call_config(
+        first_name=first_name,
+        vacancy_id=request.vacancy_id,
+        vacancy_title=row["vacancy_title"],
+        knockout_questions=knockout_questions,
+        qualification_questions=qualification_questions,
+        pre_screening_id=str(row["pre_screening_id"]),
+    )
+
+    logger.info(f"Web call session created for vacancy {request.vacancy_id}, candidate: {request.candidate_name}")
+
+    return VapiWebCallResponse(
+        success=True,
+        squad_id=config["squad_id"],
+        vapi_public_key=VAPI_PUBLIC_KEY,
+        assistant_overrides=config["assistant_overrides"],
+    )

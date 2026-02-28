@@ -5,7 +5,8 @@ import uuid
 import logging
 import time
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+import asyncio
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from google.adk.events import Event, EventActions
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 
@@ -32,12 +33,68 @@ def set_session_manager(manager):
     session_manager = manager
 
 
+async def _run_background_analysis(pre_screening_id: uuid.UUID, vacancy_id: str):
+    """
+    Run interview analysis agent in the background after questions are saved.
+
+    This ensures every save triggers a fresh analysis, keeping the
+    analysis tab on the pre-screening page always up-to-date.
+    """
+    from interview_analysis_agent import analyze_interview
+
+    try:
+        pool = await get_db_pool()
+        ps_repo = PreScreeningRepository(pool)
+        vacancy_repo = VacancyRepository(pool)
+
+        vacancy_uuid = uuid.UUID(vacancy_id)
+        vacancy_row = await vacancy_repo.get_basic_info(vacancy_uuid)
+        vacancy_title = vacancy_row["title"] if vacancy_row else "Onbekende vacature"
+        vacancy_description = (vacancy_row["description"] or "") if vacancy_row else ""
+
+        question_rows = await ps_repo.get_questions(pre_screening_id)
+        if not question_rows:
+            logger.info(f"[BG ANALYSIS] No questions found for {pre_screening_id}, skipping")
+            return
+
+        # Build questions with ko_N/qual_N IDs
+        questions = []
+        ko_counter = 1
+        qual_counter = 1
+        for q in question_rows:
+            if q["question_type"] == "knockout":
+                q_id = f"ko_{ko_counter}"
+                ko_counter += 1
+                q_type = "knockout"
+            else:
+                q_id = f"qual_{qual_counter}"
+                qual_counter += 1
+                q_type = "qualifying"
+            questions.append({"id": q_id, "text": q["question_text"], "type": q_type})
+
+        logger.info(f"[BG ANALYSIS] Running analysis on {len(questions)} questions for vacancy {vacancy_id}")
+
+        result = await analyze_interview(
+            questions=questions,
+            vacancy_title=vacancy_title,
+            vacancy_description=vacancy_description,
+        )
+
+        await ps_repo.save_analysis_result(pre_screening_id, result)
+        verdict = result.get("summary", {}).get("verdict", "unknown")
+        logger.info(f"[BG ANALYSIS] Saved result for {pre_screening_id} (verdict={verdict})")
+
+    except Exception as e:
+        logger.error(f"[BG ANALYSIS] Failed for {pre_screening_id}: {e}", exc_info=True)
+
+
 @router.put("/vacancies/{vacancy_id}/pre-screening")
-async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
+async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, background_tasks: BackgroundTasks):
     """
     Save or update pre-screening configuration for a vacancy.
     Creates pre_screening record and inserts questions into pre_screening_questions.
     Also updates vacancy status to 'agent_created'.
+    Automatically triggers interview analysis in the background.
     """
     pool = await get_db_pool()
 
@@ -78,6 +135,30 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
         config.approved_ids
     )
 
+    # Invalidate cached interview analysis (questions changed)
+    await ps_repo.clear_analysis_result(pre_screening_id)
+
+    # Fire questions_saved event to vacancy_setup workflow (if active)
+    try:
+        from src.workflows.orchestrator import get_orchestrator
+        orchestrator = await get_orchestrator()
+        workflow = await orchestrator.find_by_context("vacancy_id", vacancy_id)
+        if workflow and workflow["workflow_type"] == "vacancy_setup":
+            await orchestrator.handle_event(workflow["id"], "questions_saved", {
+                "pre_screening_id": str(pre_screening_id),
+                "vacancy_id": vacancy_id,
+            })
+            logger.info(f"[SAVE PRE-SCREENING] Fired questions_saved event for workflow {workflow['id'][:8]}")
+    except Exception as e:
+        logger.warning(f"[SAVE PRE-SCREENING] Failed to fire questions_saved event: {e}")
+
+    # Run interview analysis in the background (regardless of workflow)
+    background_tasks.add_task(
+        _run_background_analysis,
+        pre_screening_id=pre_screening_id,
+        vacancy_id=vacancy_id,
+    )
+
     return {
         "status": "success",
         "message": "Pre-screening configuration saved",
@@ -85,6 +166,48 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest):
         "vacancy_id": vacancy_id,
         "vacancy_status": "screening_active"
     }
+
+
+@router.get("/vacancies/{vacancy_id}/pre-screening/analysis")
+async def get_vacancy_analysis(vacancy_id: str):
+    """
+    Get the interview analysis report for a vacancy's pre-screening.
+
+    Returns the cached analysis result, or 404 if no analysis has been run yet.
+    Analysis runs automatically in the background when questions are saved.
+
+    Response includes:
+    - summary: overall verdict, completion rate, one-liner
+    - questions: per-question clarity scores, drop-off risk, tips
+    - funnel: candidate funnel visualization data
+    """
+    from src.models.interview_analysis import InterviewAnalysisResponse
+
+    pool = await get_db_pool()
+
+    try:
+        vacancy_uuid = uuid.UUID(vacancy_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    ps_repo = PreScreeningRepository(pool)
+    ps_row = await ps_repo.get_for_vacancy(vacancy_uuid)
+
+    if not ps_row:
+        raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
+
+    result = await ps_repo.get_analysis_result(ps_row["id"])
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Analysis not yet available. It runs automatically after saving questions."
+        )
+
+    try:
+        return InterviewAnalysisResponse(**result)
+    except Exception as e:
+        logger.error(f"Cached analysis result is invalid for vacancy {vacancy_id}: {e}")
+        raise HTTPException(status_code=500, detail="Cached analysis data is invalid")
 
 
 @router.get("/vacancies/{vacancy_id}/pre-screening")

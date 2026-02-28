@@ -13,10 +13,12 @@ from pydantic import BaseModel
 from src.database import get_db_pool
 from src.services.workflow_service import WorkflowService
 from src.workflows.pre_screening import STEP_CONFIG as PRE_SCREENING_STEP_CONFIG
+from src.workflows.vacancy_setup import STEP_CONFIG as VACANCY_SETUP_STEP_CONFIG
 
 # Step configs per workflow type (mirrors orchestrator)
 WORKFLOW_STEP_CONFIGS = {
     "pre_screening": PRE_SCREENING_STEP_CONFIG,
+    "vacancy_setup": VACANCY_SETUP_STEP_CONFIG,
 }
 
 router = APIRouter(prefix="/api/activities", tags=["Activities"])
@@ -199,6 +201,7 @@ def _get_workflow_type_label(workflow_type: str) -> str:
     """Human-readable workflow type."""
     labels = {
         "pre_screening": "Pre-screening",
+        "vacancy_setup": "Vacancy Setup",
         "document_collection": "Document Collection",
         "scheduling": "Interview Planning",
         "cv_analysis": "CV Analysis",
@@ -228,6 +231,11 @@ def _get_step_label(step: str) -> str:
         "waiting_backside": "Waiting",
         "expired": "Expired",
         "marked_as_complete": "Manually Completed",
+        # Vacancy setup steps
+        "generating": "Generating",
+        "analyzing": "Analyzing",
+        "awaiting_review": "Awaiting Review",
+        "publishing": "Publishing",
     }
     return labels.get(step, step.replace("_", " ").title())
 
@@ -250,6 +258,18 @@ def _get_step_detail(workflow_type: str, step: str, context: dict) -> Optional[s
             "processed": "Notificaties verzonden",
             "complete": None,  # No detail needed for complete
             "failed": "Kandidaat niet gekwalificeerd",
+            "timed_out": "Geen reactie ontvangen",
+        }
+        return details.get(step)
+
+    # Vacancy setup steps
+    elif workflow_type == "vacancy_setup":
+        details = {
+            "generating": "Interviewvragen genereren",
+            "analyzing": "Vragen analyseren",
+            "awaiting_review": "Wacht op goedkeuring recruiter",
+            "publishing": "Pre-screening publiceren",
+            "complete": None,
             "timed_out": "Geen reactie ontvangen",
         }
         return details.get(step)
@@ -280,6 +300,13 @@ def _get_workflow_steps(workflow_type: str, current_step: str, status: str, cont
             ("in_progress", "Gesprek"),
             ("processing", "Verwerken"),
             ("processed", "Notificaties"),
+            ("complete", "Afgerond"),
+        ],
+        "vacancy_setup": [
+            ("generating", "Genereren"),
+            ("analyzing", "Analyseren"),
+            ("awaiting_review", "Review"),
+            ("publishing", "Publiceren"),
             ("complete", "Afgerond"),
         ],
         "document_collection": [

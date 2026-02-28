@@ -54,3 +54,9 @@ def load_activities() -> list[dict]:
     """Load demo activities from JSON file."""
     with open(FIXTURES_DIR / "activities.json", "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_ontology() -> dict:
+    """Load demo ontology data from JSON file."""
+    with open(FIXTURES_DIR / "ontology.json", "r", encoding="utf-8") as f:
+        return json.load(f)
