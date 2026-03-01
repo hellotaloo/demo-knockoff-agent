@@ -15,8 +15,16 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("usage")
 
+# Load env files before reading config — .env.local first (local overrides), then parent .env (fallback).
+# load_dotenv does NOT override already-set vars, so .env.local values take precedence.
+_agent_dir = Path(__file__).resolve().parent
+load_dotenv(_agent_dir / ".env.local")
+load_dotenv(_agent_dir.parent / ".env")
+
+AGENT_NAME = os.environ.get("AGENT_NAME", "pre-screening")
+
 from i18n import msg
-from models import CandidateData, SessionInput, CandidateRecord, KnockoutQuestion, OpenQuestion
+from models import CandidateData, SessionInput, CandidateRecord, KnockoutQuestion, OpenQuestion, VoiceConfig
 from agents.greeting import GreetingAgent
 from agents.screening import ScreeningAgent
 from agents.open_questions import OpenQuestionsAgent
@@ -41,8 +49,6 @@ def _build_start_agent(name: str, inp: SessionInput):
         return RecruiterAgent()
     return None
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
-
 
 def prewarm(proc: JobProcess):
     """Load VAD model once at worker startup to avoid cold start latency on first call."""
@@ -60,27 +66,33 @@ def _dev_session_input() -> SessionInput:
         candidate_known=False,
         require_consent=False,
         candidate_record=CandidateRecord(
-            known_answers={"work_permit": "ja"},
+            known_answers={"q1": "ja"},
             existing_booking_date="dinsdag 4 maart om 10 uur",
         ),
         job_title="Bakkerij Medewerker",
         office_location="Antwerpen Centrum",
         office_address="Mechelsesteenweg nummer 27",
         knockout_questions=[
-            KnockoutQuestion(id="q1", text="Mag je wettelijk werken in Belgie?", data_key="work_permit"),
-            KnockoutQuestion(id="q2", text="Heb je ervaring met werken in een bakkerij of in de verkoop?", data_key="relevant_experience"),
-            KnockoutQuestion(id="q3", text="Ben je beschikbaar om in het weekend te werken?", context="2 a 3 weekends per maand is prima.", data_key="weekend_available"),
+            KnockoutQuestion(id="q1", text="Mag je wettelijk werken in Belgie?"),
+            KnockoutQuestion(id="q2", text="Heb je ervaring met werken in een bakkerij of in de verkoop?"),
+            KnockoutQuestion(id="q3", text="Ben je beschikbaar om in het weekend te werken?", context="2 a 3 weekends per maand is prima."),
         ],
         open_questions=[
             OpenQuestion(id="oq1", text="Waarom wil je in een bakkerij werken?", description="Motivatievraag"),
             OpenQuestion(id="oq2", text="Wat zijn je sterke punten voor deze functie?", description="Sterke punten"),
             OpenQuestion(id="oq3", text="Wanneer zou je kunnen starten?", description="Beschikbaarheid"),
         ],
-        # start_agent="greeting",  # skip to a specific agent for testing 
+        voice_config=VoiceConfig(
+            voice_id="ANHrhmaFeVN0QJaa0PhL",
+            model_id="eleven_flash_v2_5",
+            stability=1.0,
+            similarity_boost=1.0,
+        ),
+        # start_agent="greeting",  # skip to a specific agent for testing
     )
 
 
-@server.rtc_session(agent_name="pre-screening")
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: agents.JobContext):
     # Parse session input from job metadata (production) or use dev fallback
     metadata = ctx.job.metadata if ctx.job.metadata else None
@@ -91,6 +103,9 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         inp = _dev_session_input()
         logger.info("No job metadata — using dev session input")
+
+    vc = inp.voice_config
+    logger.info(f"Voice config: voice_id={vc.voice_id}, model={vc.model_id}, stability={vc.stability}, similarity={vc.similarity_boost}")
 
     session = AgentSession[CandidateData](
         userdata=CandidateData(input=inp),
@@ -109,12 +124,12 @@ async def entrypoint(ctx: agents.JobContext):
         ),
         llm="openai/gpt-4.1-mini",
         tts=elevenlabs.TTS(
-            voice_id="ANHrhmaFeVN0QJaa0PhL", # petra
-            model="eleven_flash_v2_5",
+            voice_id=vc.voice_id,
+            model=vc.model_id,
             language="nl",
             voice_settings=elevenlabs.VoiceSettings(
-                stability=1,
-                similarity_boost=1,
+                stability=vc.stability,
+                similarity_boost=vc.similarity_boost,
                 style=0,
                 use_speaker_boost=False,
             ),

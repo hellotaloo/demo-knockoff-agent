@@ -1,0 +1,16 @@
+{
+  "room": "playground-0ae92bcb9969",
+  "timestamp": "20260301_214544",
+  "candidate_name": "Sophie Bakker",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 3120,
+  "llm_completion_tokens": 51,
+  "tts_characters": 268,
+  "stt_audio_duration": 0.0,
+  "cost_usd": {
+    "llm": 0.00133,
+    "tts": 0.003015,
+    "stt": 0.0,
+    "total": 0.004345
+  }
+}

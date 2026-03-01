@@ -25,18 +25,15 @@ def default_session_input() -> SessionInput:
             KnockoutQuestion(
                 id="q1",
                 text="Mag je wettelijk werken in Belgie?",
-                data_key="work_permit",
             ),
             KnockoutQuestion(
                 id="q2",
                 text="Heb je ervaring met werken in een bakkerij of in de verkoop?",
-                data_key="relevant_experience",
             ),
             KnockoutQuestion(
                 id="q3",
                 text="Ben je beschikbaar om in het weekend te werken?",
                 context="2 a 3 weekends per maand is prima.",
-                data_key="weekend_available",
             ),
         ],
         open_questions=[
@@ -49,12 +46,12 @@ def default_session_input() -> SessionInput:
 
 
 def known_candidate_input() -> SessionInput:
-    """Known candidate with one pre-known answer (work_permit)."""
+    """Known candidate with one pre-known answer (q1)."""
     inp = default_session_input()
     inp.candidate_name = "Mark Verbeke"
     inp.candidate_known = True
     inp.candidate_record = CandidateRecord(
-        known_answers={"work_permit": "ja"},
+        known_answers={"q1": "ja"},
     )
     return inp
 
@@ -63,7 +60,7 @@ def known_candidate_with_booking_input() -> SessionInput:
     """Known candidate with existing booking — scheduling is skipped."""
     inp = known_candidate_input()
     inp.candidate_record = CandidateRecord(
-        known_answers={"work_permit": "ja"},
+        known_answers={"q1": "ja"},
         existing_booking_date="dinsdag 4 maart om 10 uur",
     )
     return inp
@@ -74,9 +71,9 @@ def all_known_answers_input() -> SessionInput:
     inp = known_candidate_input()
     inp.candidate_record = CandidateRecord(
         known_answers={
-            "work_permit": "ja",
-            "relevant_experience": "ja",
-            "weekend_available": "ja",
+            "q1": "ja",
+            "q2": "ja",
+            "q3": "ja",
         },
     )
     return inp

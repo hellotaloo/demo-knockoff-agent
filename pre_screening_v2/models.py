@@ -32,7 +32,6 @@ class KnockoutQuestion:
     text: str
     internal_id: str = ""
     context: str = ""
-    data_key: str = ""
 
 
 @dataclass
@@ -48,6 +47,15 @@ class CandidateRecord:
     """Pre-known candidate data from CRM. Used to skip knockout questions and scheduling."""
     known_answers: dict[str, str] = field(default_factory=dict)
     existing_booking_date: Optional[str] = None
+
+
+@dataclass
+class VoiceConfig:
+    """ElevenLabs voice configuration, loaded from agents.voice_config."""
+    voice_id: str = "ANHrhmaFeVN0QJaa0PhL"
+    model_id: str = "eleven_flash_v2_5"
+    stability: float = 1.0
+    similarity_boost: float = 1.0
 
 
 @dataclass
@@ -69,6 +77,9 @@ class SessionInput:
     knockout_questions: list[KnockoutQuestion] = field(default_factory=list)
     open_questions: list[OpenQuestion] = field(default_factory=list)
 
+    # Voice
+    voice_config: VoiceConfig = field(default_factory=VoiceConfig)
+
     # Settings
     start_agent: str = ""
     allow_escalation: bool = True
@@ -88,13 +99,19 @@ class SessionInput:
             "office_location": self.office_location,
             "office_address": self.office_address,
             "knockout_questions": [
-                {"id": q.id, "text": q.text, "internal_id": q.internal_id, "context": q.context, "data_key": q.data_key}
+                {"id": q.id, "text": q.text, "internal_id": q.internal_id, "context": q.context}
                 for q in self.knockout_questions
             ],
             "open_questions": [
                 {"id": q.id, "text": q.text, "internal_id": q.internal_id, "description": q.description}
                 for q in self.open_questions
             ],
+            "voice_config": {
+                "voice_id": self.voice_config.voice_id,
+                "model_id": self.voice_config.model_id,
+                "stability": self.voice_config.stability,
+                "similarity_boost": self.voice_config.similarity_boost,
+            },
             "allow_escalation": self.allow_escalation,
             "require_consent": self.require_consent,
             "is_playground": self.is_playground,
@@ -103,6 +120,7 @@ class SessionInput:
     @classmethod
     def from_dict(cls, data: dict) -> SessionInput:
         cr = data.get("candidate_record")
+        vc = data.get("voice_config")
         return cls(
             call_id=data.get("call_id", ""),
             candidate_name=data.get("candidate_name", ""),
@@ -119,7 +137,6 @@ class SessionInput:
                     id=q["id"], text=q["text"],
                     internal_id=q.get("internal_id", ""),
                     context=q.get("context", ""),
-                    data_key=q.get("data_key", ""),
                 ) for q in data.get("knockout_questions", [])
             ],
             open_questions=[
@@ -129,6 +146,12 @@ class SessionInput:
                     description=q.get("description", ""),
                 ) for q in data.get("open_questions", [])
             ],
+            voice_config=VoiceConfig(
+                voice_id=vc.get("voice_id", "ANHrhmaFeVN0QJaa0PhL"),
+                model_id=vc.get("model_id", "eleven_flash_v2_5"),
+                stability=float(vc.get("stability", 1.0)),
+                similarity_boost=float(vc.get("similarity_boost", 1.0)),
+            ) if vc else VoiceConfig(),
             start_agent=data.get("start_agent", ""),
             allow_escalation=data.get("allow_escalation", True),
             require_consent=data.get("require_consent", True),

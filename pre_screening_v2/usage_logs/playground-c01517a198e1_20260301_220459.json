@@ -1,0 +1,16 @@
+{
+  "room": "playground-c01517a198e1",
+  "timestamp": "20260301_220459",
+  "candidate_name": "Onbekende beller",
+  "job_title": "Technisch commercieel binnendienst medewerker",
+  "llm_prompt_tokens": 0,
+  "llm_completion_tokens": 0,
+  "tts_characters": 121,
+  "stt_audio_duration": 0.0,
+  "cost_usd": {
+    "llm": 0.0,
+    "tts": 0.001361,
+    "stt": 0.0,
+    "total": 0.001361
+  }
+}

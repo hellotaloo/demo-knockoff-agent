@@ -19,7 +19,7 @@ from tests.configs import default_session_input
 # Build parameterized IDs from the default config
 _inp = default_session_input()
 _knockout_ids = [
-    pytest.param(i, id=f"{q.id}-{q.data_key}")
+    pytest.param(i, id=q.id)
     for i, q in enumerate(_inp.knockout_questions)
 ]
 

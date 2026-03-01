@@ -8,8 +8,8 @@
   "allow_escalation": true,
   "candidate_record": {
     "known_answers": {
-      "work_permit": "ja",
-      "relevant_experience": "ja"
+      "q1": "ja",
+      "q2": "ja"
     },
     "existing_booking_date": null
   },
@@ -23,22 +23,19 @@
       "id": "q1",
       "internal_id": "ko_9f3a2b",
       "text": "Mag je wettelijk werken in Belgie?",
-      "context": "",
-      "data_key": "work_permit"
+      "context": ""
     },
     {
       "id": "q2",
       "internal_id": "ko_7d4c1e",
       "text": "Heb je ervaring met werken in een bakkerij of in de verkoop?",
-      "context": "",
-      "data_key": "relevant_experience"
+      "context": ""
     },
     {
       "id": "q3",
       "internal_id": "ko_5b8f0a",
       "text": "Ben je beschikbaar om in het weekend te werken?",
-      "context": "2 a 3 weekends per maand is prima.",
-      "data_key": "weekend_available"
+      "context": "2 a 3 weekends per maand is prima."
     }
   ],
 

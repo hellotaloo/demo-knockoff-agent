@@ -21,13 +21,13 @@ class ScreeningAgent(BaseAgent):
         questions = inp.knockout_questions
 
         # If all knockout questions are already known, skip screening entirely
-        if record and all(q.data_key in record.known_answers for q in questions if q.data_key):
+        if record and all(q.id in record.known_answers for q in questions):
             for q in questions:
                 userdata.knockout_answers.append(KnockoutAnswer(
                     question_id=q.id,
                     question_text=q.text,
                     result=QuestionResult.PASS,
-                    raw_answer=f"(vooraf bekend: {record.known_answers.get(q.data_key, '')})",
+                    raw_answer=f"(vooraf bekend: {record.known_answers.get(q.id, '')})",
                 ))
             userdata.passed_knockout = True
             from agents.open_questions import OpenQuestionsAgent
@@ -38,19 +38,19 @@ class ScreeningAgent(BaseAgent):
         first_asked = True  # tracks whether this is the first question actually asked
         for i, q in enumerate(questions):
             # Skip questions we already know the answer to
-            if record and q.data_key and q.data_key in record.known_answers:
+            if record and q.id in record.known_answers:
                 userdata.knockout_answers.append(KnockoutAnswer(
                     question_id=q.id,
                     question_text=q.text,
                     result=QuestionResult.PASS,
-                    raw_answer=f"(vooraf bekend: {record.known_answers[q.data_key]})",
+                    raw_answer=f"(vooraf bekend: {record.known_answers[q.id]})",
                 ))
                 continue
 
             # Build transition text
             remaining = sum(
                 1 for rq in questions[i:]
-                if not (record and rq.data_key and rq.data_key in record.known_answers)
+                if not (record and rq.id in record.known_answers)
             )
             if first_asked:
                 transition = "Zeg kort 'ok super, dan starten we met een eerste vraag.' en ga meteen over naar de eerste vraag."

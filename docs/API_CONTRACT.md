@@ -2213,6 +2213,11 @@ interface PlaygroundStartRequest {
   candidate_name?: string;     // Default: "Playground Kandidaat"
   start_agent?: string;        // Skip to specific step: "greeting" | "screening" | "open_questions" | "scheduling"
   require_consent?: boolean;   // Default: false
+  candidate_known?: boolean;   // Default: false — known candidate with existing data
+  allow_escalation?: boolean;  // Default: false — allow handoff to human recruiter
+  voice_id?: string;           // ElevenLabs voice ID override (defaults to DB config)
+  known_answers?: Record<string, string>;  // Pre-known knockout answers by question ID to skip (e.g. {"ko_1": "ja", "ko_2": "ja"})
+  existing_booking_date?: string;          // Existing appointment to skip scheduling (e.g. "dinsdag 4 maart om 10 uur")
 }
 ```
 

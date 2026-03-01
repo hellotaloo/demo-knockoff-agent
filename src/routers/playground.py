@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from src.config import LIVEKIT_URL
 from src.database import get_db_pool
-from src.services.livekit_service import get_livekit_service
+from src.services.livekit_service import get_livekit_service, fetch_voice_config
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,11 @@ class PlaygroundStartRequest(BaseModel):
     candidate_name: str = "Playground Kandidaat"
     start_agent: Optional[str] = None  # e.g. "screening", "scheduling" — skip to specific step
     require_consent: bool = False
+    candidate_known: bool = False
+    allow_escalation: bool = False
+    voice_id: Optional[str] = None  # ElevenLabs voice ID override
+    known_answers: Optional[dict[str, str]] = None  # Pre-known knockout answers by question ID to skip (e.g. {"ko_1": "ja", "ko_2": "ja"})
+    existing_booking_date: Optional[str] = None  # Existing appointment to skip scheduling (e.g. "dinsdag 4 maart om 10 uur")
 
 
 class PlaygroundStartResponse(BaseModel):
@@ -105,6 +110,7 @@ async def start_playground_session(request: PlaygroundStartRequest):
     # Build session input using existing helper
     room_name = f"playground-{uuid.uuid4().hex[:12]}"
     livekit_service = get_livekit_service()
+    voice_config = await fetch_voice_config()
 
     session_input = livekit_service._build_session_input(
         call_id=room_name,
@@ -114,13 +120,20 @@ async def start_playground_session(request: PlaygroundStartRequest):
         qualification_questions=qualification_questions,
         office_location=row["office_name"] or "",
         office_address=row["office_address"] or "",
+        voice_config=voice_config,
+        known_answers=request.known_answers,
+        existing_booking_date=request.existing_booking_date,
     )
 
     # Apply playground overrides — zero side effects
     session_input["is_playground"] = True
     session_input["require_consent"] = request.require_consent
+    session_input["candidate_known"] = request.candidate_known
+    session_input["allow_escalation"] = request.allow_escalation
     if request.start_agent:
         session_input["start_agent"] = request.start_agent
+    if request.voice_id and "voice_config" in session_input:
+        session_input["voice_config"]["voice_id"] = request.voice_id
 
     # Generate token with embedded agent dispatch
     first_name = request.candidate_name.split()[0]

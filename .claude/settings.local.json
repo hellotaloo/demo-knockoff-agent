@@ -142,7 +142,18 @@
       "mcp__livekit-docs__code_search",
       "Bash(/Users/lunar/Desktop/sites/taloo-workspace/taloo-backend/.venv/bin/pip show livekit-api)",
       "mcp__plugin_supabase_supabase__reset_branch",
-      "Bash(gtimeout 10 uvicorn app:app --port 8080)"
+      "Bash(gtimeout 10 uvicorn app:app --port 8080)",
+      "Bash(uv add asyncpg)",
+      "Bash(uv remove asyncpg)",
+      "Bash(lk agent deploy --secrets-file .env.production --secret-mount ../credentials/top-interim-gcal-a4da4110111c.json)",
+      "Bash(lk agent list)",
+      "Bash(lk project list)",
+      "Bash(lk agent create --help)",
+      "Bash(lk agent create --secrets-file .env.production --secret-mount ../credentials/top-interim-gcal-a4da4110111c.json --region eu-west-1 --silent)",
+      "Bash(lk cloud regions)",
+      "Bash(lk regions)",
+      "Bash(lk cloud list-regions)",
+      "Bash(tr ';' '\\\\n')"
     ],
     "defaultMode": "acceptEdits"
   },

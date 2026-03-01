@@ -18,8 +18,31 @@ from src.config import (
     SIP_OUTBOUND_TRUNK_ID,
     LIVEKIT_AGENT_NAME,
 )
+from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)
+
+
+async def fetch_voice_config() -> Optional[dict]:
+    """Fetch voice config from agents.voice_config table."""
+    try:
+        pool = await get_db_pool()
+        row = await pool.fetchrow(
+            "SELECT voice_id, model_id, stability, similarity_boost FROM agents.voice_config LIMIT 1"
+        )
+        if row:
+            logger.info(f"Voice config loaded: voice_id={row['voice_id']}, model={row['model_id']}")
+            return {
+                "voice_id": row["voice_id"],
+                "model_id": row["model_id"],
+                "stability": float(row["stability"]) if row["stability"] is not None else 1.0,
+                "similarity_boost": float(row["similarity_boost"]) if row["similarity_boost"] is not None else 1.0,
+            }
+        logger.info("No voice config found in DB, using defaults")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch voice config: {e}")
+        return None
 
 
 class LiveKitService:
@@ -55,17 +78,23 @@ class LiveKitService:
         qualification_questions: list[dict],
         office_location: str = "",
         office_address: str = "",
+        voice_config: Optional[dict] = None,
+        known_answers: Optional[dict[str, str]] = None,
+        existing_booking_date: Optional[str] = None,
     ) -> dict:
         """
         Map backend DB questions to pre_screening_v2 SessionInput format.
 
         Uses internal_id to store DB question UUIDs for round-tripping results.
         """
-        return {
+        result = {
             "call_id": call_id,
             "candidate_name": candidate_name,
             "candidate_known": False,
-            "candidate_record": None,
+            "candidate_record": {
+                "known_answers": known_answers or {},
+                "existing_booking_date": existing_booking_date,
+            } if (known_answers or existing_booking_date) else None,
             "job_title": job_title,
             "office_location": office_location,
             "office_address": office_address,
@@ -75,7 +104,6 @@ class LiveKitService:
                     "text": q["question_text"],
                     "internal_id": str(q["id"]),
                     "context": q.get("ideal_answer") or "",
-                    "data_key": "",
                 }
                 for i, q in enumerate(knockout_questions)
             ],
@@ -91,6 +119,9 @@ class LiveKitService:
             "allow_escalation": True,
             "require_consent": True,
         }
+        if voice_config:
+            result["voice_config"] = voice_config
+        return result
 
     async def create_outbound_call(
         self,
@@ -129,6 +160,8 @@ class LiveKitService:
 
         room_name = f"screening-{uuid.uuid4().hex[:12]}"
 
+        voice_config = await fetch_voice_config()
+
         session_input = self._build_session_input(
             call_id=room_name,
             candidate_name=candidate_name,
@@ -137,6 +170,7 @@ class LiveKitService:
             qualification_questions=qualification_questions,
             office_location=office_location,
             office_address=office_address,
+            voice_config=voice_config,
         )
 
         logger.info(

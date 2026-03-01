@@ -1,0 +1,16 @@
+{
+  "room": "playground-52d9557d52ca",
+  "timestamp": "20260301_220417",
+  "candidate_name": "Sophie Bakker",
+  "job_title": "Technisch commercieel binnendienst medewerker",
+  "llm_prompt_tokens": 0,
+  "llm_completion_tokens": 0,
+  "tts_characters": 192,
+  "stt_audio_duration": 0.0,
+  "cost_usd": {
+    "llm": 0.0,
+    "tts": 0.00216,
+    "stt": 0.0,
+    "total": 0.00216
+  }
+}

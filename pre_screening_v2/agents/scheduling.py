@@ -72,6 +72,18 @@ class SchedulingAgent(BaseAgent):
         self._use_calendar = is_calendar_configured()
         userdata = self.session.userdata
         userdata.silence_count = 0
+
+        # If the candidate already has a booking, skip scheduling entirely
+        inp = userdata.input
+        record = inp.candidate_record if inp.candidate_known else None
+        if record and record.existing_booking_date:
+            await self.session.say(
+                msg(userdata, "existing_booking", date=record.existing_booking_date),
+                allow_interruptions=False,
+            )
+            self.session.shutdown(drain=True)
+            return
+
         userdata.suppress_silence = True
         await self.session.say(
             msg(userdata, "scheduling_invite", location=self._office_location),

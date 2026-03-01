@@ -1,0 +1,16 @@
+{
+  "room": "playground-83a6d3482dbd",
+  "timestamp": "20260301_214130",
+  "candidate_name": "Jan de Vries",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 853,
+  "llm_completion_tokens": 33,
+  "tts_characters": 124,
+  "stt_audio_duration": 0.0,
+  "cost_usd": {
+    "llm": 0.000394,
+    "tts": 0.001395,
+    "stt": 0.0,
+    "total": 0.001789
+  }
+}
