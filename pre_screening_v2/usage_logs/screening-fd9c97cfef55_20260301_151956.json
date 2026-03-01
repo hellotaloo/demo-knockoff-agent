@@ -1,0 +1,16 @@
+{
+  "room": "screening-fd9c97cfef55",
+  "timestamp": "20260301_151956",
+  "candidate_name": "Luuk Hendriks",
+  "job_title": "Winkelmedewerker Bakkerij",
+  "llm_prompt_tokens": 18061,
+  "llm_completion_tokens": 636,
+  "tts_characters": 1783,
+  "stt_audio_duration": 111.19999999999986,
+  "cost_usd": {
+    "llm": 0.008242,
+    "tts": 0.020059,
+    "stt": 0.014271,
+    "total": 0.042571
+  }
+}

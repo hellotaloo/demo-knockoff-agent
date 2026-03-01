@@ -185,6 +185,10 @@ class ConversationState:
     # Outcome
     outcome: str = ""
 
+    # Office location (for confirmation message)
+    office_location: str = ""
+    office_address: str = ""
+
     # Test mode (skip real calendar booking)
     is_test: bool = False
 
@@ -213,6 +217,8 @@ class ConversationState:
             "selected_time": self.selected_time,
             "scheduling_attempts": self.scheduling_attempts,
             "asked_for_day_preference": self.asked_for_day_preference,
+            "office_location": self.office_location,
+            "office_address": self.office_address,
             "outcome": self.outcome,
             "is_test": self.is_test,
         }
@@ -243,6 +249,8 @@ class ConversationState:
             selected_time=data.get("selected_time", ""),
             scheduling_attempts=data.get("scheduling_attempts", 0),
             asked_for_day_preference=data.get("asked_for_day_preference", False),
+            office_location=data.get("office_location", ""),
+            office_address=data.get("office_address", ""),
             outcome=data.get("outcome", ""),
             is_test=data.get("is_test", False),
         )
@@ -382,7 +390,7 @@ Je gesprek met {recruiter_name} staat gepland:
 
 📅 **{scheduled_time}**
 📋 Functie: **{vacancy_title}**
-
+{location_line}
 Je ontvangt vooraf nog een reminder.
 
 Komt er iets tussen? Dan kan je hier je afspraak aanpassen.
@@ -1516,10 +1524,15 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
         # For now, hardcoded recruiter name
         recruiter_name = "Sarah Peters"
 
+        location_line = ""
+        if self.state.office_location:
+            location_line = f"📍 {self.state.office_location}, {self.state.office_address}\n" if self.state.office_address else f"📍 {self.state.office_location}\n"
+
         prompt = SCHEDULE_CONFIRM_PROMPT.format(
             scheduled_time=scheduled_time,
             recruiter_name=recruiter_name,
             vacancy_title=self.state.vacancy_title,
+            location_line=location_line,
         )
         return await self._generate(prompt)
 
@@ -1586,6 +1599,8 @@ def create_simple_agent(
     open_questions: list[str],
     config: AgentConfig = None,
     is_test: bool = False,
+    office_location: str = "",
+    office_address: str = "",
 ) -> SimplePreScreeningAgent:
     """
     Create a simple pre-screening agent.
@@ -1598,6 +1613,8 @@ def create_simple_agent(
         open_questions: List of question strings
         config: Optional AgentConfig for customization
         is_test: If True, skip real calendar bookings (for simulation/testing)
+        office_location: Office location name (e.g., "ITZU Antwerpen Centraal")
+        office_address: Office address (e.g., "Mechelsesteenweg 27, 2018 Antwerpen")
 
     Returns:
         SimplePreScreeningAgent ready to use
@@ -1610,6 +1627,8 @@ def create_simple_agent(
         knockout_questions=knockout_questions,
         open_questions=open_questions,
         alternate_questions=list(config.alternate_questions),
+        office_location=office_location,
+        office_address=office_address,
         is_test=is_test,
     )
     return SimplePreScreeningAgent(state, config)

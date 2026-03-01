@@ -74,6 +74,8 @@ class BaseAgent(Agent):
             if result:
                 if result.recruiter_requested:
                     recruiter_requested = True
+                if not result.answered:
+                    continue  # Skip questions that were never actually asked/answered
                 userdata.open_answers.append(OpenAnswer(
                     question_id=q_id,
                     question_text=q_text,

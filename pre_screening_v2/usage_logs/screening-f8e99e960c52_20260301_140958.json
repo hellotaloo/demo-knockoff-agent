@@ -1,0 +1,16 @@
+{
+  "room": "screening-f8e99e960c52",
+  "timestamp": "20260301_140958",
+  "candidate_name": "Lotte Visser",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 21336,
+  "llm_completion_tokens": 724,
+  "tts_characters": 2263,
+  "stt_audio_duration": 111.89999999999988,
+  "cost_usd": {
+    "llm": 0.009693,
+    "tts": 0.025459,
+    "stt": 0.01436,
+    "total": 0.049512
+  }
+}

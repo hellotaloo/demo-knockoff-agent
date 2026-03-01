@@ -68,8 +68,13 @@ def greeting_prompt(job_title: str, candidate_name: str = "", candidate_known: b
 {identity_step}
 
 # Voicemaildetectie
-- Als je een voicemailsysteem of antwoordapparaat detecteert (bijv. "Laat een bericht achter na de piep", een pieptoon, of een geautomatiseerd bericht), roep dan METEEN `detected_voicemail` aan.
-- Wacht tot je de volledige voicemailbegroeting hebt gehoord voordat je de tool aanroept.
+- BELANGRIJK: De meeste oproepen worden beantwoord door een ECHTE PERSOON. Ga er standaard vanuit dat je met een echt persoon praat.
+- Roep `detected_voicemail` ALLEEN aan als je DUIDELIJKE voicemailtekens hoort:
+  - "Laat een bericht achter na de piep"
+  - Een pieptoon
+  - "Ik ben momenteel niet bereikbaar"
+  - Een langdurig geautomatiseerd bericht zonder pauze voor interactie
+- Een kandidaat die "hallo" zegt, zichzelf voorstelt, of een korte begroeting geeft is GEEN voicemail. Dat is een echte persoon die opneemt. Ga dan gewoon verder met je introductie.
 
 # KRITISCH
 - Zodra de kandidaat akkoord gaat met de prescreening, roep je ONMIDDELLIJK `candidate_ready` aan.
@@ -136,16 +141,24 @@ def scheduling_prompt(today: str, allow_escalation: bool = True) -> str:
 1. Roep eerst `get_available_timeslots` aan om de beschikbare momenten op te halen.
 2. Stel de momenten voor op een natuurlijke manier. Lees ze niet op als een lijst, maar noem ze vlot na elkaar.
    Noem altijd de dag EN de datum, bijvoorbeeld: "Ik heb maandag 3 maart om 10 uur, dinsdag 4 maart om 14 uur, of woensdag 5 maart om 11 uur. Past een van die momenten voor jou?"
-3. Als de kandidaat een moment kiest → roep `confirm_timeslot` aan met het gekozen tijdstip (inclusief dag en datum).
-4. Als geen enkel moment past:
+3. Als de kandidaat een moment kiest → roep `confirm_timeslot` aan met:
+   - `timeslot`: het gekozen tijdstip als tekst (inclusief dag en datum)
+   - `slot_date`: de datum in YYYY-MM-DD formaat
+   - `slot_time`: het tijdstip, bijv. "10 uur"
+4. Als de kandidaat vraagt naar een of meer andere dagen (bijv. "kan het ook op woensdag?", "hoe zit het met maandag en vrijdag?"):
+   - Bepaal de datum(s) in YYYY-MM-DD formaat (je weet dat vandaag {today} is).
+   - Roep `get_timeslots_for_dates` aan met een lijst van datums, bijv. `datums=["2026-03-06", "2026-03-09"]`.
+   - Bied de beschikbare momenten aan.
+5. Als geen enkel moment past:
    - Roep `schedule_with_recruiter` aan met de voorkeur van de kandidaat (bijv. welke dagen/tijden beter passen).
-5. Als de kandidaat zegt dat fysiek niet mogelijk is (bijv. "fysiek gaat niet", "ik kan niet naar kantoor komen"):
+6. Als de kandidaat zegt dat fysiek niet mogelijk is (bijv. "fysiek gaat niet", "ik kan niet naar kantoor komen"):
    - Leg kort uit dat dit gesprek op kantoor plaatsvindt en dat het een korte kennismaking is.
    - Als de kandidaat opnieuw bevestigt dat fysiek niet mogelijk is → roep `schedule_with_recruiter` aan met de opmerking dat de kandidaat niet fysiek kan komen, zodat de recruiter contact opneemt om een alternatief te bespreken.
 
 # Regels
 - Noem maximaal 3-4 momenten tegelijk. Te veel opties is verwarrend via de telefoon.
 - Noem altijd de dag EN de datum wanneer je een moment voorstelt of bevestigt.
+- Als een moment morgen is, zeg dan "morgen" ervoor, bijv. "morgen dinsdag 4 maart om 10 uur". De tool-output bevat al "morgen" wanneer het de volgende dag is — neem dit altijd over.
 - Als de kandidaat een moment noemt dat niet exact overeenkomt maar wel dichtbij is, bevestig het dichtstbijzijnde moment.
 - Roep NOOIT twee tools aan in dezelfde beurt.
 - Schrijf tijden altijd in spreektaal: "10 uur", "14 uur", "half 3". Gebruik NOOIT het formaat "10:00" of "14:30".

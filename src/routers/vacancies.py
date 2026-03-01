@@ -289,24 +289,13 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     knockout_passed = sum(1 for ka in result.knockout_analysis if ka.is_answered)
     knockout_total = len(result.knockout_analysis)
 
-    # Generate meeting slots if qualified
-    meeting_slots = None
-    if knockout_all_passed:
-        now = datetime.now()
-        next_days = get_next_business_days(now, 2)
-        meeting_slots = [
-            get_dutch_date(next_days[0]) + " om 10:00",
-            get_dutch_date(next_days[0]) + " om 14:00",
-            get_dutch_date(next_days[1]) + " om 11:00",
-        ]
-
     return ApplicationResponse(
         id=str(application_id),
         vacancy_id=vacancy_id,
         candidate_name=request.candidate_name,
         channel="cv",
         status=application_status,
-        qualified=knockout_all_passed,  # Qualified if all knockouts passed
+        qualified=knockout_all_passed,
         started_at=app_row["started_at"],
         completed_at=app_row["completed_at"],
         interaction_seconds=0,
@@ -314,9 +303,8 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
         synced=False,
         knockout_passed=knockout_passed,
         knockout_total=knockout_total,
-        qualification_count=len(result.qualification_analysis),
+        open_questions_total=len(result.qualification_analysis),
         summary=result.cv_summary,
-        meeting_slots=meeting_slots
     )
 
 

@@ -37,7 +37,6 @@ class ApplicationResponse(BaseModel):
     open_questions_total: int = 0  # Total open/qualification questions
     summary: Optional[str] = None  # AI-generated executive summary
     interview_slot: Optional[str] = None  # Selected interview date/time, or "none_fit"
-    meeting_slots: Optional[list[str]] = None  # Available meeting slots for qualified candidates
     is_test: bool = False  # True for internal test conversations
 
 

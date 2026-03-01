@@ -4,6 +4,7 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-01** — Added `POST /playground/start` endpoint for browser-based LiveKit WebRTC voice playground (returns access token for frontend to connect directly to pre-screening V2 agent, no database records created)
 - **2026-02-28** — Replaced VAPI voice provider with LiveKit pre-screening v2 agent; added `POST /webhook/livekit/call-result` endpoint for receiving structured call results; outbound voice calls now dispatch via LiveKit SIP
 - **2026-02-28** — Added ATS Simulator endpoints (`GET /ats-simulator/api/v1/vacancies`, `GET /ats-simulator/api/v1/recruiters`, `GET /ats-simulator/api/v1/clients`) and `POST /demo/import-ats` for simulated ATS integration; demo seed now imports via ATS API instead of direct DB inserts
 - **2026-02-28** — Added Interview Analysis endpoints (`POST /pre-screenings/{id}/analyze`, `GET /pre-screenings/{id}/analysis`) with per-question clarity scoring, knockout ambiguity checks, drop-off risk, funnel data, and one-liner summary for Teams notifications
@@ -2191,6 +2192,80 @@ vapi.on('message', (msg) => {
 | 400 | Pre-screening is offline |
 | 404 | Vacancy not found |
 | 500 | VAPI_PUBLIC_KEY not configured |
+
+---
+
+## Playground
+
+### POST /playground/start
+
+Start a browser-based voice playground session using LiveKit WebRTC.
+
+Creates a LiveKit access token with embedded agent dispatch. When the browser connects using this token, LiveKit auto-creates the room and starts the pre-screening V2 voice agent. No database records are created — this is for testing/demo only.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface PlaygroundStartRequest {
+  vacancy_id: string;
+  candidate_name?: string;     // Default: "Playground Kandidaat"
+  start_agent?: string;        // Skip to specific step: "greeting" | "screening" | "open_questions" | "scheduling"
+  require_consent?: boolean;   // Default: false
+}
+```
+
+**Response:**
+
+```typescript
+interface PlaygroundStartResponse {
+  success: boolean;
+  livekit_url: string;        // WebSocket URL for LiveKit connection
+  access_token: string;       // JWT token for browser to join room
+  room_name: string;          // Room identifier (playground-{id})
+}
+```
+
+**Frontend Usage:**
+
+```typescript
+import { Room, RoomEvent } from 'livekit-client';
+
+// 1. Get token from backend
+const response = await fetch('/playground/start', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ vacancy_id: '...', candidate_name: 'Test' })
+});
+const { livekit_url, access_token } = await response.json();
+
+// 2. Connect to room
+const room = new Room();
+await room.connect(livekit_url, access_token);
+
+// 3. Enable microphone
+await room.localParticipant.setMicrophoneEnabled(true);
+
+// 4. Agent audio auto-subscribes
+room.on(RoomEvent.TrackSubscribed, (track) => {
+  if (track.kind === 'audio') track.attach();
+});
+
+// 5. Disconnect when done
+room.disconnect();
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | Invalid vacancy ID |
+| 400 | No pre-screening configured for this vacancy |
+| 400 | Pre-screening not published |
+| 400 | Pre-screening is offline |
+| 404 | Vacancy not found |
+| 500 | LIVEKIT_URL not configured |
 
 ---
 

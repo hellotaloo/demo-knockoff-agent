@@ -71,17 +71,18 @@ def _dev_session_input() -> SessionInput:
             OpenQuestion(id="oq2", text="Wat zijn je sterke punten voor deze functie?", description="Sterke punten"),
             OpenQuestion(id="oq3", text="Wanneer zou je kunnen starten?", description="Beschikbaarheid"),
         ],
-        # start_agent="alternative",  # skip to a specific agent for testing
+        # start_agent="greeting",  # skip to a specific agent for testing 
     )
 
 
-@server.rtc_session()
+@server.rtc_session(agent_name="pre-screening")
 async def entrypoint(ctx: agents.JobContext):
     # Parse session input from job metadata (production) or use dev fallback
     metadata = ctx.job.metadata if ctx.job.metadata else None
+    logger.info(f"Job metadata present: {bool(metadata)}, job id: {ctx.job.id}, raw metadata length: {len(ctx.job.metadata) if ctx.job.metadata else 0}")
     if metadata:
         inp = SessionInput.from_dict(json.loads(metadata))
-        logger.info(f"Session input loaded from job metadata (call_id={inp.call_id})")
+        logger.info(f"Session input loaded from job metadata (call_id={inp.call_id}, knockout={len(inp.knockout_questions)}, open={len(inp.open_questions)})")
     else:
         inp = _dev_session_input()
         logger.info("No job metadata — using dev session input")
@@ -215,7 +216,19 @@ async def entrypoint(ctx: agents.JobContext):
     async def _on_session_complete():
         """Called when the session ends. POST results to backend webhook."""
         results = session.userdata.to_dict()
-        logger.info(f"Session complete (call_id={inp.call_id}, status={results['status']})")
+
+        # Capture full conversation transcript from session history
+        transcript = []
+        if session.history and session.history.items:
+            for item in session.history.items:
+                if item.type == "message" and item.text_content:
+                    transcript.append({
+                        "role": item.role,
+                        "message": item.text_content,
+                    })
+        results["transcript"] = transcript
+
+        logger.info(f"Session complete (call_id={inp.call_id}, status={results['status']}, transcript_messages={len(transcript)})")
 
         backend_url = os.environ.get("BACKEND_WEBHOOK_URL")
         webhook_secret = os.environ.get("LIVEKIT_WEBHOOK_SECRET", "")

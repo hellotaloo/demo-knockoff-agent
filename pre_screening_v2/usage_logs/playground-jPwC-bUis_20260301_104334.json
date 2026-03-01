@@ -1,0 +1,16 @@
+{
+  "room": "playground-jPwC-bUis",
+  "timestamp": "20260301_104334",
+  "candidate_name": "Mark Verbeke",
+  "job_title": "Bakkerij Medewerker",
+  "llm_prompt_tokens": 11316,
+  "llm_completion_tokens": 233,
+  "tts_characters": 874,
+  "stt_audio_duration": 51.89999999999992,
+  "cost_usd": {
+    "llm": 0.004899,
+    "tts": 0.009833,
+    "stt": 0.00666,
+    "total": 0.021392
+  }
+}

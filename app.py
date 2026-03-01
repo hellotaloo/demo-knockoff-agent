@@ -117,6 +117,7 @@ from src.routers import (
     ontology_router,
     interview_analysis_router,
     ats_simulator_router,
+    playground_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -317,6 +318,7 @@ app.include_router(architecture_router)
 app.include_router(ontology_router)
 app.include_router(interview_analysis_router)
 app.include_router(ats_simulator_router)
+app.include_router(playground_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

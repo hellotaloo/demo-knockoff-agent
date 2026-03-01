@@ -1,11 +1,15 @@
+import logging
 from datetime import date, timedelta
 
 from livekit.agents import RunContext, function_tool
 
 from agents.base import BaseAgent
+from calendar_helpers import is_calendar_configured, get_initial_slots, get_slots_for_specific_date, create_interview_event
 from i18n import msg
 from models import CandidateData
 from prompts import scheduling_prompt
+
+logger = logging.getLogger(__name__)
 
 # Minimum number of days from today before the first available slot.
 # E.g. 1 = earliest slot is tomorrow, 2 = earliest slot is the day after tomorrow.
@@ -36,8 +40,8 @@ def _format_slot(d: date, spoken_time: str, today: date) -> str:
     return f"{prefix}{day_name} {d.day} {month_name} om {spoken_time}"
 
 
-def _build_slots() -> list[str]:
-    """Build 3 available slots: first slot of each of the next 3 weekdays."""
+def _build_fallback_slots() -> list[str]:
+    """Build 3 hardcoded slots (fallback when Google Calendar is not configured)."""
     today = date.today()
     slots: list[str] = []
 
@@ -65,7 +69,7 @@ class SchedulingAgent(BaseAgent):
         self._office_address = office_address
 
     async def on_enter(self) -> None:
-        self._available_slots = _build_slots()
+        self._use_calendar = is_calendar_configured()
         userdata = self.session.userdata
         userdata.silence_count = 0
         userdata.suppress_silence = True
@@ -81,15 +85,65 @@ class SchedulingAgent(BaseAgent):
     @function_tool()
     async def get_available_timeslots(self, context: RunContext) -> str:
         """Haal de beschikbare tijdsloten op voor een sollicitatiegesprek."""
-        slots_text = "\n".join(f"- {s}" for s in self._available_slots)
+        if self._use_calendar:
+            result = await get_initial_slots(start_offset_days=SLOT_OFFSET_DAYS)
+            if result["has_availability"]:
+                return f"Beschikbare momenten:\n{result['formatted']}"
+            logger.warning("Calendar returned no availability, falling back to hardcoded slots")
+
+        # Fallback: hardcoded slots (dev mode or no calendar availability)
+        slots = _build_fallback_slots()
+        slots_text = "\n".join(f"- {s}" for s in slots)
         return f"Beschikbare momenten:\n{slots_text}"
 
     @function_tool()
-    async def confirm_timeslot(self, context: RunContext, timeslot: str):
-        """De kandidaat heeft een tijdslot gekozen. Bevestig het en sluit het gesprek af."""
+    async def get_timeslots_for_dates(self, context: RunContext, datums: list[str]) -> str:
+        """Haal beschikbare tijdsloten op voor een of meer specifieke datums. Geef elke datum in YYYY-MM-DD formaat."""
+        if not self._use_calendar:
+            return "Ik kan helaas geen specifieke dagen opzoeken. Kies een van de eerder genoemde momenten, of geef je voorkeur door."
+
+        available = []
+        unavailable = []
+        for datum in datums:
+            result = await get_slots_for_specific_date(datum)
+            if result["has_availability"]:
+                available.append(result["formatted"])
+            else:
+                unavailable.append(datum)
+
+        if available:
+            text = "Beschikbare momenten:\n" + ", ".join(available)
+            if unavailable:
+                text += f"\nGeen beschikbaarheid op: {', '.join(unavailable)}"
+            return text
+        return "Er zijn helaas geen beschikbare momenten op die dagen. Wil je andere dagen proberen, of zal ik je voorkeur doorgeven aan de recruiter?"
+
+    @function_tool()
+    async def confirm_timeslot(self, context: RunContext, timeslot: str, slot_date: str = "", slot_time: str = ""):
+        """De kandidaat heeft een tijdslot gekozen. Bevestig het en sluit het gesprek af.
+
+        Args:
+            timeslot: Het gekozen tijdslot als tekst, bijv. "dinsdag 4 maart om 10 uur".
+            slot_date: De datum in YYYY-MM-DD formaat (optioneel, voor agenda-integratie).
+            slot_time: Het tijdstip, bijv. "10 uur" (optioneel, voor agenda-integratie).
+        """
         userdata: CandidateData = self.session.userdata
         userdata.irrelevant_count = 0
         userdata.chosen_timeslot = timeslot
+        userdata.scheduled_date = slot_date or None
+        userdata.scheduled_time = slot_time or None
+
+        # Create calendar event if possible (fire-and-forget: failure does not block confirmation)
+        if self._use_calendar and slot_date and slot_time:
+            candidate_name = userdata.input.candidate_name or "Kandidaat"
+            vacancy_title = userdata.input.job_title or ""
+            result = await create_interview_event(candidate_name, slot_date, slot_time, vacancy_title=vacancy_title)
+            if result["success"]:
+                userdata.calendar_event_id = result.get("event_id")
+                logger.info(f"Calendar event created: {result.get('event_id')}")
+            else:
+                logger.warning(f"Calendar event creation failed: {result.get('error')}")
+
         tomorrow = date.today() + timedelta(days=1)
         tomorrow_str = f"{tomorrow.day} {_MONTH_NAMES[tomorrow.month]}"
         is_tomorrow = tomorrow_str in timeslot

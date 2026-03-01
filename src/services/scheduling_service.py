@@ -70,6 +70,7 @@ class SchedulingService:
         conversation_id: Optional[str] = None,
         duration_minutes: int = 30,
         candidate_email: Optional[str] = None,
+        vacancy_title: str = "",
     ) -> ScheduleResult:
         """
         Schedule an interview and create a Google Calendar event.
@@ -115,9 +116,10 @@ class SchedulingService:
 
         if self.calendar_service and recruiter_email:
             try:
+                summary = f"Interview - {candidate_name} x {vacancy_title}" if vacancy_title else f"Interview - {candidate_name}"
                 event = await self.calendar_service.create_event(
                     calendar_email=recruiter_email,
-                    summary=f"Interview - {candidate_name}",
+                    summary=summary,
                     start_time=start_time,
                     duration_minutes=duration_minutes,
                     description=f"Screeningsgesprek met {candidate_name}",

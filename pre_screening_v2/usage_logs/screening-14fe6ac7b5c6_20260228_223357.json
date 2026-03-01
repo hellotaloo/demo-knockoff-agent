@@ -1,0 +1,16 @@
+{
+  "room": "screening-14fe6ac7b5c6",
+  "timestamp": "20260228_223357",
+  "candidate_name": "Mark Verbeke",
+  "job_title": "Bakkerij Medewerker",
+  "llm_prompt_tokens": 9057,
+  "llm_completion_tokens": 285,
+  "tts_characters": 918,
+  "stt_audio_duration": 49.24999999999993,
+  "cost_usd": {
+    "llm": 0.004079,
+    "tts": 0.010327,
+    "stt": 0.00632,
+    "total": 0.020727
+  }
+}

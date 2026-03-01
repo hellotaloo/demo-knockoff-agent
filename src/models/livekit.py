@@ -26,6 +26,12 @@ class LiveKitOpenAnswerPayload(BaseModel):
     candidate_note: str = ""
 
 
+class LiveKitTranscriptMessage(BaseModel):
+    """A single transcript message from the voice agent session."""
+    role: str  # "user" or "assistant"
+    message: str
+
+
 class LiveKitCallResultPayload(BaseModel):
     """
     Full call result payload from the pre-screening v2 LiveKit agent.
@@ -52,3 +58,7 @@ class LiveKitCallResultPayload(BaseModel):
     open_answers: list[LiveKitOpenAnswerPayload] = []
     chosen_timeslot: Optional[str] = None
     scheduling_preference: Optional[str] = None
+    calendar_event_id: Optional[str] = None
+    scheduled_date: Optional[str] = None   # YYYY-MM-DD
+    scheduled_time: Optional[str] = None   # e.g. "10 uur"
+    transcript: list[LiveKitTranscriptMessage] = []

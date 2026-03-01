@@ -18,6 +18,7 @@ from .screening_notes_integration_service import (
     ScreeningNotesIntegrationService,
     trigger_screening_notes_integration,
 )
+from .call_result_processor import process_call_results
 from .teams_service import TeamsService, get_teams_service
 from .ontology_service import OntologyService
 from .ats_import_service import ATSImportService
@@ -42,6 +43,7 @@ __all__ = [
     "get_livekit_service",
     "ScreeningNotesIntegrationService",
     "trigger_screening_notes_integration",
+    "process_call_results",
     "TeamsService",
     "get_teams_service",
     "OntologyService",

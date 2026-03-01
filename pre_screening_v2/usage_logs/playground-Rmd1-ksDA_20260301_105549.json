@@ -1,0 +1,16 @@
+{
+  "room": "playground-Rmd1-ksDA",
+  "timestamp": "20260301_105549",
+  "candidate_name": "Mark Verbeke",
+  "job_title": "Bakkerij Medewerker",
+  "llm_prompt_tokens": 3026,
+  "llm_completion_tokens": 55,
+  "tts_characters": 291,
+  "stt_audio_duration": 5.04999999999999,
+  "cost_usd": {
+    "llm": 0.001298,
+    "tts": 0.003274,
+    "stt": 0.000648,
+    "total": 0.00522
+  }
+}

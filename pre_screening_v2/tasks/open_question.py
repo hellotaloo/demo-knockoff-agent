@@ -12,6 +12,7 @@ class OpenQuestionResult:
     answer_summary: str
     candidate_note: str = ""
     recruiter_requested: bool = False
+    answered: bool = False  # True only when the candidate actually answered this question
 
 
 class OpenQuestionTask(AgentTask[OpenQuestionResult]):
@@ -71,6 +72,7 @@ Vraag: "{question_text}"
             self.complete(OpenQuestionResult(
                 answer_summary="Kandidaat kon de vraag niet beantwoorden",
                 candidate_note=self._candidate_note,
+                answered=True,
             ))
 
     @function_tool()
@@ -89,6 +91,7 @@ Vraag: "{question_text}"
         self.complete(OpenQuestionResult(
             answer_summary=answer_summary,
             candidate_note=self._candidate_note,
+            answered=True,
         ))
 
     @function_tool()
@@ -100,6 +103,7 @@ Vraag: "{question_text}"
             answer_summary="Kandidaat wil met recruiter praten",
             candidate_note=self._candidate_note,
             recruiter_requested=True,
+            answered=True,
         ))
 
     @function_tool()
@@ -112,6 +116,7 @@ Vraag: "{question_text}"
             self.complete(OpenQuestionResult(
                 answer_summary=answer_summary,
                 candidate_note=self._candidate_note,
+                answered=True,
             ))
             return
         return msg

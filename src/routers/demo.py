@@ -323,6 +323,26 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                         json.dumps(metadata))
                     created_ontology_relations += 1
 
+    # ---- Seed default office location and assign to all vacancies ----
+    office_location_id = None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                INSERT INTO ats.office_locations (workspace_id, name, address, is_default)
+                VALUES ($1, $2, $3, true)
+                RETURNING id
+            """, DEFAULT_WORKSPACE_ID, "ITZU Antwerpen Centraal", "Mechelsesteenweg 27, 2018 Antwerpen")
+            office_location_id = row["id"]
+
+            # Assign to all vacancies in this workspace
+            await conn.execute("""
+                UPDATE ats.vacancies SET office_location_id = $1 WHERE workspace_id = $2
+            """, office_location_id, DEFAULT_WORKSPACE_ID)
+
+        logger.info(f"Seeded office location {office_location_id} and assigned to all vacancies")
+    except Exception as e:
+        logger.warning(f"Failed to seed office location (table may not exist yet): {e}")
+
     return {
         "status": "success",
         "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities, {created_ontology_entities} ontology entities, {created_ontology_relations} ontology relations. Use POST /demo/import-ats to import vacancies from ATS.",
@@ -385,6 +405,12 @@ async def reset_demo_data(
 
             # Finally: vacancies (clear recruiter_id and client_id first for FK safety)
             await conn.execute("DELETE FROM ats.vacancies")
+
+            # Delete office locations (after vacancies, which reference them)
+            try:
+                await conn.execute("DELETE FROM ats.office_locations")
+            except Exception:
+                pass  # Table may not exist yet
 
             # Delete recruiters and clients
             await conn.execute("DELETE FROM ats.recruiters")

@@ -27,6 +27,7 @@ from src.config import ELEVENLABS_WEBHOOK_SECRET, logger
 from src.models.webhook import ElevenLabsWebhookPayload
 from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
+from src.services.call_result_processor import process_call_results
 from src.database import get_db_pool
 from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
 from src.services.whatsapp_service import send_whatsapp_message
@@ -46,7 +47,7 @@ async def _safe_process_conversation(
     conversation_id: uuid.UUID,
     vacancy_id: str,
     pre_screening: dict,
-    completion_outcome: str | None
+    completion_outcome: dict | None
 ):
     """
     Wrapper for background transcript processing with error handling.
@@ -68,62 +69,26 @@ async def _process_whatsapp_conversation(
     conversation_id: uuid.UUID,
     vacancy_id: str,
     pre_screening: dict,
-    completion_outcome: str | None
+    completion_outcome: dict | None
 ):
     """
-    Process a completed WhatsApp conversation using the transcript processor.
+    Process a completed WhatsApp conversation.
 
-    Fetches messages from conversation_messages table and runs them through
-    the same transcript processor used for voice calls.
+    Stores basic results (knockout pass/fail, open answers) from the agent's own
+    evaluation, then triggers the shared post-processor for AI scoring + summary.
+    Messages are already stored in real-time by _save_messages_background().
     """
     from datetime import datetime
 
     logger.info(f"Processing WhatsApp conversation {conversation_id}")
 
-    # Fetch all messages for this conversation
-    messages = await pool.fetch(
-        """
-        SELECT role, message, created_at
-        FROM ats.conversation_messages
-        WHERE conversation_id = $1
-        ORDER BY created_at
-        """,
-        conversation_id
-    )
-
-    if not messages:
-        logger.warning(f"No messages found for conversation {conversation_id}")
-        return
-
-    # Convert to transcript format (same as voice)
-    transcript = []
-    for msg in messages:
-        transcript.append({
-            "role": "user" if msg["role"] == "user" else "agent",
-            "message": msg["message"],
-            "time_in_call_secs": 0  # Not applicable for WhatsApp
-        })
-
-    # Get knockout and qualification questions
-    knockout_questions = []
-    qualification_questions = []
-
-    for i, q in enumerate(pre_screening.get("knockout_questions", []), 1):
-        q_dict = dict(q) if hasattr(q, 'keys') else q
-        q_dict["id"] = q_dict.get("id") or f"ko_{i}"
-        knockout_questions.append(q_dict)
-
-    for i, q in enumerate(pre_screening.get("qualification_questions", []), 1):
-        q_dict = dict(q) if hasattr(q, 'keys') else q
-        q_dict["id"] = q_dict.get("id") or f"qual_{i}"
-        qualification_questions.append(q_dict)
-
-    # Get conversation details BEFORE processing (including linked application_id)
+    # Get conversation details (including linked application_id)
     conv_row = await pool.fetchrow(
         """
-        SELECT vacancy_id, candidate_name, candidate_phone, is_test, application_id
-        FROM ats.screening_conversations
-        WHERE id = $1
+        SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone, sc.is_test,
+               sc.application_id, sc.pre_screening_id, sc.candidate_id
+        FROM ats.screening_conversations sc
+        WHERE sc.id = $1
         """,
         conversation_id
     )
@@ -136,20 +101,35 @@ async def _process_whatsapp_conversation(
     candidate_name = conv_row["candidate_name"] or "Unknown"
     candidate_phone = conv_row["candidate_phone"]
     is_test = conv_row["is_test"] or False
+    pre_screening_id = conv_row["pre_screening_id"]
 
-    # Find existing application - prefer the linked application_id from conversation
+    # Calculate call duration from messages
+    messages = await pool.fetch(
+        "SELECT created_at FROM ats.conversation_messages WHERE conversation_id = $1 ORDER BY created_at",
+        conversation_id
+    )
+    first_msg = messages[0]["created_at"] if messages else None
+    last_msg = messages[-1]["created_at"] if messages else None
+    duration_seconds = int((last_msg - first_msg).total_seconds()) if first_msg and last_msg else 0
+
+    # Build knockout question ID map (positional, from pre_screening config)
+    knockout_questions = pre_screening.get("knockout_questions", [])
+    qualification_questions = pre_screening.get("qualification_questions", [])
+
+    # Parse the agent's completion outcome for basic results
+    outcome = completion_outcome or {}
+    agent_knockout_results = outcome.get("knockout_results", [])
+    agent_open_results = outcome.get("open_results", [])
+    qualified = outcome.get("qualified", False)
+
+    # Find existing application
     existing_app = None
     if conv_row["application_id"]:
-        # Use the directly linked application (unique per conversation)
         existing_app = await pool.fetchrow(
-            """
-            SELECT id, candidate_id FROM ats.applications
-            WHERE id = $1 AND status != 'completed'
-            """,
+            "SELECT id, candidate_id FROM ats.applications WHERE id = $1 AND status != 'completed'",
             conv_row["application_id"]
         )
 
-    # Fallback to phone/name matching for legacy conversations without application_id
     if not existing_app and candidate_phone:
         existing_app = await pool.fetchrow(
             """
@@ -168,41 +148,7 @@ async def _process_whatsapp_conversation(
             vacancy_uuid, candidate_name
         )
 
-    if existing_app:
-        # Set status to 'processing' BEFORE transcript analysis (commits immediately)
-        await pool.execute(
-            "UPDATE ats.applications SET status = 'processing' WHERE id = $1",
-            existing_app["id"]
-        )
-        logger.info(f"🔄 Application {existing_app['id']} status -> processing")
-
-    # Update workflow to 'processing' step
-    try:
-        orchestrator = await get_orchestrator()
-        workflow = await orchestrator.find_by_context("conversation_id", str(conversation_id))
-        if workflow:
-            await orchestrator.service.update_step(workflow["id"], "processing")
-            logger.info(f"🔄 Workflow {workflow['id']} step -> processing")
-    except Exception as e:
-        logger.warning(f"Could not update workflow to processing: {e}")
-
-    # Process transcript (AI analysis happens here)
-    call_date = datetime.now().strftime("%Y-%m-%d")
-    result = await process_transcript(
-        transcript=transcript,
-        knockout_questions=knockout_questions,
-        qualification_questions=qualification_questions,
-        call_date=call_date,
-    )
-
-    logger.info(f"Transcript processing complete: overall_passed={result.overall_passed}")
-
-    # Calculate call duration (approximate from message timestamps)
-    first_msg = messages[0]["created_at"]
-    last_msg = messages[-1]["created_at"]
-    duration_seconds = int((last_msg - first_msg).total_seconds()) if first_msg and last_msg else 0
-
-    # Look up interview_slot from scheduled_interviews table (created during conversation)
+    # Look up interview_slot
     interview_slot = None
     scheduled = await pool.fetchrow(
         "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
@@ -219,10 +165,10 @@ async def _process_whatsapp_conversation(
             logger.warning(f"Could not parse interview slot: {e}")
             interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
 
+    # Store basic results in transaction
     async with pool.acquire() as conn:
         async with conn.transaction():
             if existing_app:
-                # Update existing application with results
                 application_id = existing_app["id"]
                 await conn.execute(
                     """
@@ -232,15 +178,14 @@ async def _process_whatsapp_conversation(
                         summary = $3, interview_slot = $4, status = 'completed'
                     WHERE id = $5
                     """,
-                    result.overall_passed,
+                    qualified,
                     duration_seconds,
-                    result.summary,
+                    "Verwerken...",
                     interview_slot,
                     application_id
                 )
-                logger.info(f"✅ Application {application_id} status -> completed")
+                logger.info(f"Application {application_id} status -> completed")
             else:
-                # Create new application (already completed)
                 app_row = await conn.fetchrow(
                     """
                     INSERT INTO ats.applications
@@ -252,47 +197,46 @@ async def _process_whatsapp_conversation(
                     vacancy_uuid,
                     candidate_name,
                     candidate_phone,
-                    result.overall_passed,
+                    qualified,
                     duration_seconds,
-                    result.summary,
+                    "Verwerken...",
                     interview_slot,
                     is_test
                 )
                 application_id = app_row["id"]
                 logger.info(f"Created new application {application_id} with status=completed")
 
-            # Store knockout results
-            for kr in result.knockout_results:
+            # Store knockout results (matched by position to pre_screening_questions)
+            for i, kr in enumerate(agent_knockout_results):
+                question_id = str(knockout_questions[i]["id"]) if i < len(knockout_questions) else f"ko_{i+1}"
+                question_text = kr.get("question", "")
                 await conn.execute(
                     """
                     INSERT INTO ats.application_answers
-                    (application_id, question_id, question_text, answer, passed, score, rating, source)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'whatsapp')
+                    (application_id, question_id, question_text, answer, passed, source)
+                    VALUES ($1, $2, $3, $4, $5, 'whatsapp')
                     """,
                     application_id,
-                    kr.id,
-                    kr.question_text,
-                    kr.answer,
-                    kr.passed,
-                    kr.score,
-                    kr.rating
+                    question_id,
+                    question_text,
+                    kr.get("answer", ""),
+                    kr.get("passed"),
                 )
 
-            # Store qualification results
-            for qr in result.qualification_results:
+            # Store open question results (matched by position to qualification questions)
+            for i, oq in enumerate(agent_open_results):
+                question_id = str(qualification_questions[i]["id"]) if i < len(qualification_questions) else f"qual_{i+1}"
+                question_text = oq.get("question", "") if isinstance(oq.get("question"), str) else ""
                 await conn.execute(
                     """
                     INSERT INTO ats.application_answers
-                    (application_id, question_id, question_text, answer, passed, score, rating, source, motivation)
-                    VALUES ($1, $2, $3, $4, NULL, $5, $6, 'whatsapp', $7)
+                    (application_id, question_id, question_text, answer, source)
+                    VALUES ($1, $2, $3, $4, 'whatsapp')
                     """,
                     application_id,
-                    qr.id,
-                    qr.question_text,
-                    qr.answer,
-                    qr.score,
-                    qr.rating,
-                    qr.motivation
+                    question_id,
+                    question_text,
+                    oq.get("answer", ""),
                 )
 
             # Mark conversation as completed
@@ -305,46 +249,13 @@ async def _process_whatsapp_conversation(
                 conversation_id
             )
 
-    logger.info(f"✅ WhatsApp conversation {conversation_id} processed: application {application_id}")
+    logger.info(f"WhatsApp conversation {conversation_id} basic results stored: application {application_id}")
 
-    # Log activity: screening completed + processed with rich metadata
+    # Log activity
     candidate_id = existing_app["candidate_id"] if existing_app and existing_app.get("candidate_id") else None
     if candidate_id:
         activity_service = ActivityService(pool)
-
-        # Calculate overall score from qualification results
-        scores = [qr.score for qr in result.qualification_results if qr.score is not None]
-        avg_score = round(sum(scores) / len(scores)) if scores else None
-
-        # Calculate knockout stats
-        knockout_passed = sum(1 for kr in result.knockout_results if kr.passed)
-        knockout_total = len(result.knockout_results)
-
-        # Get last answer from messages for context
-        last_user_answer = None
-        for msg in reversed(messages):
-            if msg["role"] == "user":
-                last_user_answer = msg["message"][:100] + "..." if len(msg["message"]) > 100 else msg["message"]
-                break
-
-        # Build rich metadata
-        activity_metadata = {
-            "score": avg_score,
-            "knockout_passed": knockout_passed,
-            "knockout_total": knockout_total,
-            "duration_seconds": duration_seconds,
-        }
-        if last_user_answer:
-            activity_metadata["last_answer"] = last_user_answer
-
-        # If disqualified, add reason
-        if not result.overall_passed:
-            failed_knockouts = [kr.question_text for kr in result.knockout_results if not kr.passed]
-            if failed_knockouts:
-                activity_metadata["knockout_failed"] = failed_knockouts[0][:50]
-
-        # Log screening completed
-        event_type = ActivityEventType.QUALIFIED if result.overall_passed else ActivityEventType.DISQUALIFIED
+        event_type = ActivityEventType.QUALIFIED if qualified else ActivityEventType.DISQUALIFIED
         await activity_service.log(
             candidate_id=str(candidate_id),
             event_type=event_type,
@@ -352,61 +263,20 @@ async def _process_whatsapp_conversation(
             vacancy_id=str(vacancy_uuid),
             channel=ActivityChannel.WHATSAPP,
             actor_type=ActorType.AGENT,
-            metadata=activity_metadata,
-            summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
+            metadata={"agent_outcome": outcome.get("outcome", "")},
+            summary=f"Pre-screening {'geslaagd' if qualified else 'niet geslaagd'}"
         )
 
-    # Trigger screening notes integration (Google Doc creation + calendar attachment)
-    # Runs as background task for qualified candidates with scheduled interviews
-    if result.overall_passed:
-        asyncio.create_task(trigger_screening_notes_integration(
-            pool=pool,
+    # Trigger shared post-processor (scoring + summary + downstream events)
+    if pre_screening_id:
+        await process_call_results(
             application_id=application_id,
-            recruiter_email=os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"),
-        ))
-        logger.info(f"📄 Triggered screening notes integration for application {application_id}")
-
-    # Notify workflow orchestrator that screening is complete
-    # This triggers unified notification handling (WhatsApp confirmation + Teams notification)
-    try:
-        orchestrator = await get_orchestrator()
-        workflow = await orchestrator.find_by_context("conversation_id", str(conversation_id))
-        if workflow:
-            # Get interview_slot from scheduled_interviews table (created during conversation)
-            interview_slot = None
-            scheduled = await pool.fetchrow(
-                "SELECT selected_date, selected_time FROM ats.scheduled_interviews WHERE conversation_id = $1",
-                str(conversation_id)
-            )
-            if scheduled:
-                from zoneinfo import ZoneInfo
-                try:
-                    hour = int(scheduled["selected_time"].replace("u", "").replace("h", ""))
-                    tz = ZoneInfo("Europe/Brussels")
-                    dt = datetime.combine(scheduled["selected_date"], datetime.min.time(), tzinfo=tz).replace(hour=hour)
-                    interview_slot = dt.isoformat()
-                except Exception as e:
-                    logger.warning(f"Could not parse interview slot: {e}")
-                    interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
-
-            await orchestrator.handle_event(
-                workflow_id=workflow["id"],
-                event="screening_completed",
-                payload={
-                    "qualified": result.overall_passed,
-                    "interview_slot": interview_slot,
-                    "application_id": str(application_id),
-                    "candidate_name": candidate_name,
-                    "candidate_phone": candidate_phone,
-                    "summary": result.summary,
-                },
-            )
-            logger.info(f"✅ Workflow event sent for conversation {conversation_id}")
-        else:
-            logger.debug(f"No workflow found for conversation {conversation_id} (legacy flow)")
-    except Exception as e:
-        logger.error(f"❌ Failed to notify workflow orchestrator: {e}")
-        # Don't fail the whole process if workflow notification fails
+            pre_screening_id=pre_screening_id,
+            conversation_id=conversation_id,
+            vacancy_id=vacancy_uuid,
+            candidate_name=candidate_name,
+            channel="whatsapp",
+        )
 
 
 async def _save_whatsapp_scheduled_interview(
@@ -685,9 +555,8 @@ async def _webhook_impl_vacancy_specific(
         complete = is_conversation_complete(agent)
         completion_outcome = None
         if complete:
-            outcome = get_conversation_outcome(agent)
-            completion_outcome = outcome.get("outcome", "completed")
-            logger.info(f"🏁 Conversation complete: phase={agent.state.phase.value}, outcome={completion_outcome}")
+            completion_outcome = get_conversation_outcome(agent)
+            logger.info(f"🏁 Conversation complete: phase={agent.state.phase.value}, outcome={completion_outcome.get('outcome', '')}")
             # Invalidate agent cache on completion
             await agent_cache.invalidate(conv_id_str)
 

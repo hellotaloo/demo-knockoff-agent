@@ -103,6 +103,22 @@ async def stream_screening_chat(
             for q in questions if q["question_type"] == "qualification"
         ]
 
+        # Fetch office location for confirmation message
+        office_location = ""
+        office_address = ""
+        loc_row = await pool.fetchrow(
+            """
+            SELECT ol.name, ol.address
+            FROM ats.vacancies v
+            JOIN ats.office_locations ol ON ol.id = v.office_location_id
+            WHERE v.id = $1
+            """,
+            vacancy_uuid
+        )
+        if loc_row:
+            office_location = loc_row["name"] or ""
+            office_address = loc_row["address"] or ""
+
         # Create new agent
         agent = create_simple_agent(
             candidate_name=candidate_name,
@@ -111,6 +127,8 @@ async def stream_screening_chat(
             knockout_questions=knockout_questions,
             open_questions=open_questions,
             is_test=is_test,
+            office_location=office_location,
+            office_address=office_address,
         )
 
         # Cache it for this session
@@ -144,10 +162,16 @@ async def stream_screening_chat(
     yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Antwoord genereren...'})}\n\n"
 
     try:
-        # For new conversation, use get_initial_message() for proper greeting
+        # For new conversation, use fixed template copy (matches the Twilio template)
         # For continuation, process the user's message
         if is_new:
-            response_text = await agent.get_initial_message()
+            first_name = (candidate_name or "daar").split()[0]
+            response_text = (
+                f"Hey {first_name}! 👋\n"
+                f"Leuk dat je interesse hebt in de functie {vacancy['title']}.\n\n"
+                f"Ik heb een paar korte vragen voor je. Dit duurt maar een paar minuutjes.\n"
+                f"Ben je klaar om te beginnen?"
+            )
         else:
             response_text = await agent.process_message(message)
 

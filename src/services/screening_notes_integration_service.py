@@ -153,18 +153,16 @@ class ScreeningNotesIntegrationService:
             "scheduled_interview_id": str(scheduled["id"]),
         }
 
-        # 4. Update calendar event with attachment and summary
+        # 4. Update calendar event with attachment and rich description
         try:
-            # Build description with executive summary
             summary_text = app_row["summary"] or ""
             candidate_name = app_row["candidate_name"] or "Onbekende kandidaat"
 
-            description_content = f"""--- Pre-screening Samenvatting ---
-{summary_text}
----
-
-Kandidaat: {candidate_name}
-"""
+            description_content = await self._build_rich_description(
+                application_id=application_id,
+                candidate_name=candidate_name,
+                summary_text=summary_text,
+            )
 
             # Attach doc and update description
             attachment_success = await calendar_service.add_attachment_to_event(
@@ -218,6 +216,74 @@ Kandidaat: {candidate_name}
                 logger.warning(f"Also failed without screening_doc_url: {e2}")
 
         return result
+
+    async def _build_rich_description(
+        self,
+        application_id: uuid.UUID,
+        candidate_name: str,
+        summary_text: str,
+    ) -> str:
+        """Build an HTML calendar event description matching the Google Doc style."""
+
+        # Fetch answers joined with pre_screening_questions to get question_type
+        rows = await self.pool.fetch(
+            """
+            SELECT aa.question_text, aa.answer, aa.passed, aa.score, aa.rating,
+                   COALESCE(psq.question_type, 'qualification') AS question_type
+            FROM ats.application_answers aa
+            LEFT JOIN ats.pre_screening_questions psq ON psq.id::text = aa.question_id
+            WHERE aa.application_id = $1
+            ORDER BY psq.position ASC NULLS LAST
+            """,
+            application_id,
+        )
+
+        knockout_items = []
+        qualification_items = []
+        qualification_scores = []
+
+        for row in rows:
+            q_text = row["question_text"] or ""
+            answer = row["answer"] or "\u2014"
+
+            if row["question_type"] == "knockout":
+                if row["passed"] is True:
+                    label = "Bevestigd \u2705"
+                elif row["passed"] is False:
+                    label = "Niet bevestigd \u274c"
+                else:
+                    label = "Onduidelijk \u2753"
+                knockout_items.append(f"<li><b>{q_text}</b><br>&nbsp;&nbsp;&nbsp;\u2022 {label}</li>")
+            else:
+                score = row["score"]
+                rating = row["rating"] or ""
+                if score is not None:
+                    qualification_scores.append(score)
+                score_rating = f"{score}% \u2013 {rating}" if score is not None and rating else ("\u2014" if score is None else f"{score}%")
+                qualification_items.append(
+                    f"<li><b>{q_text}</b> ({score_rating})<br>"
+                    f"&nbsp;&nbsp;&nbsp;<i>\"{answer}\"</i></li>"
+                )
+
+        # Assemble HTML description
+        html = []
+        html.append(
+            f"\U0001f464 <b>Kandidaat:</b> {candidate_name} (nieuwe kandidaat)<br>"
+            f"\U0001f4cb ATS: <a href=\"https://taloo.be\">Bekijk fiche</a><br><br>"
+        )
+
+        if summary_text:
+            html.append(f"\U0001f4dd <b>Samenvatting</b><br>{summary_text}<br><br>")
+
+        if knockout_items:
+            html.append(f"\u2757 <b>Knockoutvragen</b><ul>{''.join(knockout_items)}</ul>")
+
+        if qualification_items:
+            avg = round(sum(qualification_scores) / len(qualification_scores)) if qualification_scores else None
+            avg_display = f" \u2014 gemiddeld {avg}%" if avg is not None else ""
+            html.append(f"\U0001f4ca <b>Kwalificatievragen{avg_display}</b><ul>{''.join(qualification_items)}</ul>")
+
+        return "".join(html)
 
 
 async def trigger_screening_notes_integration(

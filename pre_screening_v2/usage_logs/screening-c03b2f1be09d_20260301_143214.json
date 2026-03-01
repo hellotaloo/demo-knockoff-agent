@@ -1,0 +1,16 @@
+{
+  "room": "screening-c03b2f1be09d",
+  "timestamp": "20260301_143214",
+  "candidate_name": "Lars Bakker",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 18972,
+  "llm_completion_tokens": 628,
+  "tts_characters": 1911,
+  "stt_audio_duration": 69.44999999999992,
+  "cost_usd": {
+    "llm": 0.008594,
+    "tts": 0.021499,
+    "stt": 0.008913,
+    "total": 0.039005
+  }
+}

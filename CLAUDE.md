@@ -121,37 +121,62 @@ All agents are Google ADK agents using Gemini models.
 
 ## Database
 
-PostgreSQL with 25+ migrations in `migrations/`. Schema auto-runs on startup via `run_schema_migrations()`.
+PostgreSQL hosted on Supabase with branch-based environments.
 
 ### Supabase Environments
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  ALWAYS USE THE LOCAL BRANCH FOR MIGRATIONS                                 │
+│  ALWAYS USE THE LOCAL BRANCH FOR DDL CHANGES                                │
 │  Project ID: vrpdzvattqlrtbaowapx                                           │
 │                                                                             │
-│  NEVER modify the staging (main) branch directly!                           │
+│  NEVER modify the staging (main) branch schema directly!                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 | Environment | Branch | Project Ref | Use For |
 |-------------|--------|-------------|---------|
-| **Local dev** | local | `vrpdzvattqlrtbaowapx` | All development, testing, and migrations |
+| **Local dev** | local | `vrpdzvattqlrtbaowapx` | All development, testing, and DDL changes |
 | **Staging/Demo** | main | `beniqwbanoqhxyrjwulg` | Cloud Run demos - migrate via merge only |
 | **Production** | (future) | TBD | Not set up yet |
 
+### Creating & Modifying Tables (CRITICAL)
+
+**ALWAYS use `apply_migration` via the Supabase MCP** for any DDL changes (CREATE TABLE, ALTER TABLE, etc.).
+This ensures changes are tracked as Supabase migrations and can be merged from local → main.
+
+**NEVER use `execute_sql` for DDL changes** — it bypasses the migration system and changes won't be included in branch merges.
+
+**Example — Creating a new table:**
+```
+mcp__plugin_supabase_supabase__apply_migration(
+    project_id="vrpdzvattqlrtbaowapx",
+    name="create_office_locations",
+    query="CREATE TABLE ats.office_locations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), ...);"
+)
+```
+
+**Example — Adding a column:**
+```
+mcp__plugin_supabase_supabase__apply_migration(
+    project_id="vrpdzvattqlrtbaowapx",
+    name="add_analysis_result_to_pre_screenings",
+    query="ALTER TABLE ats.pre_screenings ADD COLUMN analysis_result JSONB;"
+)
+```
+
 ### Migration Workflow
 
-**Step 1: Develop locally**
-- Write and test migrations on the `local` branch (`vrpdzvattqlrtbaowapx`)
-- Use Supabase MCP with `project_id: vrpdzvattqlrtbaowapx`
+**Step 1: Develop on local branch**
+- Use `apply_migration` with `project_id: vrpdzvattqlrtbaowapx` for ALL schema changes
+- Use `execute_sql` with `project_id: vrpdzvattqlrtbaowapx` for data queries/inserts only
 
 **Step 2: Deploy to staging**
-- When ready to deploy to staging/demo, use Supabase branch merge:
+- Merge local → main via Supabase MCP:
 ```
 mcp__plugin_supabase_supabase__merge_branch(branch_id="23001d49-d5ee-4820-8186-5e6d4b6c869a")
 ```
-- This applies all migrations from local → staging (main)
+- This applies all tracked migrations from local → staging (main)
 
 **Step 3: Verify**
 - Test on Cloud Run staging environment
@@ -160,8 +185,8 @@ mcp__plugin_supabase_supabase__merge_branch(branch_id="23001d49-d5ee-4820-8186-5
 ### MCP Tool Usage
 
 When using Supabase MCP tools:
-- `apply_migration` → **ALWAYS** use `project_id: vrpdzvattqlrtbaowapx` (local)
-- `execute_sql` → Use `vrpdzvattqlrtbaowapx` for dev, `beniqwbanoqhxyrjwulg` only for read-only queries
+- `apply_migration` → **ALWAYS** use `project_id: vrpdzvattqlrtbaowapx` (local) — for ALL DDL changes
+- `execute_sql` → Use `vrpdzvattqlrtbaowapx` for dev, `beniqwbanoqhxyrjwulg` only for read-only queries. **NEVER for DDL.**
 - `list_tables` → Either project is fine for inspection
 
 ## When Making Changes

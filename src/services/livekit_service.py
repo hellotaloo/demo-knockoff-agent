@@ -38,7 +38,7 @@ class LiveKitService:
         if not LIVEKIT_API_SECRET:
             raise RuntimeError("LIVEKIT_API_SECRET environment variable is required")
         if not SIP_OUTBOUND_TRUNK_ID:
-            raise RuntimeError("SIP_OUTBOUND_TRUNK_ID environment variable is required")
+            logger.warning("SIP_OUTBOUND_TRUNK_ID not set — outbound SIP calls will be disabled")
 
         self.agent_name = LIVEKIT_AGENT_NAME
         self.sip_trunk_id = SIP_OUTBOUND_TRUNK_ID
@@ -116,6 +116,14 @@ class LiveKitService:
         Returns:
             dict with success, message, call_id (room_name), status
         """
+        if not self.sip_trunk_id:
+            return {
+                "success": False,
+                "message": "SIP_OUTBOUND_TRUNK_ID not configured — cannot make outbound calls",
+                "call_id": None,
+                "status": "failed",
+            }
+
         knockout_questions = knockout_questions or []
         qualification_questions = qualification_questions or []
 
@@ -177,6 +185,41 @@ class LiveKitService:
                 "call_id": None,
                 "status": "failed",
             }
+
+    def create_playground_token(
+        self,
+        room_name: str,
+        session_input: dict,
+        participant_identity: str = "playground-user",
+        participant_name: str = "Playground User",
+    ) -> dict:
+        """
+        Generate a LiveKit access token for browser playground sessions.
+
+        The token includes room_config with agent dispatch, so when the browser
+        connects, LiveKit auto-creates the room and dispatches the agent.
+        """
+        token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET) \
+            .with_identity(participant_identity) \
+            .with_name(participant_name) \
+            .with_grants(api.VideoGrants(
+                room_join=True,
+                room=room_name,
+                can_publish=True,
+                can_subscribe=True,
+            )) \
+            .with_room_config(api.RoomConfiguration(
+                agents=[api.RoomAgentDispatch(
+                    agent_name=self.agent_name,
+                    metadata=json.dumps(session_input),
+                )],
+            ))
+
+        return {
+            "livekit_url": LIVEKIT_URL,
+            "access_token": token.to_jwt(),
+            "room_name": room_name,
+        }
 
     async def close(self):
         """Clean up the LiveKit API client."""

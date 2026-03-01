@@ -349,6 +349,42 @@ async def run_schema_migrations(pool: asyncpg.Pool):
 
         logger.info("Ontology tables and seed data initialized")
 
+        # =====================================================================
+        # Office locations table
+        # =====================================================================
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.office_locations (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                name        VARCHAR(200) NOT NULL,
+                address     VARCHAR(500) NOT NULL,
+                is_default  BOOLEAN NOT NULL DEFAULT false,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """)
+        await pool.execute("""
+            CREATE INDEX IF NOT EXISTS idx_office_locations_workspace
+            ON ats.office_locations(workspace_id);
+        """)
+
+        # Add office_location_id FK to vacancies (nullable — not all vacancies have a location yet)
+        await pool.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'ats' AND table_name = 'vacancies'
+                    AND column_name = 'office_location_id'
+                ) THEN
+                    ALTER TABLE ats.vacancies
+                    ADD COLUMN office_location_id UUID REFERENCES ats.office_locations(id) ON DELETE SET NULL;
+                END IF;
+            END $$;
+        """)
+
+        logger.info("Office locations table and vacancy FK ensured")
+
         # Add analysis_result JSONB column to pre_screenings (for interview analysis cache)
         await pool.execute("""
             ALTER TABLE ats.pre_screenings

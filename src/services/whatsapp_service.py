@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from twilio.rest import Client
 
-from src.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, TWILIO_MESSAGING_SERVICE_SID
+from src.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER, TWILIO_MESSAGING_SERVICE_SID, TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,54 @@ async def send_whatsapp_message(to_phone: str, message: str) -> Optional[str]:
 
     except Exception as e:
         logger.error(f"❌ Failed to send WhatsApp message to {to_phone}: {e}")
+        return None
+
+
+async def send_whatsapp_template(
+    to_phone: str,
+    content_sid: str,
+    content_variables: dict[str, str],
+) -> Optional[str]:
+    """
+    Send a WhatsApp content template via Twilio REST API.
+
+    Args:
+        to_phone: Recipient phone number (with or without + prefix)
+        content_sid: Twilio Content Template SID (e.g., "HXxxxxxxxx")
+        content_variables: Template variable mapping (e.g., {"1": "Jan", "2": "dinsdag 4 maart"})
+
+    Returns:
+        Message SID if sent successfully, None otherwise
+    """
+    import json
+
+    try:
+        client = get_twilio_client()
+
+        if not to_phone.startswith("+"):
+            to_phone = f"+{to_phone}"
+
+        loop = asyncio.get_event_loop()
+        kwargs = {
+            "content_sid": content_sid,
+            "content_variables": json.dumps(content_variables),
+            "to": f"whatsapp:{to_phone}",
+        }
+        if TWILIO_MESSAGING_SERVICE_SID:
+            kwargs["messaging_service_sid"] = TWILIO_MESSAGING_SERVICE_SID
+        else:
+            kwargs["from_"] = TWILIO_WHATSAPP_NUMBER
+
+        result = await loop.run_in_executor(
+            None,
+            lambda: client.messages.create(**kwargs)
+        )
+
+        logger.info(f"📤 WhatsApp template sent to {to_phone}: SID={result.sid}, template={content_sid}")
+        return result.sid
+
+    except Exception as e:
+        logger.error(f"❌ Failed to send WhatsApp template to {to_phone}: {e}")
         return None
 
 

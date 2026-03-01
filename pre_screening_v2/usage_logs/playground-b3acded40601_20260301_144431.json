@@ -1,0 +1,16 @@
+{
+  "room": "playground-b3acded40601",
+  "timestamp": "20260301_144431",
+  "candidate_name": "Playground Kandidaat",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 4593,
+  "llm_completion_tokens": 105,
+  "tts_characters": 437,
+  "stt_audio_duration": 29.449999999999957,
+  "cost_usd": {
+    "llm": 0.002005,
+    "tts": 0.004916,
+    "stt": 0.003779,
+    "total": 0.010701
+  }
+}

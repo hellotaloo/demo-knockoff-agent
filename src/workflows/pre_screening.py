@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from src.services.whatsapp_service import send_whatsapp_message
+from src.services.whatsapp_service import send_whatsapp_message, send_whatsapp_template
 
 if TYPE_CHECKING:
     from src.workflows.orchestrator import WorkflowOrchestrator
@@ -179,19 +179,24 @@ async def handle_send_notifications(
 
     notifications_sent = []
 
-    # Send WhatsApp confirmation to candidate (both voice and WhatsApp channels)
-    if candidate_phone:
+    # Send WhatsApp confirmation to candidate (voice channel only — WhatsApp agent already confirms inline)
+    channel = context.get("channel", "unknown")
+    vacancy_id = context.get("vacancy_id", "")
+    if candidate_phone and channel != "whatsapp":
         try:
             whatsapp_sent = await _send_appointment_confirmation_whatsapp(
                 phone=candidate_phone,
                 candidate_name=candidate_name,
                 interview_slot=interview_slot,
+                vacancy_id=vacancy_id,
             )
             if whatsapp_sent:
                 notifications_sent.append("whatsapp")
                 logger.info(f"Workflow {workflow['id']}: sent WhatsApp confirmation")
         except Exception as e:
             logger.error(f"Workflow {workflow['id']}: failed to send WhatsApp: {e}")
+    elif channel == "whatsapp":
+        logger.info(f"Workflow {workflow['id']}: skipping WhatsApp confirmation (agent already confirmed inline)")
 
     # Send Teams notification to recruiter
     try:
@@ -222,39 +227,89 @@ async def _send_appointment_confirmation_whatsapp(
     phone: str,
     candidate_name: str,
     interview_slot: str,
+    vacancy_id: str = "",
 ) -> bool:
     """
-    Send appointment confirmation via WhatsApp.
+    Send appointment confirmation via WhatsApp using a Twilio content template.
+
+    Falls back to a plain text message if the template SID is not configured.
 
     Args:
         phone: Candidate phone number
         candidate_name: Candidate's name
-        interview_slot: ISO datetime string
+        interview_slot: ISO datetime or human-readable slot string
+        vacancy_id: Vacancy UUID (used to look up office location)
 
     Returns:
         True if message was sent successfully
     """
-    # Parse interview slot
+    from src.config import TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION
+    from src.database import get_db_pool
+
+    # Parse interview slot for display (Dutch human-friendly format)
+    DUTCH_DAYS = ["Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag", "Zaterdag", "Zondag"]
+    DUTCH_MONTHS = ["januari", "februari", "maart", "april", "mei", "juni",
+                    "juli", "augustus", "september", "oktober", "november", "december"]
     try:
         dt = datetime.fromisoformat(interview_slot.replace("Z", "+00:00"))
-        date_str = dt.strftime("%d/%m/%Y")
-        time_str = dt.strftime("%H:%M")
+        day_name = DUTCH_DAYS[dt.weekday()]
+        month_name = DUTCH_MONTHS[dt.month - 1]
+        if dt.minute == 0:
+            time_str = f"{dt.hour} uur"
+        else:
+            time_str = f"{dt.hour}:{dt.minute:02d}"
+        slot_display = f"{day_name} {dt.day} {month_name} om {time_str}"
     except Exception:
-        date_str = interview_slot
-        time_str = ""
+        slot_display = interview_slot
 
-    # Extract first name
     first_name = candidate_name.split()[0] if candidate_name else "daar"
 
-    # Build message
-    message = f"""Beste {first_name},
+    # Look up office location from vacancy
+    location_name = ""
+    location_address = ""
+    if vacancy_id:
+        try:
+            pool = await get_db_pool()
+            row = await pool.fetchrow(
+                """
+                SELECT ol.name, ol.address
+                FROM ats.vacancies v
+                JOIN ats.office_locations ol ON ol.id = v.office_location_id
+                WHERE v.id = $1
+                """,
+                uuid.UUID(vacancy_id),
+            )
+            if row:
+                location_name = row["name"]
+                location_address = row["address"]
+        except Exception as e:
+            logger.warning(f"Failed to look up office location for vacancy {vacancy_id}: {e}")
 
-Je afspraak is bevestigd!
-📅 {date_str} om {time_str}
+    # Try content template first
+    if TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION:
+        content_variables = {
+            "1": first_name,
+            "2": slot_display,
+            "3": location_name or "Ons kantoor",
+            "4": location_address or "",
+        }
+        message_sid = await send_whatsapp_template(
+            to_phone=phone,
+            content_sid=TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION,
+            content_variables=content_variables,
+        )
+        return message_sid is not None
 
-Groeten,
-Het Taloo team"""
-
+    # Fallback: plain text (no template configured) — mirrors the Twilio template copy
+    location_line = f"\n📍 {location_name}, {location_address}" if location_name else ""
+    message = (
+        f"Hallo {first_name},\n\n"
+        f"Je sollicitatiegesprek is bevestigd! 🎉\n\n"
+        f"📅 {slot_display}{location_line}\n\n"
+        f"Tip: neem je identiteitskaart mee!\n\n"
+        f"Kun je toch niet? Geen probleem, stuur ons tijdig een berichtje via deze chat om je afspraak te verzetten.\n\n"
+        f"Veel succes,\nAnna van Its You"
+    )
     message_sid = await send_whatsapp_message(phone, message)
     return message_sid is not None
 
@@ -292,12 +347,14 @@ async def _send_teams_notification(
     except Exception:
         formatted_date = interview_slot
 
-    # Look up existing Google Doc URL from scheduled_interviews
-    # (created by trigger_screening_notes_integration in webhook handlers)
+    # Look up existing Google Doc URL and screening stats
     doc_url = None
+    knockout_stats = ""
+    qualification_stats = ""
     if application_id:
         try:
             pool = await get_db_pool()
+            app_uuid = uuid.UUID(application_id)
             row = await pool.fetchrow(
                 """
                 SELECT screening_doc_url
@@ -306,15 +363,40 @@ async def _send_teams_notification(
                 ORDER BY scheduled_at DESC
                 LIMIT 1
                 """,
-                uuid.UUID(application_id)
+                app_uuid,
             )
             if row and row["screening_doc_url"]:
                 doc_url = row["screening_doc_url"]
-                logger.info(f"Found existing screening notes doc: {doc_url}")
-            else:
-                logger.info(f"No screening doc found for application {application_id}")
+
+            # Fetch knockout + qualification stats
+            stats_rows = await pool.fetch(
+                """
+                SELECT aa.passed, aa.score,
+                       COALESCE(psq.question_type, 'qualification') AS question_type
+                FROM ats.application_answers aa
+                LEFT JOIN ats.pre_screening_questions psq ON psq.id::text = aa.question_id
+                WHERE aa.application_id = $1
+                """,
+                app_uuid,
+            )
+            ko_total = 0
+            ko_passed = 0
+            qual_scores = []
+            for sr in stats_rows:
+                if sr["question_type"] == "knockout":
+                    ko_total += 1
+                    if sr["passed"] is True:
+                        ko_passed += 1
+                else:
+                    if sr["score"] is not None:
+                        qual_scores.append(sr["score"])
+            if ko_total:
+                knockout_stats = f"\u2705 Knockoutvragen: {ko_passed}/{ko_total}"
+            if qual_scores:
+                avg = round(sum(qual_scores) / len(qual_scores))
+                qualification_stats = f"\U0001f4ca Kwalificatievragen: {avg}%"
         except Exception as e:
-            logger.warning(f"Failed to look up screening notes doc: {e}")
+            logger.warning(f"Failed to look up screening data: {e}")
 
     # Build Adaptive Card
     card = _build_screening_notification_card(
@@ -324,6 +406,8 @@ async def _send_teams_notification(
         summary=summary,
         doc_url=doc_url,
         channel=channel,
+        knockout_stats=knockout_stats,
+        qualification_stats=qualification_stats,
     )
 
     # Send to Teams
@@ -358,6 +442,8 @@ def _build_screening_notification_card(
     summary: str,
     doc_url: Optional[str],
     channel: str,
+    knockout_stats: str = "",
+    qualification_stats: str = "",
 ) -> dict:
     """
     Build an Adaptive Card for the screening notification.
@@ -374,7 +460,7 @@ def _build_screening_notification_card(
         "body": [
             {
                 "type": "TextBlock",
-                "text": "✅ Nieuwe match gevonden!",
+                "text": "📅 Nieuw interview gepland",
                 "weight": "Bolder",
                 "size": "Large",
                 "color": "Good",
@@ -399,7 +485,21 @@ def _build_screening_notification_card(
         "actions": [],
     }
 
-    # Add summary if available
+    # Add screening results summary
+    results_parts = []
+    if knockout_stats:
+        results_parts.append(knockout_stats)
+    if qualification_stats:
+        results_parts.append(qualification_stats)
+    if results_parts:
+        card["body"].append({
+            "type": "TextBlock",
+            "text": "  \n".join(results_parts),
+            "wrap": True,
+            "spacing": "Medium",
+        })
+
+    # Add executive summary if available
     if summary:
         card["body"].append({
             "type": "TextBlock",
@@ -408,11 +508,16 @@ def _build_screening_notification_card(
             "spacing": "Medium",
         })
 
-    # Add button to view Google Doc
+    # Add buttons
+    card["actions"].append({
+        "type": "Action.OpenUrl",
+        "title": "🔍 Bekijk details",
+        "url": "https://taloo.be",
+    })
     if doc_url:
         card["actions"].append({
             "type": "Action.OpenUrl",
-            "title": "📄 Bekijk volledige notule",
+            "title": "📄 Bekijk notule",
             "url": doc_url,
         })
 

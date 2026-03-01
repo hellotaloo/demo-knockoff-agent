@@ -161,6 +161,8 @@ class ATSImportService:
                 raw_vacancies = await self._fetch_all_pages(client, "/api/v1/vacancies")
 
                 async with self.pool.acquire() as conn:
+                    office_location_id = await self._get_default_office_location_id(conn, workspace_id)
+
                     for vac_data in raw_vacancies:
                         vac = ATSVacancy(**vac_data)
 
@@ -179,13 +181,13 @@ class ATSImportService:
                         row = await conn.fetchrow("""
                             INSERT INTO ats.vacancies
                             (title, company, location, description, status, source, source_id,
-                             recruiter_id, client_id, workspace_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                             recruiter_id, client_id, workspace_id, office_location_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                             RETURNING id
                         """, vac.title, vac.company_name, vac.work_location,
                             vac.description_html, internal_status,
                             "ats_import", vac.external_id,
-                            recruiter_id, client_id, workspace_id)
+                            recruiter_id, client_id, workspace_id, office_location_id)
 
                         result.vacancies_imported += 1
                         imported_vacancies.append({
@@ -544,6 +546,14 @@ class ATSImportService:
 
         return name_to_id
 
+    async def _get_default_office_location_id(self, conn, workspace_id: UUID) -> UUID | None:
+        """Look up the default office location for a workspace."""
+        row = await conn.fetchrow(
+            "SELECT id FROM ats.office_locations WHERE workspace_id = $1 AND is_default = true LIMIT 1",
+            workspace_id,
+        )
+        return row["id"] if row else None
+
     async def _import_vacancies(
         self,
         http_client: httpx.AsyncClient,
@@ -558,6 +568,8 @@ class ATSImportService:
             logger.info(f"Fetched {len(raw_vacancies)} vacancies from ATS")
 
             async with self.pool.acquire() as conn:
+                office_location_id = await self._get_default_office_location_id(conn, workspace_id)
+
                 for vac_data in raw_vacancies:
                     vac = ATSVacancy(**vac_data)
 
@@ -577,12 +589,12 @@ class ATSImportService:
                     await conn.execute("""
                         INSERT INTO ats.vacancies
                         (title, company, location, description, status, source, source_id,
-                         recruiter_id, client_id, workspace_id)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                         recruiter_id, client_id, workspace_id, office_location_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     """, vac.title, vac.company_name, vac.work_location,
                         vac.description_html, internal_status,
                         "ats_import", vac.external_id,
-                        recruiter_id, client_id, workspace_id)
+                        recruiter_id, client_id, workspace_id, office_location_id)
                     result.vacancies_imported += 1
 
         except Exception as e:

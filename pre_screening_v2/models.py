@@ -183,6 +183,9 @@ class CandidateData:
     # Scheduling
     chosen_timeslot: Optional[str] = None
     scheduling_preference: Optional[str] = None
+    calendar_event_id: Optional[str] = None
+    scheduled_date: Optional[str] = None   # YYYY-MM-DD
+    scheduled_time: Optional[str] = None   # e.g. "10 uur"
 
     # Silence tracking
     silence_count: int = 0
@@ -254,4 +257,7 @@ class CandidateData:
             ],
             "chosen_timeslot": self.chosen_timeslot,
             "scheduling_preference": self.scheduling_preference,
+            "calendar_event_id": self.calendar_event_id,
+            "scheduled_date": self.scheduled_date,
+            "scheduled_time": self.scheduled_time,
         }

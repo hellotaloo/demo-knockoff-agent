@@ -13,8 +13,8 @@ from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityC
 from src.repositories import CandidateRepository
 from src.services import ActivityService
 from src.database import get_db_pool
-from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, VAPI_PUBLIC_KEY, logger
-from src.services.whatsapp_service import send_whatsapp_message
+from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, VAPI_PUBLIC_KEY, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
+from src.services.whatsapp_service import send_whatsapp_message, send_whatsapp_template
 from src.services.livekit_service import get_livekit_service
 from src.services.vapi_service import get_vapi_service
 from src.workflows import get_orchestrator
@@ -321,7 +321,7 @@ async def _initiate_voice_screening(
                     workflow_type="pre_screening",
                     context={
                         "channel": "voice",
-                        "conversation_id": result.get("call_id"),
+                        "conversation_id": str(conv_row["id"]),
                         "candidate_name": candidate_name,
                         "candidate_phone": phone_normalized,
                         "vacancy_id": vacancy_id,
@@ -412,6 +412,22 @@ async def _initiate_whatsapp_screening(
             for q in questions if q["question_type"] == "qualification"
         ]
 
+        # Fetch office location for confirmation message
+        office_location = ""
+        office_address = ""
+        loc_row = await pool.fetchrow(
+            """
+            SELECT ol.name, ol.address
+            FROM ats.vacancies v
+            JOIN ats.office_locations ol ON ol.id = v.office_location_id
+            WHERE v.id = $1
+            """,
+            uuid.UUID(vacancy_id)
+        )
+        if loc_row:
+            office_location = loc_row["name"] or ""
+            office_address = loc_row["address"] or ""
+
         # Create the agent
         agent = create_simple_agent(
             candidate_name=candidate_name or "daar",
@@ -420,17 +436,36 @@ async def _initiate_whatsapp_screening(
             knockout_questions=knockout_questions,
             open_questions=open_questions,
             is_test=is_test,
+            office_location=office_location,
+            office_address=office_address,
         )
 
-        # Generate opening message (greeting + "are you ready?")
-        opening_message = await agent.get_initial_message()
-        logger.info(f"📱 Generated opening message for {candidate_name}: {opening_message[:100]}...")
+        # Send opening message — use Twilio content template if configured, else LLM-generated
+        first_name = (candidate_name or "daar").split()[0]
+        if TWILIO_TEMPLATE_INITIATE_PRE_SCREENING:
+            content_variables = {
+                "1": first_name,
+                "2": vacancy_title,
+            }
+            message_sid = await send_whatsapp_template(
+                to_phone=phone,
+                content_sid=TWILIO_TEMPLATE_INITIATE_PRE_SCREENING,
+                content_variables=content_variables,
+            )
+            # Build the plain text equivalent for storing in conversation history
+            opening_message = (
+                f"Hey {first_name}! 👋\n"
+                f"Leuk dat je interesse hebt in de functie {vacancy_title}.\n\n"
+                f"Ik heb een paar korte vragen voor je. Dit duurt maar een paar minuutjes.\n"
+                f"Ben je klaar om te beginnen?"
+            )
+        else:
+            # Fallback: LLM-generated greeting
+            opening_message = await agent.get_initial_message()
+            message_sid = await send_whatsapp_message(phone, opening_message) if opening_message else None
 
-        if not opening_message:
-            raise Exception("Agent did not generate opening message")
+        logger.info(f"📱 Opening message for {candidate_name}: {opening_message[:100]}...")
 
-        # Send WhatsApp message via centralized service (handles ** to * conversion)
-        message_sid = await send_whatsapp_message(phone, opening_message)
         if not message_sid:
             raise Exception("Failed to send WhatsApp message")
 
