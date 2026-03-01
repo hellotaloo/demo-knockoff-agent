@@ -231,13 +231,17 @@ async def get_time_slots(raw_request: Request):
             has_availability=False,
         )
 
-    # Use the voice agent calendar helper
-    from pre_screening_voice_agent.calendar_helpers import get_time_slots_for_voice
+    # Use pre_screening_v2 calendar helpers
+    from pre_screening_v2.calendar_helpers import get_initial_slots, get_slots_for_specific_date
 
-    result = await get_time_slots_for_voice(
-        specific_date=request.specific_date,
-        start_from_days=3,
-    )
+    if request.specific_date:
+        result = await get_slots_for_specific_date(request.specific_date)
+    else:
+        result = await get_initial_slots(
+            start_offset_days=request.days_ahead,
+            num_days=3,
+            max_times_per_day=2,
+        )
 
     response = GetTimeSlotsResponse(
         slots=result["slots"],

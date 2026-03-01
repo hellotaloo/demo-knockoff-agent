@@ -1,0 +1,16 @@
+{
+  "room": "screening-ecd71ebf19c0",
+  "timestamp": "20260301_182232",
+  "candidate_name": "Sven Visser",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 5883,
+  "llm_completion_tokens": 126,
+  "tts_characters": 467,
+  "stt_audio_duration": 35.39999999999995,
+  "cost_usd": {
+    "llm": 0.002555,
+    "tts": 0.005254,
+    "stt": 0.004543,
+    "total": 0.012352
+  }
+}

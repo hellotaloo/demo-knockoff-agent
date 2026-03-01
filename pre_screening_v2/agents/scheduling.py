@@ -134,7 +134,8 @@ class SchedulingAgent(BaseAgent):
         userdata.scheduled_time = slot_time or None
 
         # Create calendar event if possible (fire-and-forget: failure does not block confirmation)
-        if self._use_calendar and slot_date and slot_time:
+        # Skip in playground mode — no real side effects allowed
+        if self._use_calendar and slot_date and slot_time and not userdata.input.is_playground:
             candidate_name = userdata.input.candidate_name or "Kandidaat"
             vacancy_title = userdata.input.job_title or ""
             result = await create_interview_event(candidate_name, slot_date, slot_time, vacancy_title=vacancy_title)
@@ -143,6 +144,8 @@ class SchedulingAgent(BaseAgent):
                 logger.info(f"Calendar event created: {result.get('event_id')}")
             else:
                 logger.warning(f"Calendar event creation failed: {result.get('error')}")
+        elif userdata.input.is_playground:
+            logger.info("Playground mode: skipping calendar event creation")
 
         tomorrow = date.today() + timedelta(days=1)
         tomorrow_str = f"{tomorrow.day} {_MONTH_NAMES[tomorrow.month]}"

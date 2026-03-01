@@ -20,6 +20,7 @@ import httpx
 import asyncpg
 from google.genai import types
 from sqlalchemy.exc import IntegrityError
+from google.adk.errors.already_exists_error import AlreadyExistsError
 
 from src.models.ats_simulator import (
     ATSVacancy,
@@ -329,7 +330,7 @@ class ATSImportService:
                     user_id="ats_import",
                     session_id=session_id,
                 )
-            except IntegrityError:
+            except (IntegrityError, AlreadyExistsError):
                 logger.info(f"Session {session_id} already exists, continuing")
 
             # 2. Run the interview generator agent with simulated reasoning messages

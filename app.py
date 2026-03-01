@@ -107,10 +107,8 @@ from src.routers import (
     agents_router,
     activities_router,
     monitoring_router,
-    elevenlabs_router,
     auth_router,
     workspaces_router,
-    vapi_router,
     livekit_webhook_router,
     teams_router,
     architecture_router,
@@ -207,9 +205,8 @@ async def lifespan(app: FastAPI):
     # Initialize SessionManager
     session_manager = SessionManager(DATABASE_URL)
 
-    # Create all session services
-    # Note: Screening now uses pre_screening_whatsapp_agent with JSON state, not ADK sessions
-    session_manager.create_session_service()
+    # Create session services (only the ones actually used)
+    # Note: Generic session_service removed — it was unused and wasted DB connections
     session_manager.create_interview_session_service(interview_agent, interview_editor_agent)
     session_manager.create_analyst_session_service(recruiter_analyst_agent)
     session_manager.create_document_session_service()
@@ -308,10 +305,8 @@ app.include_router(candidates_router)
 app.include_router(agents_router)
 app.include_router(activities_router)
 app.include_router(monitoring_router)
-app.include_router(elevenlabs_router)
 app.include_router(auth_router)
 app.include_router(workspaces_router)
-app.include_router(vapi_router)
 app.include_router(livekit_webhook_router)
 app.include_router(teams_router)
 app.include_router(architecture_router)

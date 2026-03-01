@@ -70,19 +70,6 @@ from .webhook import (
     ElevenLabsWebhookPayload,
 )
 
-# VAPI models
-from .vapi import (
-    VapiWebhookPayload,
-    VapiEndOfCallReportPayload,
-    VapiStatusUpdatePayload,
-    VapiCallObject,
-    VapiArtifact,
-    VapiTranscriptMessage,
-    VapiMessagePayload,
-    VapiCreateCallRequest,
-    VapiCreateCallResponse,
-)
-
 # LiveKit models
 from .livekit import (
     LiveKitCallResultPayload,
@@ -127,14 +114,6 @@ from .activity import (
     TimelineResponse,
     GlobalActivityResponse,
     GlobalActivitiesResponse,
-)
-
-# ElevenLabs models
-from .elevenlabs import (
-    VoiceConfigRequest,
-    VoiceConfigResponse,
-    UpdateAgentVoiceConfigRequest,
-    UpdateAgentVoiceConfigResponse,
 )
 
 # Auth models
@@ -255,16 +234,6 @@ __all__ = [
     # Webhook
     "ElevenLabsWebhookData",
     "ElevenLabsWebhookPayload",
-    # VAPI
-    "VapiWebhookPayload",
-    "VapiEndOfCallReportPayload",
-    "VapiStatusUpdatePayload",
-    "VapiCallObject",
-    "VapiArtifact",
-    "VapiTranscriptMessage",
-    "VapiMessagePayload",
-    "VapiCreateCallRequest",
-    "VapiCreateCallResponse",
     # LiveKit
     "LiveKitCallResultPayload",
     "LiveKitKnockoutAnswerPayload",
@@ -295,11 +264,6 @@ __all__ = [
     "TimelineResponse",
     "GlobalActivityResponse",
     "GlobalActivitiesResponse",
-    # ElevenLabs
-    "VoiceConfigRequest",
-    "VoiceConfigResponse",
-    "UpdateAgentVoiceConfigRequest",
-    "UpdateAgentVoiceConfigResponse",
     # Auth
     "TokenResponse",
     "RefreshTokenRequest",

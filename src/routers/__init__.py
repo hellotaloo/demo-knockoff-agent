@@ -19,10 +19,8 @@ from .candidates import router as candidates_router
 from .agents import router as agents_router
 from .activities import router as activities_router
 from .monitoring import router as monitoring_router
-from .elevenlabs import router as elevenlabs_router
 from .auth import router as auth_router
 from .workspaces import router as workspaces_router
-from .vapi import router as vapi_router
 from .livekit_webhook import router as livekit_webhook_router
 from .teams import router as teams_router
 from .architecture import router as architecture_router
@@ -50,10 +48,8 @@ __all__ = [
     "agents_router",
     "activities_router",
     "monitoring_router",
-    "elevenlabs_router",
     "auth_router",
     "workspaces_router",
-    "vapi_router",
     "livekit_webhook_router",
     "teams_router",
     "architecture_router",

@@ -140,7 +140,9 @@
       "Bash(supabase branches list --project-ref beniqwbanoqhxyrjwulg)",
       "Bash(supabase --experimental branches merge vrpdzvattqlrtbaowapx --project-ref beniqwbanoqhxyrjwulg)",
       "mcp__livekit-docs__code_search",
-      "Bash(/Users/lunar/Desktop/sites/taloo-workspace/taloo-backend/.venv/bin/pip show livekit-api)"
+      "Bash(/Users/lunar/Desktop/sites/taloo-workspace/taloo-backend/.venv/bin/pip show livekit-api)",
+      "mcp__plugin_supabase_supabase__reset_branch",
+      "Bash(gtimeout 10 uvicorn app:app --port 8080)"
     ],
     "defaultMode": "acceptEdits"
   },

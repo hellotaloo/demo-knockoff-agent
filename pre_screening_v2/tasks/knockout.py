@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 
 from livekit.agents import AgentTask, function_tool, llm
 
 from models import QuestionResult, check_irrelevant
+
+logger = logging.getLogger("knockout")
 
 MAX_TURNS = 4  # question + 3 user turns, then force-exit
 
@@ -53,9 +56,8 @@ Vraag: "{question_text}"
   Goed: "Nee hoor, niet elk weekend. Het gaat om een paar weekends per maand." / "Niet per se, horeca of retail telt ook mee."
   Fout: "Ja hoor, het gaat om een paar weekends per maand." (klinkt alsof je 'elk weekend' bevestigt)
   Dus: wees beknopt en natuurlijk, geef NOOIT de volledige context letterlijk weer.
-- Als de kandidaat iets vraagt dat NIET in de context staat → verzin NOOIT een antwoord. Zeg dat je het noteert voor de recruiter en vraag opnieuw ja of nee.
+- Als de kandidaat iets vraagt dat NIET in de context staat → verzin NOOIT een antwoord. Roep EERST `note_for_recruiter` aan met de vraag, en zeg daarna dat je het noteert voor de recruiter. Vraag opnieuw ja of nee.
   Bijvoorbeeld: "Goede vraag. Dat noteer ik even zodat de recruiter je daar later over kan informeren. Zou je in principe beschikbaar zijn om in het weekend te werken?"
-- Gebruik `note_for_recruiter` om vragen of opmerkingen van de kandidaat te bewaren voor de recruiter.
 {escalation_rule}""",
         )
         self._question_id = question_id
@@ -79,11 +81,14 @@ Vraag: "{question_text}"
     @function_tool()
     async def note_for_recruiter(self, note: str):
         """Bewaar een vraag of opmerking van de kandidaat voor de recruiter. Roep dit aan VOORDAT je mark_pass/confirm_fail aanroept."""
+        logger.info(f"[{self._question_id}] note_for_recruiter called: {note}")
         self._candidate_note = note
+        return "Genoteerd. Vertel de kandidaat dat je het noteert voor de recruiter en ga verder met de vraag."
 
     @function_tool()
     async def mark_pass(self, answer_summary: str):
         """De kandidaat heeft JA geantwoord op de knockout-vraag."""
+        logger.info(f"[{self._question_id}] mark_pass called: {answer_summary}")
         if self.done():
             return
         self.session.userdata.irrelevant_count = 0
@@ -96,6 +101,7 @@ Vraag: "{question_text}"
     @function_tool()
     async def confirm_fail(self, answer_summary: str):
         """De kandidaat heeft NEE geantwoord en dit bevestigd na navraag."""
+        logger.info(f"[{self._question_id}] confirm_fail called: {answer_summary}")
         if self.done():
             return
         self.session.userdata.irrelevant_count = 0
@@ -108,6 +114,7 @@ Vraag: "{question_text}"
     async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
         self._turn_count += 1
         if not self.done() and self._turn_count >= MAX_TURNS:
+            logger.info(f"[{self._question_id}] max turns reached, force-completing as UNCLEAR")
             self.complete(KnockoutResult(
                 result=QuestionResult.UNCLEAR,
                 raw_answer="Kandidaat kon de vraag niet beantwoorden",
@@ -117,6 +124,7 @@ Vraag: "{question_text}"
     @function_tool()
     async def escalate_to_recruiter(self):
         """De kandidaat wil met een echte recruiter praten."""
+        logger.info(f"[{self._question_id}] escalate_to_recruiter called")
         if self.done() or not self._allow_escalation:
             return
         self.complete(KnockoutResult(
@@ -128,6 +136,7 @@ Vraag: "{question_text}"
     @function_tool()
     async def mark_irrelevant(self, answer_summary: str):
         """De kandidaat antwoordt irrelevant of onzinnig. Roep dit METEEN aan bij elk irrelevant antwoord."""
+        logger.info(f"[{self._question_id}] mark_irrelevant called: {answer_summary}")
         if self.done():
             return
         msg = check_irrelevant(self.session.userdata)

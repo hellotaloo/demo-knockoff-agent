@@ -8,15 +8,13 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
-from src.models.vapi import VapiWebCallRequest, VapiWebCallResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
 from src.repositories import CandidateRepository
 from src.services import ActivityService
 from src.database import get_db_pool
-from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, VAPI_PUBLIC_KEY, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
+from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
 from src.services.whatsapp_service import send_whatsapp_message, send_whatsapp_template
 from src.services.livekit_service import get_livekit_service
-from src.services.vapi_service import get_vapi_service
 from src.workflows import get_orchestrator
 from pre_screening_whatsapp_agent import create_simple_agent
 
@@ -271,6 +269,22 @@ async def _initiate_voice_screening(
 
         logger.info(f"Loaded {len(knockout_questions)} knockout + {len(qualification_questions)} qualification questions for voice call")
 
+        # Fetch office location (use spoken_name for TTS-friendly voice output)
+        office_location = ""
+        office_address = ""
+        loc_row = await pool.fetchrow(
+            """
+            SELECT COALESCE(ol.spoken_name, ol.name) as name, ol.address
+            FROM ats.vacancies v
+            JOIN ats.office_locations ol ON ol.id = v.office_location_id
+            WHERE v.id = $1
+            """,
+            uuid.UUID(vacancy_id)
+        )
+        if loc_row:
+            office_location = loc_row["name"] or ""
+            office_address = loc_row["address"] or ""
+
         # Test mode: skip real call, use provided conversation_id
         if test_conversation_id:
             result = {
@@ -292,6 +306,8 @@ async def _initiate_voice_screening(
                 knockout_questions=knockout_questions,
                 qualification_questions=qualification_questions,
                 pre_screening_id=pre_screening_id,
+                office_location=office_location,
+                office_address=office_address,
             )
 
         if result.get("success"):
@@ -557,99 +573,3 @@ async def _initiate_whatsapp_screening(
     except Exception as e:
         logger.error(f"Error initiating WhatsApp screening: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to send WhatsApp message: {str(e)}")
-
-
-@router.post("/screening/web-call", response_model=VapiWebCallResponse)
-async def create_web_call_session(request: VapiWebCallRequest):
-    """
-    Create a VAPI web call session for browser-based voice simulation.
-
-    This is for testing/simulation only - no database records are created.
-    Returns the configuration for the frontend to use with VAPI Web SDK:
-    vapi.start(null, assistantOverrides, squadId)
-
-    The web call uses the same squad as phone calls, with questions
-    injected via variableValues.
-    """
-    if not VAPI_PUBLIC_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="VAPI_PUBLIC_KEY not configured in environment"
-        )
-
-    pool = await get_db_pool()
-
-    # Validate vacancy_id
-    try:
-        vacancy_uuid = uuid.UUID(request.vacancy_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {request.vacancy_id}")
-
-    # Get vacancy and pre-screening
-    row = await pool.fetchrow(
-        """
-        SELECT v.id as vacancy_id, v.title as vacancy_title,
-               ps.id as pre_screening_id, ps.is_online, ps.published_at
-        FROM ats.vacancies v
-        LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
-        WHERE v.id = $1
-        """,
-        vacancy_uuid
-    )
-
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Vacancy not found: {request.vacancy_id}")
-
-    if not row["pre_screening_id"]:
-        raise HTTPException(status_code=400, detail="No pre-screening configured for this vacancy")
-
-    if not row["published_at"]:
-        raise HTTPException(status_code=400, detail="Pre-screening is not published yet")
-
-    if not row["is_online"]:
-        raise HTTPException(status_code=400, detail="Pre-screening is offline. Set it online first.")
-
-    # Fetch questions from database
-    questions = await pool.fetch(
-        """
-        SELECT id, question_type, position, question_text, ideal_answer
-        FROM ats.pre_screening_questions
-        WHERE pre_screening_id = $1
-        ORDER BY question_type, position
-        """,
-        row["pre_screening_id"]
-    )
-
-    knockout_questions = [
-        {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
-        for q in questions if q["question_type"] == "knockout"
-    ]
-    qualification_questions = [
-        {"question_text": q["question_text"], "ideal_answer": q["ideal_answer"] or ""}
-        for q in questions if q["question_type"] == "qualification"
-    ]
-
-    logger.info(f"Web call: loaded {len(knockout_questions)} knockout + {len(qualification_questions)} qualification questions")
-
-    # Extract first name from candidate_name if not provided
-    first_name = request.first_name or request.candidate_name.split()[0]
-
-    # Build web call config using VapiService
-    vapi_service = get_vapi_service()
-    config = vapi_service.create_web_call_config(
-        first_name=first_name,
-        vacancy_id=request.vacancy_id,
-        vacancy_title=row["vacancy_title"],
-        knockout_questions=knockout_questions,
-        qualification_questions=qualification_questions,
-        pre_screening_id=str(row["pre_screening_id"]),
-    )
-
-    logger.info(f"Web call session created for vacancy {request.vacancy_id}, candidate: {request.candidate_name}")
-
-    return VapiWebCallResponse(
-        success=True,
-        squad_id=config["squad_id"],
-        vapi_public_key=VAPI_PUBLIC_KEY,
-        assistant_overrides=config["assistant_overrides"],
-    )

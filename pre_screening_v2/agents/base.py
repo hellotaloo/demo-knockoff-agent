@@ -60,8 +60,8 @@ class BaseAgent(Agent):
         task_group = TaskGroup(chat_ctx=self.chat_ctx)
         for q_id, q_text, q_desc, q_response in questions:
             task_group.add(
-                lambda qid=q_id, qt=q_text, qr=q_response, esc=self._allow_escalation: OpenQuestionTask(
-                    question_id=qid, question_text=qt, allow_escalation=esc, response_message=qr,
+                lambda qid=q_id, qt=q_text, qd=q_desc, qr=q_response, esc=self._allow_escalation: OpenQuestionTask(
+                    question_id=qid, question_text=qt, ideal_answer=qd, allow_escalation=esc, response_message=qr,
                 ),
                 id=q_id,
                 description=q_desc or q_text,

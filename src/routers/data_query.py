@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from google.genai import types
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
+from google.adk.errors.already_exists_error import AlreadyExistsError
 
 from src.models.data_query import DataQueryRequest
 from data_query_agent.agent import set_db_pool as set_data_query_db_pool
@@ -46,7 +47,7 @@ async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator
                 user_id="web",
                 session_id=session_id
             )
-        except IntegrityError:
+        except (IntegrityError, AlreadyExistsError):
             # Session was created by another request, that's fine
             logger.info(f"Analyst session {session_id} already exists")
 

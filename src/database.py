@@ -36,12 +36,12 @@ async def get_db_pool() -> asyncpg.Pool:
         _db_pool = await asyncpg.create_pool(
             raw_url,
             min_size=2,                              # Pre-warm connections
-            max_size=15,                             # Room for concurrent requests
+            max_size=10,                             # Reduced to stay within Supabase Session pooler limits
             command_timeout=60,                      # Query timeout (seconds)
             max_inactive_connection_lifetime=300.0,  # Match Supabase pooler timeout (~5 min)
             setup=setup_connection,                  # Validate on each acquire
         )
-        logger.info("Database connection pool created (min=2, max=15, idle_lifetime=300s)")
+        logger.info("Database connection pool created (min=2, max=10, idle_lifetime=300s)")
     return _db_pool
 
 

@@ -1,0 +1,16 @@
+{
+  "room": "screening-cd78e12aa645",
+  "timestamp": "20260301_183544",
+  "candidate_name": "Eva Visser",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 9729,
+  "llm_completion_tokens": 308,
+  "tts_characters": 819,
+  "stt_audio_duration": 30.09999999999996,
+  "cost_usd": {
+    "llm": 0.004384,
+    "tts": 0.009214,
+    "stt": 0.003863,
+    "total": 0.017461
+  }
+}

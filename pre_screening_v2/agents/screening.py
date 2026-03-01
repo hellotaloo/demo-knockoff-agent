@@ -56,9 +56,9 @@ class ScreeningAgent(BaseAgent):
                 transition = "Zeg kort 'ok super, dan starten we met een eerste vraag.' en ga meteen over naar de eerste vraag."
                 first_asked = False
             elif remaining == 1:
-                transition = f"De kandidaat antwoordde '{prev_answer}' op de vorige vraag. Erken dit kort en positief. Zeg dat je nog een laatste ja of nee vraagje hebt."
+                transition = "Erken het vorige antwoord met een kort woordje zoals een recruiter zou doen (bijv. 'Ok, top.', 'Ah fijn.', 'Prima.'). Noem hoogstens één kernwoord uit het antwoord, niet de hele zin. Zeg dan dat je nog een laatste ja of nee vraagje hebt."
             else:
-                transition = f"De kandidaat antwoordde '{prev_answer}' op de vorige vraag. Erken dit kort en positief en leid de volgende vraag natuurlijk in."
+                transition = "Erken het vorige antwoord met een kort woordje zoals een recruiter zou doen (bijv. 'Ok, top.', 'Ah fijn.', 'Prima.'). Noem hoogstens één kernwoord uit het antwoord, niet de hele zin. Leid de volgende vraag natuurlijk in."
 
             result = await KnockoutTask(
                 question_id=q.id,

@@ -126,6 +126,7 @@ class InterviewService:
         async def reset_interview_session():
             """Delete and recreate session for fresh start, handling race conditions."""
             from sqlalchemy.exc import IntegrityError
+            from google.adk.errors.already_exists_error import AlreadyExistsError
             
             # Try to delete existing session
             try:
@@ -146,7 +147,7 @@ class InterviewService:
                     user_id="web",
                     session_id=session_id
                 )
-            except IntegrityError:
+            except (IntegrityError, AlreadyExistsError):
                 # Session exists (maybe delete failed or race condition), that's ok for generation
                 logger.info(f"Session {session_id} already exists for generation")
         

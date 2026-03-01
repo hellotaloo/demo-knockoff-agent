@@ -1,0 +1,16 @@
+{
+  "room": "screening-28c92cf26fb5",
+  "timestamp": "20260301_182136",
+  "candidate_name": "Koen de Jong",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 7616,
+  "llm_completion_tokens": 192,
+  "tts_characters": 671,
+  "stt_audio_duration": 46.34999999999992,
+  "cost_usd": {
+    "llm": 0.003354,
+    "tts": 0.007549,
+    "stt": 0.005948,
+    "total": 0.016851
+  }
+}

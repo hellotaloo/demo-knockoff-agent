@@ -1,0 +1,16 @@
+{
+  "room": "screening-092939dd5d77",
+  "timestamp": "20260301_180844",
+  "candidate_name": "Sanne Peters",
+  "job_title": "Kassamedewerker",
+  "llm_prompt_tokens": 4551,
+  "llm_completion_tokens": 96,
+  "tts_characters": 320,
+  "stt_audio_duration": 20.94999999999997,
+  "cost_usd": {
+    "llm": 0.001974,
+    "tts": 0.0036,
+    "stt": 0.002689,
+    "total": 0.008263
+  }
+}

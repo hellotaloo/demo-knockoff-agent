@@ -62,7 +62,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ready_check_decline": "Geen probleem. Neem gerust later contact op als je geinteresseerd bent. Nog een fijne dag.",
         "open_questions_thanks": "Super, bedankt voor je antwoorden.",
         "existing_booking": "Je hebt al een afspraak staan op {date}. Je kan dit dan meteen bespreken tijdens dat gesprek. Bedankt voor je tijd en nog een fijne dag.",
-        "scheduling_invite": "We willen je graag uitnodigen voor een kort gesprek met de recruiter op ons kantoor in {location}. Even kijken wanneer dat zou passen.",
+        "scheduling_invite": "We willen je graag uitnodigen voor een interview met de recruiter op ons kantoor in {location}. Even kijken wanneer dat zou passen.",
         "scheduling_confirm": "Super, dan staat je gesprek gepland op {timeslot} met de recruiter op ons kantoor in {location}. {followup} Bedankt voor het gesprek veel succes en nog een fijne dag.",
         "scheduling_followup_tomorrow": "Je ontvangt zo meteen nog een bevestiging via WhatsApp met het exacte adres en tijdstip.",
         "scheduling_followup_later": "Je ontvangt een bevestiging met het exacte adres en tijdstip en later ook nog een reminder via WhatsApp.",

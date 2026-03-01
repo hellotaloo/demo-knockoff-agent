@@ -73,6 +73,7 @@ class SessionInput:
     start_agent: str = ""
     allow_escalation: bool = True
     require_consent: bool = True
+    is_playground: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +97,7 @@ class SessionInput:
             ],
             "allow_escalation": self.allow_escalation,
             "require_consent": self.require_consent,
+            "is_playground": self.is_playground,
         }
 
     @classmethod
@@ -130,6 +132,7 @@ class SessionInput:
             start_agent=data.get("start_agent", ""),
             allow_escalation=data.get("allow_escalation", True),
             require_consent=data.get("require_consent", True),
+            is_playground=data.get("is_playground", False),
         )
 
 
@@ -194,6 +197,9 @@ class CandidateData:
     # Irrelevant answer tracking (cross-stage counter, resets on valid answers)
     irrelevant_count: int = 0
 
+    # Recruiter escalation flag (set by tasks inside TaskGroup to break early)
+    recruiter_requested: bool = False
+
     # Language (ElevenLabs language code, e.g. "nl", "en", "fr")
     language: str = "nl"
 
@@ -213,7 +219,7 @@ class CandidateData:
         ko_results = [a.result for a in self.knockout_answers]
         if QuestionResult.UNCLEAR in ko_results:
             return "unclear"
-        if QuestionResult.RECRUITER_REQUESTED in ko_results:
+        if QuestionResult.RECRUITER_REQUESTED in ko_results or self.recruiter_requested:
             return "escalated"
         if QuestionResult.FAIL in ko_results and not self.interested_in_alternatives:
             return "not_interested"

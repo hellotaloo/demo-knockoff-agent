@@ -175,7 +175,7 @@ async def _process_whatsapp_conversation(
                     UPDATE ats.applications
                     SET qualified = $1, interaction_seconds = $2,
                         completed_at = NOW(), channel = 'whatsapp',
-                        summary = $3, interview_slot = $4, status = 'completed'
+                        summary = $3, interview_slot = $4, status = 'processing'
                     WHERE id = $5
                     """,
                     qualified,
@@ -184,14 +184,14 @@ async def _process_whatsapp_conversation(
                     interview_slot,
                     application_id
                 )
-                logger.info(f"Application {application_id} status -> completed")
+                logger.info(f"Application {application_id} status -> processing")
             else:
                 app_row = await conn.fetchrow(
                     """
                     INSERT INTO ats.applications
                     (vacancy_id, candidate_name, candidate_phone, channel, qualified,
                      interaction_seconds, completed_at, summary, interview_slot, is_test, status)
-                    VALUES ($1, $2, $3, 'whatsapp', $4, $5, NOW(), $6, $7, $8, 'completed')
+                    VALUES ($1, $2, $3, 'whatsapp', $4, $5, NOW(), $6, $7, $8, 'processing')
                     RETURNING id
                     """,
                     vacancy_uuid,
@@ -204,7 +204,7 @@ async def _process_whatsapp_conversation(
                     is_test
                 )
                 application_id = app_row["id"]
-                logger.info(f"Created new application {application_id} with status=completed")
+                logger.info(f"Created new application {application_id} with status=processing")
 
             # Store knockout results (matched by position to pre_screening_questions)
             for i, kr in enumerate(agent_knockout_results):

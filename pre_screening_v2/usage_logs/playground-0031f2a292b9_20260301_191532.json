@@ -1,0 +1,16 @@
+{
+  "room": "playground-0031f2a292b9",
+  "timestamp": "20260301_191532",
+  "candidate_name": "Onbekende beller",
+  "job_title": "Winkelmedewerker Bakkerij",
+  "llm_prompt_tokens": 2285,
+  "llm_completion_tokens": 123,
+  "tts_characters": 535,
+  "stt_audio_duration": 19.599999999999973,
+  "cost_usd": {
+    "llm": 0.001111,
+    "tts": 0.006019,
+    "stt": 0.002515,
+    "total": 0.009645
+  }
+}

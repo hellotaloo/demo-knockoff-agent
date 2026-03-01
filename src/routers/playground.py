@@ -64,7 +64,7 @@ async def start_playground_session(request: PlaygroundStartRequest):
         """
         SELECT v.id as vacancy_id, v.title as vacancy_title,
                ps.id as pre_screening_id, ps.is_online, ps.published_at,
-               ol.name as office_name, ol.address as office_address
+               COALESCE(ol.spoken_name, ol.name) as office_name, ol.address as office_address
         FROM ats.vacancies v
         LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
         LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
@@ -116,7 +116,8 @@ async def start_playground_session(request: PlaygroundStartRequest):
         office_address=row["office_address"] or "",
     )
 
-    # Apply playground overrides
+    # Apply playground overrides — zero side effects
+    session_input["is_playground"] = True
     session_input["require_consent"] = request.require_consent
     if request.start_agent:
         session_input["start_agent"] = request.start_agent

@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from google.adk.events import Event, EventActions
 from google.genai import types
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
+from google.adk.errors.already_exists_error import AlreadyExistsError
 
 from src.models.interview import (
     GenerateInterviewRequest,
@@ -158,7 +159,7 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
                 user_id="web",
                 session_id=session_id
             )
-        except IntegrityError:
+        except (IntegrityError, AlreadyExistsError):
             # Session exists (maybe delete failed or race condition), that's ok for generation
             logger.info(f"Session {session_id} already exists for generation")
 
@@ -753,7 +754,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
             return await session_manager.interview_session_service.create_session(
                 app_name="interview_generator", user_id="web", session_id=session_id
             )
-        except IntegrityError:
+        except (IntegrityError, AlreadyExistsError):
             # Session was created by another request, fetch it
             logger.info(f"Session {session_id} already exists, fetching it")
             return await session_manager.interview_session_service.get_session(

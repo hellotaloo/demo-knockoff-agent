@@ -8,7 +8,7 @@ import aiohttp
 from dotenv import load_dotenv
 
 from livekit import agents, api, rtc
-from livekit.agents import AgentServer, AgentSession, BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip, CloseEvent, MetricsCollectedEvent, UserStateChangedEvent, room_io, metrics
+from livekit.agents import AgentServer, AgentSession, BackgroundAudioPlayer, AudioConfig, BuiltinAudioClip, CloseEvent, JobProcess, MetricsCollectedEvent, UserStateChangedEvent, room_io, metrics
 from livekit.agents.inference import stt as inference_stt
 from livekit.plugins import elevenlabs, openai, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
@@ -44,7 +44,12 @@ def _build_start_agent(name: str, inp: SessionInput):
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
-server = AgentServer()
+def prewarm(proc: JobProcess):
+    """Load VAD model once at worker startup to avoid cold start latency on first call."""
+    proc.userdata["vad"] = silero.VAD.load()
+
+
+server = AgentServer(setup_fnc=prewarm)
 
 
 def _dev_session_input() -> SessionInput:
@@ -89,7 +94,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     session = AgentSession[CandidateData](
         userdata=CandidateData(input=inp),
-        vad=silero.VAD.load(),
+        vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
         turn_detection=MultilingualModel(),  # session default, overridden per-agent where needed
         user_away_timeout=4.0,  # trigger fallback prompt after 4s of silence
         stt=inference_stt.STT(
@@ -230,6 +235,11 @@ async def entrypoint(ctx: agents.JobContext):
 
         logger.info(f"Session complete (call_id={inp.call_id}, status={results['status']}, transcript_messages={len(transcript)})")
 
+        # Skip webhook POST in playground mode — no processing, no DB writes
+        if inp.is_playground:
+            logger.info(f"Playground mode: skipping backend webhook POST (call_id={inp.call_id})")
+            return
+
         backend_url = os.environ.get("BACKEND_WEBHOOK_URL")
         webhook_secret = os.environ.get("LIVEKIT_WEBHOOK_SECRET", "")
 
@@ -273,8 +283,8 @@ async def entrypoint(ctx: agents.JobContext):
 
     await ambient_audio.start(room=ctx.room, agent_session=session)
     # Thinking audio starts after greeting (triggered in GreetingAgent.candidate_ready)
-    # For debug start agents, start it immediately since we skip the greeting
-    if inp.start_agent:
+    # For debug start agents that skip the greeting, start it immediately
+    if inp.start_agent and inp.start_agent != "greeting":
         await thinking_audio.start(room=ctx.room, agent_session=session)
 
 

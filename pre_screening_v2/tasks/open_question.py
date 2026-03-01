@@ -1,8 +1,11 @@
+import logging
 from dataclasses import dataclass
 
 from livekit.agents import AgentTask, function_tool, llm
 
 from models import MAX_IRRELEVANT, check_irrelevant
+
+logger = logging.getLogger("open_question")
 
 MAX_TURNS = 6  # safety net: force-complete after 6 user turns
 
@@ -16,11 +19,16 @@ class OpenQuestionResult:
 
 
 class OpenQuestionTask(AgentTask[OpenQuestionResult]):
-    def __init__(self, question_id: str, question_text: str, allow_escalation: bool = True, response_message: str = ""):
+    def __init__(self, question_id: str, question_text: str, ideal_answer: str = "", allow_escalation: bool = True, response_message: str = ""):
         escalation_rule = (
             "- Als de kandidaat vraagt om met een echte persoon of recruiter te praten → roep METEEN `escalate_to_recruiter` aan. Probeer NIET de kandidaat te overtuigen om bij jou te blijven.\n"
             if allow_escalation else ""
         )
+
+        ideal_block = f"""
+# Gewenst antwoord (ALLEEN voor jouw beoordeling — NOOIT voorlezen of letterlijk delen!)
+{ideal_answer}
+Gebruik dit om te beoordelen of het antwoord voldoende is. Geen exacte match nodig — als de kern overeenkomt is het goed.""" if ideal_answer else ""
 
         super().__init__(
             turn_detection="vad",  # VAD-only: no semantic model, gives users more time to think
@@ -29,14 +37,16 @@ class OpenQuestionTask(AgentTask[OpenQuestionResult]):
 Je stelt een open vraag aan de kandidaat en luistert naar het antwoord.
 
 Vraag: "{question_text}"
+{ideal_block}
 
 # Regels
 - Luister naar het antwoord van de kandidaat.
-- Als de kandidaat klaar is met antwoorden → roep `record_answer` aan met een korte samenvatting.
-- Stel GEEN vervolgvragen. Eén antwoord is genoeg.
+- Als de kandidaat een inhoudelijk antwoord geeft dat de kern van de vraag raakt → roep `record_answer` aan met een korte samenvatting.
+- Als de kandidaat te kort of te vaag antwoordt (alleen "ja", "nee", één woord, of een antwoord dat de vraag niet echt beantwoordt) → vraag vriendelijk om iets meer uitleg. Bijv. "Kan je daar iets meer over vertellen?" of "Hoe bedoel je dat precies?". Je mag dit MAXIMAAL één keer doen per vraag. Als het tweede antwoord ook kort is, accepteer het en roep `record_answer` aan.
+- Stel GEEN andere vervolgvragen. Eén goed antwoord is genoeg, ga niet door op details.
 - Als de kandidaat duidelijk off-topic of onzinnig antwoordt (trollen, compleet onzin) → roep METEEN `mark_irrelevant` aan. Het systeem houdt bij hoeveel kansen er nog zijn.
-- Een kort of vaag antwoord zoals "weet ik niet" of "geen idee" is NIET irrelevant — noteer dit gewoon met `record_answer`.
-- Als de kandidaat meer dan 2 verduidelijkende vragen stelt over de vraag → noteer de vragen met `note_for_recruiter` en roep `record_answer` aan met een samenvatting van wat de kandidaat tot nu toe heeft gezegd.
+- Een vaag antwoord zoals "weet ik niet" of "geen idee" is NIET irrelevant — noteer dit gewoon met `record_answer`.
+- Als de kandidaat een vraag stelt over de vraag → verzin NOOIT een antwoord. Noteer de vraag met `note_for_recruiter`, zeg kort dat je het noteert voor de recruiter, en stel de open vraag opnieuw.
 - Gebruik `note_for_recruiter` om vragen of opmerkingen van de kandidaat te bewaren voor de recruiter.
 {escalation_rule}""",
         )
@@ -54,6 +64,14 @@ Vraag: "{question_text}"
         if userdata.irrelevant_count >= MAX_IRRELEVANT:
             self.complete(OpenQuestionResult(
                 answer_summary="Gesprek beëindigd wegens irrelevante antwoorden",
+            ))
+            return
+
+        # If recruiter was already requested on a previous question, skip immediately
+        if userdata.recruiter_requested:
+            self.complete(OpenQuestionResult(
+                answer_summary="Kandidaat wil met recruiter praten",
+                recruiter_requested=True,
             ))
             return
 
@@ -78,11 +96,14 @@ Vraag: "{question_text}"
     @function_tool()
     async def note_for_recruiter(self, note: str):
         """Bewaar een vraag of opmerking van de kandidaat voor de recruiter."""
+        logger.info(f"[{self._question_id}] note_for_recruiter called: {note}")
         self._candidate_note = note
+        return "Genoteerd. Vertel de kandidaat dat je het noteert voor de recruiter en stel de open vraag opnieuw."
 
     @function_tool()
     async def record_answer(self, answer_summary: str):
         """Sla het antwoord van de kandidaat op. Roep dit aan zodra je een bruikbaar antwoord hebt."""
+        logger.info(f"[{self._question_id}] record_answer called: {answer_summary}")
         if self.done():
             return
         if self._response_message:
@@ -97,8 +118,10 @@ Vraag: "{question_text}"
     @function_tool()
     async def escalate_to_recruiter(self):
         """De kandidaat wil met een echte recruiter praten."""
+        logger.info(f"[{self._question_id}] escalate_to_recruiter called")
         if self.done() or not self._allow_escalation:
             return
+        self.session.userdata.recruiter_requested = True
         self.complete(OpenQuestionResult(
             answer_summary="Kandidaat wil met recruiter praten",
             candidate_note=self._candidate_note,
@@ -109,6 +132,7 @@ Vraag: "{question_text}"
     @function_tool()
     async def mark_irrelevant(self, answer_summary: str):
         """De kandidaat antwoordt irrelevant of onzinnig. Roep dit METEEN aan bij elk irrelevant antwoord."""
+        logger.info(f"[{self._question_id}] mark_irrelevant called: {answer_summary}")
         if self.done():
             return
         msg = check_irrelevant(self.session.userdata)

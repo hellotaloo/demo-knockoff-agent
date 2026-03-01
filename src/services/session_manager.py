@@ -34,8 +34,8 @@ class SessionManager:
         self.engine_kwargs = {
             "pool_pre_ping": True,
             "pool_recycle": 300,
-            "pool_size": 3,
-            "max_overflow": 5,
+            "pool_size": 2,
+            "max_overflow": 2,
             "connect_args": {"statement_cache_size": 0},
         }
 

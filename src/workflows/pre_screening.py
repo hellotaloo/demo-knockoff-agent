@@ -352,9 +352,11 @@ async def _send_teams_notification(
     knockout_stats = ""
     qualification_stats = ""
     if application_id:
+        pool = await get_db_pool()
+        app_uuid = uuid.UUID(application_id)
+
+        # Look up Google Doc URL (column may not exist yet)
         try:
-            pool = await get_db_pool()
-            app_uuid = uuid.UUID(application_id)
             row = await pool.fetchrow(
                 """
                 SELECT screening_doc_url
@@ -367,8 +369,11 @@ async def _send_teams_notification(
             )
             if row and row["screening_doc_url"]:
                 doc_url = row["screening_doc_url"]
+        except Exception as e:
+            logger.debug(f"Could not look up screening_doc_url: {e}")
 
-            # Fetch knockout + qualification stats
+        # Fetch knockout + qualification stats
+        try:
             stats_rows = await pool.fetch(
                 """
                 SELECT aa.passed, aa.score,
@@ -396,7 +401,7 @@ async def _send_teams_notification(
                 avg = round(sum(qual_scores) / len(qual_scores))
                 qualification_stats = f"\U0001f4ca Kwalificatievragen: {avg}%"
         except Exception as e:
-            logger.warning(f"Failed to look up screening data: {e}")
+            logger.warning(f"Failed to look up screening stats: {e}")
 
     # Build Adaptive Card
     card = _build_screening_notification_card(
