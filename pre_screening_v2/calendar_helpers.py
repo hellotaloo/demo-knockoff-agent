@@ -25,6 +25,7 @@ TIMEZONE_STR = "Europe/Brussels"
 DEFAULT_MORNING_SLOTS = [10, 11]
 DEFAULT_AFTERNOON_SLOTS = [14, 16]
 DEFAULT_INTERVIEW_DURATION_MINUTES = 30
+MAX_SLOTS_PER_DAY = 3
 
 DUTCH_DAYS = {
     0: "maandag", 1: "dinsdag", 2: "woensdag", 3: "donderdag",
@@ -423,7 +424,7 @@ async def get_slots_for_specific_date(date_str: str) -> dict:
                 "has_availability": False,
             }
 
-        all_times = slot["morning"] + slot["afternoon"]
+        all_times = (slot["morning"] + slot["afternoon"])[:MAX_SLOTS_PER_DAY]
         text = _format_day_slots(slot["dutch_date"], all_times)
         return {
             "slots": [{

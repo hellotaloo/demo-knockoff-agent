@@ -75,3 +75,42 @@ class StatusUpdateRequest(BaseModel):
     voice_enabled: Optional[bool] = None
     whatsapp_enabled: Optional[bool] = None
     cv_enabled: Optional[bool] = None
+
+
+class PreScreeningSettingsResponse(BaseModel):
+    """Response model for per-vacancy pre-screening settings."""
+    voice_enabled: bool = False
+    whatsapp_enabled: bool = False
+    cv_enabled: bool = False
+
+
+class PreScreeningSettingsUpdateRequest(BaseModel):
+    """Request model for updating per-vacancy pre-screening settings. All fields optional."""
+    voice_enabled: Optional[bool] = None
+    whatsapp_enabled: Optional[bool] = None
+    cv_enabled: Optional[bool] = None
+
+
+class PreScreeningConfigResponse(BaseModel):
+    """Response model for global pre-screening agent config."""
+    id: str
+    max_unrelated_answers: int = 2
+    schedule_days_ahead: int = 3
+    schedule_start_offset: int = 1
+    planning_mode: str = "funnel"
+    intro_message: Optional[str] = None
+    success_message: Optional[str] = None
+    require_consent: bool = False
+    allow_escalation: bool = False
+
+
+class PreScreeningConfigUpdateRequest(BaseModel):
+    """Request model for updating global pre-screening agent config. All fields optional."""
+    max_unrelated_answers: Optional[int] = None
+    schedule_days_ahead: Optional[int] = None
+    schedule_start_offset: Optional[int] = None
+    planning_mode: Optional[str] = None
+    intro_message: Optional[str] = None
+    success_message: Optional[str] = None
+    require_consent: Optional[bool] = None
+    allow_escalation: Optional[bool] = None

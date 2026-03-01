@@ -15,9 +15,13 @@ from src.models.pre_screening import (
     PreScreeningRequest,
     PreScreeningQuestionResponse,
     PublishPreScreeningRequest,
-    StatusUpdateRequest
+    StatusUpdateRequest,
+    PreScreeningSettingsResponse,
+    PreScreeningSettingsUpdateRequest,
+    PreScreeningConfigResponse,
+    PreScreeningConfigUpdateRequest,
 )
-from src.repositories import PreScreeningRepository, VacancyRepository
+from src.repositories import PreScreeningRepository, PreScreeningConfigRepository, VacancyRepository
 from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)
@@ -637,3 +641,102 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
         },
         "message": "Pre-screening status updated" + auto_status_message
     }
+
+
+@router.get("/vacancies/{vacancy_id}/pre-screening/settings", response_model=PreScreeningSettingsResponse)
+async def get_pre_screening_settings(vacancy_id: str):
+    """Get pre-screening settings (consent, escalation, channel flags)."""
+    pool = await get_db_pool()
+
+    try:
+        vacancy_uuid = uuid.UUID(vacancy_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    from src.services.pre_screening_service import PreScreeningService
+    service = PreScreeningService(pool)
+    settings = await service.get_settings(vacancy_uuid)
+
+    if settings is None:
+        raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
+
+    return PreScreeningSettingsResponse(**settings)
+
+
+@router.patch("/vacancies/{vacancy_id}/pre-screening/settings", response_model=PreScreeningSettingsResponse)
+async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSettingsUpdateRequest):
+    """
+    Update pre-screening settings. All fields are optional — only provided fields will be updated.
+
+    - voice_enabled: Toggle voice channel
+    - whatsapp_enabled: Toggle WhatsApp channel
+    - cv_enabled: Toggle CV analysis channel
+    """
+    pool = await get_db_pool()
+
+    try:
+        vacancy_uuid = uuid.UUID(vacancy_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    # Check at least one field is provided
+    update_data = request.model_dump(exclude_none=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    from src.services.pre_screening_service import PreScreeningService
+    service = PreScreeningService(pool)
+    updated = await service.update_settings(
+        vacancy_uuid,
+        voice_enabled=request.voice_enabled,
+        whatsapp_enabled=request.whatsapp_enabled,
+        cv_enabled=request.cv_enabled,
+    )
+
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No pre-screening found for this vacancy")
+
+    return PreScreeningSettingsResponse(**updated)
+
+
+# ---------------------------------------------------------------------------
+# Global pre-screening agent config (agents.pre_screening_config)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pre-screening/config", response_model=PreScreeningConfigResponse)
+async def get_pre_screening_config():
+    """Get the global pre-screening agent configuration."""
+    pool = await get_db_pool()
+    repo = PreScreeningConfigRepository(pool)
+    row = await repo.get()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Pre-screening config not found")
+
+    return PreScreeningConfigResponse(id=str(row["id"]), **{k: row[k] for k in row.keys() if k != "id"})
+
+
+@router.patch("/pre-screening/config", response_model=PreScreeningConfigResponse)
+async def update_pre_screening_config(request: PreScreeningConfigUpdateRequest):
+    """
+    Update the global pre-screening agent configuration.
+    All fields are optional — only provided fields will be updated.
+    """
+    pool = await get_db_pool()
+    repo = PreScreeningConfigRepository(pool)
+
+    # Check at least one field is provided
+    update_data = request.model_dump(exclude_none=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Get existing config to find the row ID
+    row = await repo.get()
+    if not row:
+        raise HTTPException(status_code=404, detail="Pre-screening config not found")
+
+    await repo.update(row["id"], **update_data)
+
+    updated = await repo.get()
+    return PreScreeningConfigResponse(id=str(updated["id"]), **{k: updated[k] for k in updated.keys() if k != "id"})

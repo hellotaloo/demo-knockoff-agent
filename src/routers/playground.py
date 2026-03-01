@@ -132,7 +132,9 @@ async def start_playground_session(request: PlaygroundStartRequest):
     session_input["allow_escalation"] = request.allow_escalation
     if request.start_agent:
         session_input["start_agent"] = request.start_agent
-    if request.voice_id and "voice_config" in session_input:
+    if request.voice_id:
+        if "voice_config" not in session_input:
+            session_input["voice_config"] = {}
         session_input["voice_config"]["voice_id"] = request.voice_id
 
     # Generate token with embedded agent dispatch

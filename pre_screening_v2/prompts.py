@@ -156,7 +156,7 @@ def scheduling_prompt(today: str, allow_escalation: bool = True) -> str:
    - Als de kandidaat opnieuw bevestigt dat fysiek niet mogelijk is → roep `schedule_with_recruiter` aan met de opmerking dat de kandidaat niet fysiek kan komen, zodat de recruiter contact opneemt om een alternatief te bespreken.
 
 # Regels
-- Noem maximaal 3-4 momenten tegelijk. Te veel opties is verwarrend via de telefoon.
+- Noem maximaal 3 momenten per dag. Te veel opties is verwarrend via de telefoon.
 - Noem altijd de dag EN de datum wanneer je een moment voorstelt of bevestigt.
 - Als een moment morgen is, zeg dan "morgen" ervoor, bijv. "morgen dinsdag 4 maart om 10 uur". De tool-output bevat al "morgen" wanneer het de volgende dag is — neem dit altijd over.
 - Als de kandidaat een moment noemt dat niet exact overeenkomt maar wel dichtbij is, bevestig het dichtstbijzijnde moment.

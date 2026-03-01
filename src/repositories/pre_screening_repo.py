@@ -292,3 +292,53 @@ class PreScreeningRepository:
             "UPDATE ats.pre_screenings SET analysis_result = NULL WHERE id = $1",
             pre_screening_id
         )
+
+    # -------------------------------------------------------------------------
+    # Settings
+    # -------------------------------------------------------------------------
+
+    async def get_settings(self, pre_screening_id: uuid.UUID) -> Optional[asyncpg.Record]:
+        """Get pre-screening settings (channel flags)."""
+        return await self.pool.fetchrow(
+            """
+            SELECT voice_enabled, whatsapp_enabled, cv_enabled
+            FROM ats.pre_screenings
+            WHERE id = $1
+            """,
+            pre_screening_id
+        )
+
+    async def update_settings(
+        self,
+        pre_screening_id: uuid.UUID,
+        voice_enabled: Optional[bool] = None,
+        whatsapp_enabled: Optional[bool] = None,
+        cv_enabled: Optional[bool] = None,
+    ):
+        """Update settings dynamically. Only provided fields will be updated."""
+        updates = []
+        params = []
+        param_idx = 1
+
+        for field_name, value in [
+            ("voice_enabled", voice_enabled),
+            ("whatsapp_enabled", whatsapp_enabled),
+            ("cv_enabled", cv_enabled),
+        ]:
+            if value is not None:
+                updates.append(f"{field_name} = ${param_idx}")
+                params.append(value)
+                param_idx += 1
+
+        if not updates:
+            return
+
+        updates.append("updated_at = NOW()")
+        params.append(pre_screening_id)
+
+        query = f"""
+            UPDATE ats.pre_screenings
+            SET {", ".join(updates)}
+            WHERE id = ${param_idx}
+        """
+        await self.pool.execute(query, *params)

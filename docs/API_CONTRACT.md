@@ -4,6 +4,7 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-01** — Added `GET /pre-screening/config` and `PATCH /pre-screening/config` endpoints for global pre-screening agent configuration (require_consent, allow_escalation, planning_mode, schedule settings, messages); added `GET /vacancies/{vacancy_id}/pre-screening/settings` and `PATCH /vacancies/{vacancy_id}/pre-screening/settings` for per-vacancy channel toggles
 - **2026-03-01** — Added `POST /playground/start` endpoint for browser-based LiveKit WebRTC voice playground (returns access token for frontend to connect directly to pre-screening V2 agent, no database records created)
 - **2026-02-28** — Replaced VAPI voice provider with LiveKit pre-screening v2 agent; added `POST /webhook/livekit/call-result` endpoint for receiving structured call results; outbound voice calls now dispatch via LiveKit SIP
 - **2026-02-28** — Added ATS Simulator endpoints (`GET /ats-simulator/api/v1/vacancies`, `GET /ats-simulator/api/v1/recruiters`, `GET /ats-simulator/api/v1/clients`) and `POST /demo/import-ats` for simulated ATS integration; demo seed now imports via ATS API instead of direct DB inserts
@@ -1385,6 +1386,133 @@ interface StatusUpdateResponse {
 | 400 | Pre-screening not published yet |
 | 404 | Vacancy not found |
 | 404 | No pre-screening found |
+
+---
+
+### GET /vacancies/{vacancy_id}/pre-screening/settings
+
+Get per-vacancy pre-screening channel settings.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `vacancy_id` | string (UUID) | Vacancy identifier |
+
+**Response:**
+
+```typescript
+interface PreScreeningSettingsResponse {
+  voice_enabled: boolean;
+  whatsapp_enabled: boolean;
+  cv_enabled: boolean;
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | Invalid vacancy ID format |
+| 404 | No pre-screening found |
+
+---
+
+### PATCH /vacancies/{vacancy_id}/pre-screening/settings
+
+Update per-vacancy pre-screening channel settings. All fields optional.
+
+**Auth:** None
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `vacancy_id` | string (UUID) | Vacancy identifier |
+
+**Request Body:**
+
+```typescript
+interface PreScreeningSettingsUpdateRequest {
+  voice_enabled?: boolean;
+  whatsapp_enabled?: boolean;
+  cv_enabled?: boolean;
+}
+```
+
+**Response:** Same as `PreScreeningSettingsResponse` above.
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | Invalid vacancy ID format |
+| 400 | No fields to update |
+| 404 | No pre-screening found |
+
+---
+
+### GET /pre-screening/config
+
+Get the global pre-screening agent configuration (single row, applies to all screenings).
+
+**Auth:** None
+
+**Response:**
+
+```typescript
+interface PreScreeningConfigResponse {
+  id: string;                    // Config row UUID
+  max_unrelated_answers: number; // Max off-topic answers before ending (default: 2)
+  schedule_days_ahead: number;   // Days ahead to offer for scheduling (default: 3)
+  schedule_start_offset: number; // Days offset before first available slot (default: 1)
+  planning_mode: string;         // "funnel" | "direct" | "calendar"
+  intro_message: string | null;  // Custom intro message
+  success_message: string | null;// Custom success message
+  require_consent: boolean;      // Ask candidate consent before screening
+  allow_escalation: boolean;     // Allow candidates to request a human
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | Pre-screening config not found |
+
+---
+
+### PATCH /pre-screening/config
+
+Update the global pre-screening agent configuration. All fields optional.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface PreScreeningConfigUpdateRequest {
+  max_unrelated_answers?: number;
+  schedule_days_ahead?: number;
+  schedule_start_offset?: number;
+  planning_mode?: string;         // "funnel" | "direct" | "calendar"
+  intro_message?: string;
+  success_message?: string;
+  require_consent?: boolean;
+  allow_escalation?: boolean;
+}
+```
+
+**Response:** Same as `PreScreeningConfigResponse` above.
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | No fields to update |
+| 404 | Pre-screening config not found |
 
 ---
 

@@ -37,7 +37,7 @@ STEP_CONFIG = {
     "processed": {
         "timeout_seconds": 5 * 60,         # 5 minutes - transcript processing should be quick
         "stuck_threshold_seconds": 2 * 60,   # 2 minutes - should process almost instantly
-        "auto_delay_seconds": 60,          # 1 minute delay before sending notifications
+        "auto_delay_seconds": 10,          # 10 second delay before sending notifications
     },
     "complete": {
         "timeout_seconds": None,           # Terminal state - no timeout

@@ -113,3 +113,37 @@ class PreScreeningService:
             whatsapp_enabled,
             cv_enabled
         )
+
+    async def get_settings(self, vacancy_id: uuid.UUID) -> Optional[dict]:
+        """Get pre-screening settings for a vacancy."""
+        ps_row = await self.repo.get_for_vacancy(vacancy_id)
+        if not ps_row:
+            return None
+
+        settings = await self.repo.get_settings(ps_row["id"])
+        if not settings:
+            return None
+
+        return dict(settings)
+
+    async def update_settings(
+        self,
+        vacancy_id: uuid.UUID,
+        voice_enabled: Optional[bool] = None,
+        whatsapp_enabled: Optional[bool] = None,
+        cv_enabled: Optional[bool] = None,
+    ) -> Optional[dict]:
+        """Update pre-screening settings. Returns updated settings or None if not found."""
+        ps_row = await self.repo.get_for_vacancy(vacancy_id)
+        if not ps_row:
+            return None
+
+        await self.repo.update_settings(
+            ps_row["id"],
+            voice_enabled=voice_enabled,
+            whatsapp_enabled=whatsapp_enabled,
+            cv_enabled=cv_enabled,
+        )
+
+        updated = await self.repo.get_settings(ps_row["id"])
+        return dict(updated) if updated else None

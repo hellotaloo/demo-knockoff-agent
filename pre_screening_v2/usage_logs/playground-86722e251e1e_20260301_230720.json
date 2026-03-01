@@ -1,0 +1,16 @@
+{
+  "room": "playground-86722e251e1e",
+  "timestamp": "20260301_230720",
+  "candidate_name": "Onbekende beller",
+  "job_title": "Operator Mengafdeling",
+  "llm_prompt_tokens": 3107,
+  "llm_completion_tokens": 57,
+  "tts_characters": 297,
+  "stt_audio_duration": 0.0,
+  "cost_usd": {
+    "llm": 0.001334,
+    "tts": 0.003341,
+    "stt": 0.0,
+    "total": 0.004675
+  }
+}
