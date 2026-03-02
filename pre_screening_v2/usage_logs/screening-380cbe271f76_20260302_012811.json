@@ -1,0 +1,16 @@
+{
+  "room": "screening-380cbe271f76",
+  "timestamp": "20260302_012811",
+  "candidate_name": "Sanne de Vries",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 4600,
+  "llm_completion_tokens": 146,
+  "tts_characters": 477,
+  "stt_audio_duration": 35.349999999999945,
+  "cost_usd": {
+    "llm": 0.002074,
+    "tts": 0.005366,
+    "stt": 0.004537,
+    "total": 0.011976
+  }
+}

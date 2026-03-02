@@ -1,0 +1,16 @@
+{
+  "room": "screening-c2457e1259c6",
+  "timestamp": "20260302_013315",
+  "candidate_name": "Femke Jansen",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 3017,
+  "llm_completion_tokens": 82,
+  "tts_characters": 307,
+  "stt_audio_duration": 19.74999999999997,
+  "cost_usd": {
+    "llm": 0.001338,
+    "tts": 0.003454,
+    "stt": 0.002535,
+    "total": 0.007326
+  }
+}

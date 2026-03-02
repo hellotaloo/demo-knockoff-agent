@@ -45,6 +45,27 @@ async def fetch_voice_config() -> Optional[dict]:
         return None
 
 
+async def fetch_pre_screening_config() -> dict:
+    """Fetch pre-screening config from agents.pre_screening_config table."""
+    try:
+        pool = await get_db_pool()
+        row = await pool.fetchrow(
+            "SELECT require_consent, allow_escalation FROM agents.pre_screening_config LIMIT 1"
+        )
+        if row:
+            config = {
+                "require_consent": row["require_consent"],
+                "allow_escalation": row["allow_escalation"],
+            }
+            logger.info(f"Pre-screening config loaded: {config}")
+            return config
+        logger.info("No pre-screening config found in DB, using defaults")
+        return {"require_consent": False, "allow_escalation": True}
+    except Exception as e:
+        logger.warning(f"Failed to fetch pre-screening config: {e}")
+        return {"require_consent": False, "allow_escalation": True}
+
+
 class LiveKitService:
     """
     Service for dispatching voice screening calls via LiveKit.
@@ -81,6 +102,8 @@ class LiveKitService:
         voice_config: Optional[dict] = None,
         known_answers: Optional[dict[str, str]] = None,
         existing_booking_date: Optional[str] = None,
+        require_consent: bool = False,
+        allow_escalation: bool = True,
     ) -> dict:
         """
         Map backend DB questions to pre_screening_v2 SessionInput format.
@@ -116,8 +139,8 @@ class LiveKitService:
                 }
                 for i, q in enumerate(qualification_questions)
             ],
-            "allow_escalation": True,
-            "require_consent": True,
+            "allow_escalation": allow_escalation,
+            "require_consent": require_consent,
         }
         if voice_config:
             result["voice_config"] = voice_config
@@ -161,6 +184,7 @@ class LiveKitService:
         room_name = f"screening-{uuid.uuid4().hex[:12]}"
 
         voice_config = await fetch_voice_config()
+        screening_config = await fetch_pre_screening_config()
 
         session_input = self._build_session_input(
             call_id=room_name,
@@ -171,6 +195,8 @@ class LiveKitService:
             office_location=office_location,
             office_address=office_address,
             voice_config=voice_config,
+            require_consent=screening_config["require_consent"],
+            allow_escalation=screening_config["allow_escalation"],
         )
 
         logger.info(

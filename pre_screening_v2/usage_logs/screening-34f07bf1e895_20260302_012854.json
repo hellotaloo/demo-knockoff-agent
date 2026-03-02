@@ -1,0 +1,16 @@
+{
+  "room": "screening-34f07bf1e895",
+  "timestamp": "20260302_012854",
+  "candidate_name": "Daan Bakker",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 4563,
+  "llm_completion_tokens": 103,
+  "tts_characters": 347,
+  "stt_audio_duration": 24.549999999999965,
+  "cost_usd": {
+    "llm": 0.00199,
+    "tts": 0.003904,
+    "stt": 0.003151,
+    "total": 0.009044
+  }
+}
