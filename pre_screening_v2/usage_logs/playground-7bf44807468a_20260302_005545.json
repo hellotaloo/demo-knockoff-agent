@@ -1,0 +1,16 @@
+{
+  "room": "playground-7bf44807468a",
+  "timestamp": "20260302_005545",
+  "candidate_name": "Onbekende beller",
+  "job_title": "Logistiek Supervisor",
+  "llm_prompt_tokens": 3172,
+  "llm_completion_tokens": 87,
+  "tts_characters": 320,
+  "stt_audio_duration": 19.649999999999974,
+  "cost_usd": {
+    "llm": 0.001408,
+    "tts": 0.0036,
+    "stt": 0.002522,
+    "total": 0.00753
+  }
+}

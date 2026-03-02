@@ -1,0 +1,16 @@
+{
+  "room": "playground-dd6de8e9a3a1",
+  "timestamp": "20260302_004705",
+  "candidate_name": "Anna",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 1078,
+  "llm_completion_tokens": 47,
+  "tts_characters": 207,
+  "stt_audio_duration": 0.7500000000000001,
+  "cost_usd": {
+    "llm": 0.000506,
+    "tts": 0.002329,
+    "stt": 9.6e-05,
+    "total": 0.002931
+  }
+}
