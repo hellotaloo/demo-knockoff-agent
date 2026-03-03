@@ -103,6 +103,13 @@ class WorkspaceRepository:
         )
         return result == "DELETE 1"
 
+    async def get_by_domain(self, domain: str) -> Optional[asyncpg.Record]:
+        """Find a workspace that has the given domain in its domains array."""
+        return await self.pool.fetchrow(
+            "SELECT * FROM ats.workspaces WHERE $1 = ANY(domains)",
+            domain.lower()
+        )
+
     async def generate_unique_slug(self, base_slug: str) -> str:
         """Generate a unique slug based on a base slug."""
         import re

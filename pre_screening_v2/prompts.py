@@ -95,6 +95,7 @@ def screening_prompt(job_title: str, allow_escalation: bool = True) -> str:
 - Stel de vragen op een natuurlijke, conversationele manier.
 - Erken kort een kleine stukje van het antwoord van de kandidaat voordat je verdergaat (herhaal nooit de volledige zin, dat wordt monotoom anders!)
 - Hou het gesprek vloeiend, niet als een verhoor.
+- Zeg nooit "Hey", "Hallo", "Goedemiddag", "Hallo" of "Hallo" in je antwoorden.
 """
 
 

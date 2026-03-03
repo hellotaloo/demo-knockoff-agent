@@ -14,7 +14,6 @@ from src.repositories import UserProfileRepository, WorkspaceRepository, Workspa
 
 logger = logging.getLogger(__name__)
 
-
 class AuthService:
     """Service for authentication operations."""
 
@@ -181,21 +180,33 @@ class AuthService:
                     await self.membership_repo.accept_invitation(inv["id"])
                     logger.info(f"Auto-accepted invitation for {email} to workspace {inv['workspace_name']}")
             else:
-                # No invitations - create personal workspace
-                workspace_name = f"{full_name}'s Workspace"
-                workspace_slug = await self.workspace_repo.generate_unique_slug(full_name.lower().replace(" ", "-"))
+                # No invitations - check if a workspace claims this email domain
+                domain = email.split("@")[1].lower()
+                domain_workspace = await self.workspace_repo.get_by_domain(domain)
 
-                workspace_row = await self.workspace_repo.create(
-                    name=workspace_name,
-                    slug=workspace_slug,
-                )
+                if domain_workspace:
+                    await self.membership_repo.add_member(
+                        user_profile_id=user_row["id"],
+                        workspace_id=domain_workspace["id"],
+                        role="member",
+                    )
+                    logger.info(f"Auto-joined {email} to workspace '{domain_workspace['name']}' (domain @{domain})")
+                else:
+                    # No domain match - create personal workspace
+                    workspace_name = f"{full_name}'s Workspace"
+                    workspace_slug = await self.workspace_repo.generate_unique_slug(full_name.lower().replace(" ", "-"))
 
-                await self.membership_repo.add_member(
-                    user_profile_id=user_row["id"],
-                    workspace_id=workspace_row["id"],
-                    role="owner",
-                )
-                logger.info(f"Created personal workspace '{workspace_name}' for {email}")
+                    workspace_row = await self.workspace_repo.create(
+                        name=workspace_name,
+                        slug=workspace_slug,
+                    )
+
+                    await self.membership_repo.add_member(
+                        user_profile_id=user_row["id"],
+                        workspace_id=workspace_row["id"],
+                        role="owner",
+                    )
+                    logger.info(f"Created personal workspace '{workspace_name}' for {email}")
 
         # Get user's workspaces
         workspace_rows = await self.membership_repo.get_user_workspaces(user_row["id"])

@@ -153,7 +153,14 @@
       "Bash(lk cloud regions)",
       "Bash(lk regions)",
       "Bash(lk cloud list-regions)",
-      "Bash(tr ';' '\\\\n')"
+      "Bash(tr ';' '\\\\n')",
+      "Bash(supabase branches merge vrpdzvattqlrtbaowapx --project-ref beniqwbanoqhxyrjwulg)",
+      "Bash(supabase projects api-keys --project-ref beniqwbanoqhxyrjwulg)",
+      "Bash(# Get the access token from supabase CLI config cat ~/.config/supabase/access-token || grep -r \"\"access_token\"\" ~/.config/supabase/)",
+      "Bash(supabase projects list)",
+      "Bash(# Check where supabase stores credentials on macOS find ~/Library -maxdepth 4 -name \"\"*supabase*\"\" -o -name \"\"*Supabase*\"\")",
+      "Bash(# Supabase CLI v2 stores the access token via keyring or env # Let''s check if SUPABASE_ACCESS_TOKEN is set or try the settings env | grep -i supabase)",
+      "Bash(supabase branches list)"
     ],
     "defaultMode": "acceptEdits"
   },
