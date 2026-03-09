@@ -241,7 +241,7 @@ async def process_call_results(
         messages = await pool.fetch(
             """
             SELECT role, message
-            FROM ats.conversation_messages
+            FROM ats.pre_screening_messages
             WHERE conversation_id = $1
             ORDER BY created_at
             """,

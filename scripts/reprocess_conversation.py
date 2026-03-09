@@ -43,7 +43,7 @@ async def reprocess_conversation(conversation_id: str):
             sc.channel,
             sc.status,
             sc.created_at
-        FROM ats.screening_conversations sc
+        FROM ats.pre_screening_conversations sc
         WHERE sc.id = $1
         """,
         conversation_id
@@ -89,7 +89,7 @@ async def reprocess_conversation(conversation_id: str):
     messages = await pool.fetch(
         """
         SELECT role, message, created_at
-        FROM ats.conversation_messages
+        FROM ats.pre_screening_messages
         WHERE conversation_id = $1
         ORDER BY created_at
         """,

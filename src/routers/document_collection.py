@@ -244,7 +244,7 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
     # Abandon ALL active sessions for this phone number (pre-screening + document collection)
     # This ensures only one active conversation per phone number
     await pool.execute(
-        """UPDATE ats.screening_conversations
+        """UPDATE ats.pre_screening_conversations
         SET status = 'abandoned', updated_at = NOW()
         WHERE candidate_phone = $1 AND status = 'active'""",
         phone_normalized
@@ -366,7 +366,7 @@ async def debug_active_conversations(phone_number: str):
     screen_convs = await pool.fetch(
         """SELECT id, vacancy_id, session_id, candidate_name, status,
                   channel, started_at
-        FROM ats.screening_conversations
+        FROM ats.pre_screening_conversations
         WHERE candidate_phone = $1
         ORDER BY started_at DESC LIMIT 5""",
         phone_normalized

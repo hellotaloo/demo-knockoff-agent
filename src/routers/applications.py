@@ -117,7 +117,7 @@ async def reprocess_test_applications():
             a.started_at,
             (
                 SELECT sc.id
-                FROM ats.screening_conversations sc
+                FROM ats.pre_screening_conversations sc
                 WHERE sc.vacancy_id = a.vacancy_id
                 AND sc.is_test = true
                 AND sc.status = 'completed'
@@ -160,11 +160,11 @@ async def reprocess_test_applications():
                 })
                 continue
 
-            # Fetch messages from conversation_messages
+            # Fetch messages from pre_screening_messages
             messages = await pool.fetch(
                 """
                 SELECT role, message, created_at
-                FROM conversation_messages
+                FROM ats.pre_screening_messages
                 WHERE conversation_id = $1
                 ORDER BY created_at
                 """,

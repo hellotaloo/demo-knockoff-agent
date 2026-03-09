@@ -294,6 +294,309 @@ class ATSImportService:
             f"{published_count} published, {failed_count} failed"
         )
 
+    async def import_and_setup_documents(self, workspace_id: UUID):
+        """
+        Background import: imports ATS data, then creates document collection
+        configs for each vacancy. Updates in-memory progress throughout.
+
+        This method is meant to be run as an asyncio background task.
+        """
+        _reset_progress()
+        result = ATSImportResult()
+        imported_vacancies: list[dict] = []
+
+        # Phase 1: Import all ATS data (same as import_and_generate)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                recruiter_email_to_id = await self._import_recruiters(client, workspace_id, result)
+                client_name_to_id = await self._import_clients(client, workspace_id, result)
+
+                raw_vacancies = await self._fetch_all_pages(client, "/api/v1/vacancies")
+
+                async with self.pool.acquire() as conn:
+                    office_location_id = await self._get_default_office_location_id(conn, workspace_id)
+
+                    for vac_data in raw_vacancies:
+                        vac = ATSVacancy(**vac_data)
+
+                        existing = await conn.fetchval(
+                            "SELECT id FROM ats.vacancies WHERE source_id = $1 AND workspace_id = $2",
+                            vac.external_id, workspace_id,
+                        )
+
+                        if existing:
+                            # Vacancy already imported — still include for doc collection setup
+                            imported_vacancies.append({
+                                "id": str(existing),
+                                "title": vac.title,
+                            })
+                            continue
+
+                        internal_status = self._map_vacancy_status(vac.status)
+                        recruiter_id = recruiter_email_to_id.get(vac.recruiter_email) if vac.recruiter_email else None
+                        client_id = client_name_to_id.get(vac.client_name) if vac.client_name else None
+
+                        row = await conn.fetchrow("""
+                            INSERT INTO ats.vacancies
+                            (title, company, location, description, status, source, source_id,
+                             recruiter_id, client_id, workspace_id, office_location_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                            RETURNING id
+                        """, vac.title, vac.company_name, vac.work_location,
+                            vac.description_html, internal_status,
+                            "ats_import", vac.external_id,
+                            recruiter_id, client_id, workspace_id, office_location_id)
+
+                        result.vacancies_imported += 1
+                        imported_vacancies.append({
+                            "id": str(row["id"]),
+                            "title": vac.title,
+                        })
+
+        except Exception as e:
+            logger.error(f"ATS import failed: {e}")
+            _set_progress_error(str(e))
+            return
+
+        if not imported_vacancies:
+            _set_progress_complete(total=0, published=0, failed=0)
+            return
+
+        # Phase 2: Set up document collection configs per vacancy
+        _set_progress_queue([
+            {"id": v["id"], "title": v["title"], "status": "queued"}
+            for v in imported_vacancies
+        ])
+        # Override message for doc collection
+        global _import_progress
+        if _import_progress:
+            _import_progress["message"] = "Documentverzameling instellen..."
+
+        configured_count = 0
+        failed_count = 0
+
+        try:
+            async with self.pool.acquire() as conn:
+                # Ensure document type defaults exist
+                await conn.execute("SELECT ats.seed_document_type_defaults($1)", workspace_id)
+
+                # Get default document types
+                dt_rows = await conn.fetch(
+                    "SELECT id, slug FROM ats.document_types WHERE workspace_id = $1 AND is_default = true AND is_active = true",
+                    workspace_id,
+                )
+                default_dt_ids = [r["id"] for r in dt_rows]
+                default_slugs = [r["slug"] for r in dt_rows]
+
+                # Ensure workspace default config exists
+                default_config = await conn.fetchrow(
+                    "SELECT id FROM ats.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
+                    workspace_id,
+                )
+                if not default_config:
+                    default_config = await conn.fetchrow("""
+                        INSERT INTO ats.document_collection_configs
+                            (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
+                        VALUES ($1, NULL, $2, $3, 'active', true, true)
+                        RETURNING id
+                    """, workspace_id,
+                        "Standaard documentverzameling",
+                        "Hallo! Welkom bij het documentverzamelingsproces. Ik ga u helpen om de nodige documenten te verzamelen.")
+
+                    # Add default requirements
+                    for pos, dt_id in enumerate(default_dt_ids):
+                        await conn.execute("""
+                            INSERT INTO ats.document_collection_requirements
+                                (config_id, document_type_id, position, is_required)
+                            VALUES ($1, $2, $3, true)
+                            ON CONFLICT (config_id, document_type_id) DO NOTHING
+                        """, default_config["id"], dt_id, pos)
+
+                for vac in imported_vacancies:
+                    vacancy_id = UUID(vac["id"])
+                    vacancy_title = vac["title"]
+
+                    _update_vacancy_progress(vac["id"], "generating", activity="Configuratie aanmaken...")
+
+                    try:
+                        # Check if config already exists for this vacancy
+                        existing_config = await conn.fetchrow(
+                            "SELECT id FROM ats.document_collection_configs WHERE vacancy_id = $1",
+                            vacancy_id,
+                        )
+                        if existing_config:
+                            configured_count += 1
+                            _update_vacancy_progress(vac["id"], "published", activity="Geconfigureerd")
+                            continue
+
+                        # Create vacancy-specific config
+                        vac_config = await conn.fetchrow("""
+                            INSERT INTO ats.document_collection_configs
+                                (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
+                            VALUES ($1, $2, $3, $4, 'active', true, true)
+                            RETURNING id
+                        """, workspace_id, vacancy_id,
+                            f"Documentverzameling - {vacancy_title}",
+                            f"Hallo! Voor de functie {vacancy_title} hebben we een aantal documenten nodig.")
+
+                        # Add default document requirements
+                        for pos, dt_id in enumerate(default_dt_ids):
+                            await conn.execute("""
+                                INSERT INTO ats.document_collection_requirements
+                                    (config_id, document_type_id, position, is_required)
+                                VALUES ($1, $2, $3, true)
+                                ON CONFLICT (config_id, document_type_id) DO NOTHING
+                            """, vac_config["id"], dt_id, pos)
+
+                        configured_count += 1
+                        _update_vacancy_progress(
+                            vac["id"], "published",
+                            questions_count=len(default_dt_ids),
+                            activity="Geconfigureerd",
+                        )
+
+                    except Exception as e:
+                        logger.error(f"Failed to configure doc collection for vacancy {vacancy_id}: {e}")
+                        failed_count += 1
+                        _update_vacancy_progress(vac["id"], "failed", activity="Configuratie mislukt")
+
+        except Exception as e:
+            logger.error(f"Document collection setup failed: {e}")
+            _set_progress_error(str(e))
+            return
+
+        # Phase 3: Create sample conversations using existing candidates
+        # Each conversation gets a different status to showcase the lifecycle
+        conversations_created = 0
+        try:
+            async with self.pool.acquire() as conn:
+                # Get candidates from the workspace
+                cand_rows = await conn.fetch(
+                    "SELECT id, full_name, phone FROM ats.candidates WHERE workspace_id = $1 ORDER BY created_at DESC LIMIT 8",
+                    workspace_id,
+                )
+                if cand_rows:
+                    # Collect vacancy configs we just created
+                    vac_configs = []
+                    for vac in imported_vacancies:
+                        row = await conn.fetchrow(
+                            "SELECT id FROM ats.document_collection_configs WHERE vacancy_id = $1",
+                            UUID(vac["id"]),
+                        )
+                        if row:
+                            vac_configs.append({"config_id": row["id"], "vacancy_id": UUID(vac["id"])})
+
+                    # Get default config for remaining candidates
+                    default_cfg = await conn.fetchrow(
+                        "SELECT id FROM ats.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
+                        workspace_id,
+                    )
+
+                    # Get default slug list for documents_required snapshot
+                    default_slug_list = json.dumps(default_slugs) if default_slugs else "[]"
+
+                    # Conversation scenarios with varied message depth.
+                    # All use status="active"; the derived `progress` field is computed
+                    # from messages: no messages → pending, agent only → started, user replied → in_progress
+                    scenarios = [
+                        {
+                            "messages": [
+                                ("agent", "Hallo {name}! Welkom bij het documentverzamelingsproces. Ik ga u helpen om de nodige documenten te verzamelen. Kunt u starten met uw identiteitskaart?"),
+                                ("user", "Hallo, ja dat kan. Ik zal een foto nemen."),
+                                ("agent", "Perfect! Stuur gerust een foto van de voorzijde van uw identiteitskaart."),
+                                ("user", "Hier is de foto van mijn identiteitskaart."),
+                                ("agent", "Bedankt! Uw identiteitskaart is ontvangen en wordt geverifieerd. Kunt u nu ook uw paspoort opsturen?"),
+                            ],
+                        },
+                        {
+                            "messages": [
+                                ("agent", "Hallo {name}! Voor uw sollicitatie hebben we een aantal documenten nodig. Laten we beginnen met uw identiteitskaart."),
+                                ("user", "Goedemiddag, ik stuur het nu door."),
+                                ("agent", "Uitstekend! Ik heb uw identiteitskaart goed ontvangen. Nu hebben we ook uw bankgegevens nodig."),
+                                ("user", "Ik stuur een foto van mijn bankkaart."),
+                            ],
+                        },
+                        {
+                            "messages": [
+                                ("agent", "Hallo {name}! Welkom bij het documentverzamelingsproces. Ik ga u helpen om de nodige documenten te verzamelen. Kunt u starten met uw identiteitskaart?"),
+                            ],
+                        },
+                        {
+                            "messages": [
+                                ("agent", "Hallo {name}! Voor uw nieuwe functie hebben we enkele documenten nodig. Kunt u beginnen met uw identiteitskaart?"),
+                            ],
+                        },
+                        {
+                            "messages": [],
+                        },
+                        {
+                            "messages": [],
+                        },
+                    ]
+
+                    # Use up to 6 candidates
+                    dc_candidates = list(cand_rows[:6])
+
+                    for i, cand in enumerate(dc_candidates):
+                        if i >= len(scenarios):
+                            break
+
+                        cand_id = cand["id"]
+                        cand_name = cand["full_name"]
+                        cand_phone = (cand["phone"] or "").lstrip("+")
+                        scenario = scenarios[i]
+
+                        if i < len(vac_configs):
+                            config_id = vac_configs[i]["config_id"]
+                            vac_id = vac_configs[i]["vacancy_id"]
+                        elif default_cfg:
+                            config_id = default_cfg["id"]
+                            vac_id = None
+                        else:
+                            continue
+
+                        conv = await conn.fetchrow("""
+                            INSERT INTO ats.document_collections
+                                (config_id, workspace_id, vacancy_id, candidate_id,
+                                 candidate_name, candidate_phone, status, channel, documents_required)
+                            VALUES ($1, $2, $3, $4, $5, $6, 'active', 'whatsapp', $7::jsonb)
+                            RETURNING id
+                        """, config_id, workspace_id, vac_id, cand_id,
+                            cand_name, cand_phone, default_slug_list)
+
+                        # Add messages
+                        for role, msg_template in scenario["messages"]:
+                            msg = msg_template.replace("{name}", cand_name.split()[0])
+                            await conn.execute("""
+                                INSERT INTO ats.document_collection_messages
+                                    (collection_id, role, message)
+                                VALUES ($1, $2, $3)
+                            """, conv["id"], role, msg)
+
+                        if scenario["messages"]:
+                            await conn.execute("""
+                                UPDATE ats.document_collections
+                                SET message_count = $1, updated_at = NOW()
+                                WHERE id = $2
+                            """, len(scenario["messages"]), conv["id"])
+
+                        conversations_created += 1
+
+            logger.info(f"Created {conversations_created} sample document collection conversations")
+        except Exception as e:
+            logger.warning(f"Failed to create sample conversations: {e}")
+
+        _set_progress_complete(
+            total=len(imported_vacancies),
+            published=configured_count,
+            failed=failed_count,
+        )
+
+        logger.info(
+            f"ATS import + doc collection setup complete: {len(imported_vacancies)} vacancies, "
+            f"{configured_count} configured, {failed_count} failed, {conversations_created} conversations"
+        )
+
     async def _generate_pre_screening(
         self,
         vacancy_id: UUID,

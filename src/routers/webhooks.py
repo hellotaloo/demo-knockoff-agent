@@ -87,7 +87,7 @@ async def _process_whatsapp_conversation(
         """
         SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone, sc.is_test,
                sc.application_id, sc.pre_screening_id, sc.candidate_id
-        FROM ats.screening_conversations sc
+        FROM ats.pre_screening_conversations sc
         WHERE sc.id = $1
         """,
         conversation_id
@@ -105,7 +105,7 @@ async def _process_whatsapp_conversation(
 
     # Calculate call duration from messages
     messages = await pool.fetch(
-        "SELECT created_at FROM ats.conversation_messages WHERE conversation_id = $1 ORDER BY created_at",
+        "SELECT created_at FROM ats.pre_screening_messages WHERE conversation_id = $1 ORDER BY created_at",
         conversation_id
     )
     first_msg = messages[0]["created_at"] if messages else None
@@ -242,7 +242,7 @@ async def _process_whatsapp_conversation(
             # Mark conversation as completed
             await conn.execute(
                 """
-                UPDATE ats.screening_conversations
+                UPDATE ats.pre_screening_conversations
                 SET status = 'completed', completed_at = NOW(), updated_at = NOW()
                 WHERE id = $1
                 """,
@@ -318,7 +318,7 @@ async def _save_whatsapp_scheduled_interview(
             """
             SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone,
                    v.title as vacancy_title
-            FROM ats.screening_conversations sc
+            FROM ats.pre_screening_conversations sc
             JOIN ats.vacancies v ON v.id = sc.vacancy_id
             WHERE sc.id = $1
             """,
@@ -396,7 +396,7 @@ async def _save_agent_state_background(
     try:
         await pool.execute(
             """
-            UPDATE ats.screening_conversations
+            UPDATE ats.pre_screening_conversations
             SET agent_state = $1, updated_at = NOW()
             WHERE id = $2
             """,
@@ -419,7 +419,7 @@ async def _save_messages_background(
         # Store user message
         await pool.execute(
             """
-            INSERT INTO ats.conversation_messages (conversation_id, role, message)
+            INSERT INTO ats.pre_screening_messages (conversation_id, role, message)
             VALUES ($1, 'user', $2)
             """,
             conversation_id, user_message
@@ -428,7 +428,7 @@ async def _save_messages_background(
         if agent_response:
             await pool.execute(
                 """
-                INSERT INTO ats.conversation_messages (conversation_id, role, message)
+                INSERT INTO ats.pre_screening_messages (conversation_id, role, message)
                 VALUES ($1, 'agent', $2)
                 """,
                 conversation_id, agent_response
@@ -483,7 +483,7 @@ async def _webhook_impl_vacancy_specific(
             t0 = time_module.perf_counter()
             row = await pool.fetchrow(
                 """
-                SELECT agent_state FROM ats.screening_conversations WHERE id = $1
+                SELECT agent_state FROM ats.pre_screening_conversations WHERE id = $1
                 """,
                 conversation_id
             )
@@ -858,7 +858,7 @@ async def webhook(
             """
             SELECT sc.id, sc.vacancy_id, sc.pre_screening_id, sc.session_id, sc.candidate_name,
                    v.title as vacancy_title
-            FROM ats.screening_conversations sc
+            FROM ats.pre_screening_conversations sc
             JOIN ats.vacancies v ON v.id = sc.vacancy_id
             WHERE sc.candidate_phone = $1 AND sc.channel = 'whatsapp' AND sc.status = 'active'
             ORDER BY sc.started_at DESC LIMIT 1
@@ -991,7 +991,7 @@ async def elevenlabs_webhook(request: Request):
         """
         SELECT sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone, sc.candidate_name, sc.is_test,
                sc.application_id, v.title as vacancy_title
-        FROM ats.screening_conversations sc
+        FROM ats.pre_screening_conversations sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
         """,
@@ -1200,7 +1200,7 @@ async def elevenlabs_webhook(request: Request):
             # The session_id in screening_conversations is the ElevenLabs conversation_id
             await conn.execute(
                 """
-                UPDATE ats.screening_conversations
+                UPDATE ats.pre_screening_conversations
                 SET status = 'completed', completed_at = NOW(), updated_at = NOW()
                 WHERE session_id = $1 AND channel = 'voice'
                 """,
@@ -1211,7 +1211,7 @@ async def elevenlabs_webhook(request: Request):
             # First, get the screening_conversation ID
             conv_id_row = await conn.fetchrow(
                 """
-                SELECT id FROM ats.screening_conversations
+                SELECT id FROM ats.pre_screening_conversations
                 WHERE session_id = $1 AND channel = 'voice'
                 """,
                 data.conversation_id
@@ -1226,7 +1226,7 @@ async def elevenlabs_webhook(request: Request):
                     if message_text:
                         await conn.execute(
                             """
-                            INSERT INTO ats.conversation_messages (conversation_id, role, message)
+                            INSERT INTO ats.pre_screening_messages (conversation_id, role, message)
                             VALUES ($1, $2, $3)
                             """,
                             voice_conv_id, role, message_text

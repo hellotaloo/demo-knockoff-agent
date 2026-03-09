@@ -241,7 +241,7 @@ async def get_screening_conversation(conversation_id: str):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Get messages from conversation_messages table
+    # Get messages from pre_screening_messages table
     messages = []
     stored_messages = await conv_repo.get_messages(conv_uuid)
 

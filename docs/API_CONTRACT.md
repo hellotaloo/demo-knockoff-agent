@@ -4,6 +4,10 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-09** — Added `documents_required: DocumentTypeResponse[]` to `DocumentCollectionDetailResponse` (resolves stored slugs into full document type objects with name, icon, category); added Lucide icons to seeded document types
+- **2026-03-09** — Added derived `progress` field to `DocumentCollectionResponse` (computed from messages: `"pending"` → `"started"` → `"in_progress"`); added `documents_collected` and `documents_total` fields for progress counters. General `status` remains unchanged (`active`/`completed`/`needs_review`/`abandoned`)
+- **2026-03-09** — Split `POST /demo/import-ats` with `module` query parameter: `"pre_screening"` (default, existing behavior) or `"document_collection"` (creates configs per vacancy + sample conversations). Document collection demo data moved from `/demo/seed` to this endpoint
+- **2026-03-09** — Added Document Collection v2 system: workspace-scoped document types CRUD, collection configs (per-vacancy or default), document resolution/merge logic, conversation tracking, and candidate document portfolio. All under `/workspaces/{workspace_id}/document-collection/`. 7 new database tables (`ats.document_types`, `ats.document_collection_configs`, `ats.document_collection_requirements`, `ats.document_collections`, `ats.document_collection_messages`, `ats.document_collection_uploads`, `ats.candidate_documents`)
 - **2026-03-01** — Added `GET /pre-screening/config` and `PATCH /pre-screening/config` endpoints for global pre-screening agent configuration (require_consent, allow_escalation, planning_mode, schedule settings, messages); added `GET /vacancies/{vacancy_id}/pre-screening/settings` and `PATCH /vacancies/{vacancy_id}/pre-screening/settings` for per-vacancy channel toggles
 - **2026-03-01** — Added `POST /playground/start` endpoint for browser-based LiveKit WebRTC voice playground (returns access token for frontend to connect directly to pre-screening V2 agent, no database records created)
 - **2026-02-28** — Replaced VAPI voice provider with LiveKit pre-screening v2 agent; added `POST /webhook/livekit/call-result` endpoint for receiving structured call results; outbound voice calls now dispatch via LiveKit SIP
@@ -2735,6 +2739,460 @@ Twilio webhook for document collection messages.
 |----------|---------|
 | No active collection | `Geen actieve document verzameling gevonden. Neem contact op met ons voor hulp.` |
 | Max retries exceeded | `Na 3 pogingen kunnen we helaas niet verder. Een medewerker zal binnenkort contact met je opnemen.` |
+
+---
+
+## Document Collection v2 (Workspace-Scoped)
+
+All endpoints under `/workspaces/{workspace_id}/document-collection/`. Requires authentication (`Bearer` token).
+
+**Base path:** `/workspaces/{workspace_id}/document-collection`
+
+### Endpoint Summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/document-types` | List document types |
+| POST | `/document-types` | Create document type |
+| PATCH | `/document-types/{id}` | Update document type |
+| DELETE | `/document-types/{id}` | Soft-delete (is_active=false) |
+| GET | `/configs` | List collection configs |
+| POST | `/configs` | Create config |
+| GET | `/configs/{id}` | Get config with required documents |
+| PUT | `/configs/{id}` | Update config |
+| DELETE | `/configs/{id}` | Delete config |
+| PATCH | `/configs/{id}/status` | Toggle online/whatsapp flags |
+| GET | `/configs/{id}/documents` | List required documents |
+| PUT | `/configs/{id}/documents` | Replace all required documents |
+| GET | `/resolve` | Resolve which documents are needed |
+| GET | `/collections` | List document collections |
+| GET | `/collections/{id}` | Get collection with messages + uploads |
+| POST | `/collections/{id}/abandon` | Mark collection as abandoned |
+| POST | `/start` | Start a new document collection |
+
+---
+
+### Types
+
+```typescript
+// --- Document Types ---
+
+interface DocumentTypeResponse {
+  id: string;                    // UUID
+  workspace_id: string;          // UUID
+  slug: string;                  // e.g. "id_card", "drivers_license"
+  name: string;                  // Display name, e.g. "ID-kaart"
+  description?: string;
+  category: string;              // "identity" | "certificate" | "financial" | "other"
+  requires_front_back: boolean;  // If true, agent collects front + back
+  is_verifiable: boolean;        // If true, document_recognition_agent can verify
+  icon?: string;                 // Frontend icon name
+  is_default: boolean;           // Auto-included in workspace default onboarding
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;            // ISO timestamp
+  updated_at: string;
+}
+
+interface DocumentTypeCreate {
+  slug: string;                  // ^[a-z0-9_]+$ (1-50 chars)
+  name: string;                  // 1-200 chars
+  description?: string;
+  category?: string;             // Default: "identity"
+  requires_front_back?: boolean; // Default: false
+  is_verifiable?: boolean;       // Default: false
+  icon?: string;
+  is_default?: boolean;          // Default: false
+  sort_order?: number;           // Default: 0
+}
+
+interface DocumentTypeUpdate {
+  name?: string;
+  description?: string;
+  category?: string;
+  requires_front_back?: boolean;
+  is_verifiable?: boolean;
+  icon?: string;
+  is_default?: boolean;
+  is_active?: boolean;
+  sort_order?: number;
+}
+
+// --- Collection Configs ---
+
+interface CollectionConfigResponse {
+  id: string;
+  workspace_id: string;
+  vacancy_id?: string;           // null = workspace default config
+  name?: string;
+  intro_message?: string;        // Agent opening message template
+  status: string;                // "draft" | "active" | "archived"
+  is_online: boolean;
+  whatsapp_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CollectionConfigDetailResponse extends CollectionConfigResponse {
+  documents: CollectionRequirementResponse[];  // Required documents for this config
+}
+
+interface CollectionRequirementResponse {
+  id: string;
+  document_type_id: string;
+  document_type: DocumentTypeResponse;  // Full document type object
+  position: number;                     // Collection order
+  is_required: boolean;                 // Required vs optional
+  notes?: string;                       // Instructions for this doc
+}
+
+interface CollectionConfigCreate {
+  vacancy_id?: string;           // null = workspace default
+  name?: string;
+  intro_message?: string;
+  document_type_ids: string[];   // UUIDs of document types to require
+}
+
+interface CollectionConfigUpdate {
+  name?: string;
+  intro_message?: string;
+  status?: string;
+  is_online?: boolean;
+  whatsapp_enabled?: boolean;
+  document_type_ids?: string[];  // If provided, replaces all requirements
+}
+
+interface CollectionConfigStatusUpdate {
+  is_online?: boolean;
+  whatsapp_enabled?: boolean;
+}
+
+// --- Requirements ---
+
+interface RequirementItem {
+  document_type_id: string;
+  position?: number;             // Default: 0
+  is_required?: boolean;         // Default: true
+  notes?: string;
+}
+
+interface SetRequirementsRequest {
+  documents: RequirementItem[];
+}
+
+// --- Document Resolution ---
+
+interface ResolveDocumentsResponse {
+  documents: DocumentTypeResponse[];
+  source: string;                // "default" | "vacancy" | "merged"
+}
+
+// --- Collections ---
+
+interface DocumentCollectionResponse {
+  id: string;
+  config_id: string;
+  workspace_id: string;
+  vacancy_id?: string;
+  vacancy_title?: string;            // Vacancy title (joined from vacancies table)
+  application_id?: string;
+  candidate_name: string;
+  candidate_phone?: string;
+  status: string;                // "active" | "completed" | "needs_review" | "abandoned"
+  progress: string;              // Derived from messages: "pending" | "started" | "in_progress"
+  channel: string;               // "whatsapp"
+  retry_count: number;
+  message_count: number;
+  documents_collected: number;   // Count of verified uploads
+  documents_total: number;       // Total required documents (from documents_required array)
+  started_at: string;
+  updated_at: string;
+  completed_at?: string;
+}
+
+interface DocumentCollectionDetailResponse extends DocumentCollectionResponse {
+  messages: CollectionMessageResponse[];
+  uploads: CollectionUploadResponse[];
+  documents_required: DocumentTypeResponse[];  // Full document type objects resolved from stored slugs
+}
+
+interface CollectionMessageResponse {
+  role: string;                  // "user" | "agent" | "system"
+  message: string;
+  created_at: string;
+}
+
+interface CollectionUploadResponse {
+  id: string;
+  document_type_id?: string;
+  document_side: string;         // "front" | "back" | "single"
+  verification_passed?: boolean;
+  status: string;                // "pending" | "verified" | "rejected" | "needs_review"
+  uploaded_at: string;
+}
+
+// --- Start Collection ---
+
+interface StartCollectionRequest {
+  candidate_name: string;        // min 1 char
+  candidate_lastname: string;    // min 1 char
+  whatsapp_number: string;       // E.164: ^\+?[1-9]\d{1,14}$
+  vacancy_id?: string;           // If provided, uses vacancy-specific config
+  application_id?: string;
+  candidate_id?: string;
+}
+
+interface StartCollectionResponse {
+  collection_id: string;
+  config_id: string;
+  candidate_name: string;
+  whatsapp_number: string;
+  documents_required: DocumentTypeResponse[];
+  source: string;                // "default" | "vacancy" | "merged"
+}
+```
+
+---
+
+### GET /document-types
+
+List all document types for a workspace.
+
+**Auth:** Bearer token
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `category` | string | No | - | Filter by category (`identity`, `certificate`, `financial`, `other`) |
+| `is_active` | boolean | No | `true` | Filter by active status |
+
+**Response:** `DocumentTypeResponse[]`
+
+---
+
+### POST /document-types
+
+Create a new document type.
+
+**Auth:** Bearer token
+
+**Request Body:** `DocumentTypeCreate`
+
+**Response:** `DocumentTypeResponse` (201 Created)
+
+---
+
+### PATCH /document-types/{doc_type_id}
+
+Update a document type. All fields optional.
+
+**Auth:** Bearer token
+
+**Request Body:** `DocumentTypeUpdate`
+
+**Response:** `DocumentTypeResponse`
+
+---
+
+### DELETE /document-types/{doc_type_id}
+
+Soft-delete a document type (sets `is_active=false`).
+
+**Auth:** Bearer token
+
+**Response:** `{ "success": true }`
+
+---
+
+### GET /configs
+
+List collection configs for a workspace.
+
+**Auth:** Bearer token
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `vacancy_id` | string (UUID) | No | Filter by vacancy |
+
+**Response:** `CollectionConfigResponse[]`
+
+---
+
+### POST /configs
+
+Create a collection config. Set `vacancy_id=null` for workspace default.
+
+**Auth:** Bearer token
+
+**Request Body:** `CollectionConfigCreate`
+
+**Response:** `CollectionConfigDetailResponse` (201 Created)
+
+---
+
+### GET /configs/{config_id}
+
+Get a config with its required documents.
+
+**Auth:** Bearer token
+
+**Response:** `CollectionConfigDetailResponse`
+
+---
+
+### PUT /configs/{config_id}
+
+Update a config. If `document_type_ids` is provided, replaces all requirements.
+
+**Auth:** Bearer token
+
+**Request Body:** `CollectionConfigUpdate`
+
+**Response:** `CollectionConfigDetailResponse`
+
+---
+
+### DELETE /configs/{config_id}
+
+Delete a collection config. Requirements cascade-delete.
+
+**Auth:** Bearer token
+
+**Response:** `{ "success": true }`
+
+---
+
+### PATCH /configs/{config_id}/status
+
+Toggle `is_online` and/or `whatsapp_enabled` flags.
+
+**Auth:** Bearer token
+
+**Request Body:** `CollectionConfigStatusUpdate`
+
+**Response:** `CollectionConfigResponse`
+
+---
+
+### GET /configs/{config_id}/documents
+
+List required documents for a config.
+
+**Auth:** Bearer token
+
+**Response:** `CollectionRequirementResponse[]`
+
+---
+
+### PUT /configs/{config_id}/documents
+
+Replace all required documents for a config.
+
+**Auth:** Bearer token
+
+**Request Body:** `SetRequirementsRequest`
+
+**Response:** `CollectionRequirementResponse[]`
+
+---
+
+### GET /resolve
+
+Resolve which documents are needed for a candidate. Merges workspace defaults with vacancy-specific requirements.
+
+**Auth:** Bearer token
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `vacancy_id` | string (UUID) | No | If provided, merges vacancy config with defaults |
+
+**Response:** `ResolveDocumentsResponse`
+
+**Resolution Logic:**
+1. No `vacancy_id` → returns workspace default docs
+2. `vacancy_id` with config → merges default + vacancy-specific (dedup by type, vacancy overrides)
+3. `vacancy_id` without config → falls back to defaults
+
+---
+
+### GET /collections
+
+List document collections with filtering and pagination.
+
+**Auth:** Bearer token
+
+**Query Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `vacancy_id` | string (UUID) | No | - | Filter by vacancy |
+| `status` | string | No | - | Filter: `active`, `completed`, `needs_review`, `abandoned` |
+| `limit` | number | No | 50 | Results per page (1-200) |
+| `offset` | number | No | 0 | Pagination offset |
+
+**Response:** `PaginatedResponse<DocumentCollectionResponse>`
+
+```typescript
+{
+  items: DocumentCollectionResponse[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+```
+
+---
+
+### GET /collections/{collection_id}
+
+Get a document collection with its messages and uploads.
+
+**Auth:** Bearer token
+
+**Response:** `DocumentCollectionDetailResponse`
+
+---
+
+### POST /collections/{collection_id}/abandon
+
+Mark a document collection as abandoned.
+
+**Auth:** Bearer token
+
+**Response:** `{ "success": true }`
+
+---
+
+### POST /start
+
+Start a new document collection. Creates database records and resolves which documents are needed. Does NOT send WhatsApp messages (agent integration is a later phase).
+
+**Auth:** Bearer token
+
+**Request Body:** `StartCollectionRequest`
+
+**Response:** `StartCollectionResponse` (201 Created)
+
+---
+
+### Default Seeded Document Types
+
+Every workspace is seeded with these defaults:
+
+| Slug | Name | Category | Icon (Lucide) | Front/Back | Verifiable | Default |
+|------|------|----------|---------------|------------|------------|---------|
+| `id_card` | ID-kaart | identity | `credit-card` | Yes | Yes | Yes |
+| `driver_license` | Rijbewijs | certificate | `car` | No | Yes | No |
+| `passport` | Paspoort | identity | `book-open` | No | Yes | No |
+| `bank_details` | Bankgegevens | financial | `landmark` | No | No | No |
+| `medical_cert` | Medisch attest | certificate | `heart-pulse` | No | Yes | No |
+| `work_permit` | Arbeidsvergunning | certificate | `file-badge` | No | Yes | No |
+| `diploma` | Diploma/Certificaat | certificate | `graduation-cap` | No | Yes | No |
 
 ---
 

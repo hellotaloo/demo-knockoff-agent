@@ -343,6 +343,9 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
     except Exception as e:
         logger.warning(f"Failed to seed office location (table may not exist yet): {e}")
 
+    # Document collection v2 data is NOT seeded here.
+    # It's created via POST /demo/import-ats?module=document_collection
+
     return {
         "status": "success",
         "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities, {created_ontology_entities} ontology entities, {created_ontology_relations} ontology relations. Use POST /demo/import-ats to import vacancies from ATS.",
@@ -370,26 +373,41 @@ async def reset_demo_data(
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Delete in correct order respecting foreign key constraints
-            # First: conversation_messages (references screening_conversations)
-            try:
-                await conn.execute("DELETE FROM ats.conversation_messages")
-            except Exception:
-                pass  # Table may not exist yet
+            # First: pre_screening_messages (references pre_screening_conversations)
+            await conn.execute("DELETE FROM ats.pre_screening_messages")
+
+            # Document collection v2 tables (in FK order)
+            # Each uses a savepoint so a missing table doesn't abort the transaction
+            for tbl in [
+                "ats.candidate_documents",
+                "ats.document_collection_uploads",
+                "ats.document_collection_messages",
+                "ats.document_collections",
+                "ats.document_collection_requirements",
+                "ats.document_collection_configs",
+                "ats.document_types",
+            ]:
+                try:
+                    async with conn.transaction():
+                        await conn.execute(f"DELETE FROM {tbl}")
+                except Exception:
+                    pass  # Table may not exist yet
 
             # Then: tables that reference applications/candidates
-            await conn.execute("DELETE FROM ats.screening_conversations")
+            await conn.execute("DELETE FROM ats.pre_screening_conversations")
             await conn.execute("DELETE FROM ats.application_answers")
             await conn.execute("DELETE FROM ats.scheduled_interviews")
-            await conn.execute("DELETE FROM ats.document_collection_conversations")
 
             # Try to delete agent_activities and candidate_skills if tables exist
             try:
-                await conn.execute("DELETE FROM ats.agent_activities")
+                async with conn.transaction():
+                    await conn.execute("DELETE FROM ats.agent_activities")
             except Exception:
                 pass  # Table may not exist yet
 
             try:
-                await conn.execute("DELETE FROM ats.candidate_skills")
+                async with conn.transaction():
+                    await conn.execute("DELETE FROM ats.candidate_skills")
             except Exception:
                 pass  # Table may not exist yet
 
@@ -515,15 +533,22 @@ async def reset_demo_data(
 
 
 @router.post("/demo/import-ats")
-async def trigger_ats_import():
+async def trigger_ats_import(
+    module: str = Query("pre_screening", description="Module to set up: 'pre_screening' or 'document_collection'"),
+):
     """
     Start an ATS import as a background task.
 
     Imports recruiters, clients, and vacancies from the ATS simulator,
-    then generates pre-screening questions for each vacancy.
+    then sets up the selected module for each vacancy:
+    - pre_screening: generates pre-screening questions (default)
+    - document_collection: creates document collection configs
 
     Poll GET /demo/import-ats/status for progress.
     """
+    if module not in ("pre_screening", "document_collection"):
+        return {"status": "error", "message": f"Onbekende module: {module}. Gebruik 'pre_screening' of 'document_collection'."}
+
     # Don't start a new import if one is already running
     progress = get_import_progress()
     if progress and progress.get("status") in ("importing", "generating"):
@@ -533,7 +558,10 @@ async def trigger_ats_import():
     import_service = ATSImportService(pool)
 
     # Fire and forget — runs in the background
-    asyncio.create_task(import_service.import_and_generate(DEFAULT_WORKSPACE_ID))
+    if module == "document_collection":
+        asyncio.create_task(import_service.import_and_setup_documents(DEFAULT_WORKSPACE_ID))
+    else:
+        asyncio.create_task(import_service.import_and_generate(DEFAULT_WORKSPACE_ID))
 
     return {"status": "started", "message": "Import gestart. Poll GET /demo/import-ats/status voor voortgang."}
 

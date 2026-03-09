@@ -65,7 +65,7 @@ async def livekit_call_result(
         SELECT sc.id, sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone,
                sc.candidate_name, sc.is_test, sc.application_id, sc.candidate_id,
                v.title as vacancy_title
-        FROM ats.screening_conversations sc
+        FROM ats.pre_screening_conversations sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
         """,
@@ -170,7 +170,7 @@ async def livekit_call_result(
             for msg in payload.transcript:
                 await conn.execute(
                     """
-                    INSERT INTO ats.conversation_messages (conversation_id, role, message)
+                    INSERT INTO ats.pre_screening_messages (conversation_id, role, message)
                     VALUES ($1, $2, $3)
                     """,
                     screening_conv["id"],
@@ -182,7 +182,7 @@ async def livekit_call_result(
             conv_status = "abandoned" if is_abandoned else "completed"
             await conn.execute(
                 """
-                UPDATE ats.screening_conversations
+                UPDATE ats.pre_screening_conversations
                 SET status = $1, completed_at = NOW(), updated_at = NOW()
                 WHERE session_id = $2 AND channel = 'voice'
                 """,

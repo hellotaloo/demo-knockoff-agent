@@ -160,7 +160,10 @@
       "Bash(supabase projects list)",
       "Bash(# Check where supabase stores credentials on macOS find ~/Library -maxdepth 4 -name \"\"*supabase*\"\" -o -name \"\"*Supabase*\"\")",
       "Bash(# Supabase CLI v2 stores the access token via keyring or env # Let''s check if SUPABASE_ACCESS_TOKEN is set or try the settings env | grep -i supabase)",
-      "Bash(supabase branches list)"
+      "Bash(supabase branches list)",
+      "Bash(/bin/sleep 8)",
+      "Bash(/usr/bin/curl -s http://localhost:8084/health)",
+      "Bash(/usr/bin/curl -s http://localhost:8085/health)"
     ],
     "defaultMode": "acceptEdits"
   },

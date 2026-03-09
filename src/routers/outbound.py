@@ -32,7 +32,7 @@ async def _clear_all_sessions_for_phone(pool, phone_normalized: str):
     # 1. Abandon all active screening conversations (any channel)
     result = await pool.execute(
         """
-        UPDATE ats.screening_conversations
+        UPDATE ats.pre_screening_conversations
         SET status = 'abandoned', updated_at = NOW()
         WHERE candidate_phone = $1 AND status = 'active'
         """,
@@ -315,7 +315,7 @@ async def _initiate_voice_screening(
             # Store room name as session_id for webhook correlation
             conv_row = await pool.fetchrow(
                 """
-                INSERT INTO ats.screening_conversations
+                INSERT INTO ats.pre_screening_conversations
                 (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, application_id)
                 VALUES ($1, $2, $3, $4, $5, 'voice', 'active', $6, $7)
                 RETURNING id
@@ -490,7 +490,7 @@ async def _initiate_whatsapp_screening(
         session_id = str(uuid.uuid4())
         conv_row = await pool.fetchrow(
             """
-            INSERT INTO ats.screening_conversations
+            INSERT INTO ats.pre_screening_conversations
             (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, agent_state, application_id)
             VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6, $7, $8)
             RETURNING id
@@ -511,7 +511,7 @@ async def _initiate_whatsapp_screening(
         agent.state.conversation_id = str(conversation_id)
         await pool.execute(
             """
-            UPDATE ats.screening_conversations
+            UPDATE ats.pre_screening_conversations
             SET agent_state = $1
             WHERE id = $2
             """,
@@ -522,7 +522,7 @@ async def _initiate_whatsapp_screening(
         # Store the opening message in conversation_messages table
         await pool.execute(
             """
-            INSERT INTO ats.conversation_messages (conversation_id, role, message)
+            INSERT INTO ats.pre_screening_messages (conversation_id, role, message)
             VALUES ($1, 'agent', $2)
             """,
             conversation_id, opening_message
@@ -531,7 +531,7 @@ async def _initiate_whatsapp_screening(
         # Update message count
         await pool.execute(
             """
-            UPDATE ats.screening_conversations
+            UPDATE ats.pre_screening_conversations
             SET message_count = 1, updated_at = NOW()
             WHERE id = $1
             """,

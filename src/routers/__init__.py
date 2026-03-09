@@ -28,6 +28,7 @@ from .ontology import router as ontology_router
 from .interview_analysis import router as interview_analysis_router
 from .ats_simulator import router as ats_simulator_router
 from .playground import router as playground_router
+from .document_collection_v2 import router as document_collection_v2_router
 
 __all__ = [
     "health_router",
@@ -57,4 +58,5 @@ __all__ = [
     "interview_analysis_router",
     "ats_simulator_router",
     "playground_router",
+    "document_collection_v2_router",
 ]

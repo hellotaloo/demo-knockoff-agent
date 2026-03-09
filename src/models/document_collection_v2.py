@@ -1,0 +1,263 @@
+"""
+Pydantic models for the document collection system (v2).
+
+Covers: document types, collection configs, requirements,
+document collections, messages, uploads, and candidate documents.
+"""
+from datetime import datetime, date
+from typing import Optional, List
+from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# Document Types
+# =============================================================================
+
+class DocumentTypeCreate(BaseModel):
+    """Create a new document type for a workspace."""
+    slug: str = Field(..., min_length=1, max_length=50, pattern=r"^[a-z0-9_]+$")
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    category: str = Field(default="identity")
+    requires_front_back: bool = False
+    is_verifiable: bool = False
+    icon: Optional[str] = None
+    is_default: bool = False
+    sort_order: int = 0
+
+
+class DocumentTypeUpdate(BaseModel):
+    """Partial update for a document type."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    requires_front_back: Optional[bool] = None
+    is_verifiable: Optional[bool] = None
+    icon: Optional[str] = None
+    is_default: Optional[bool] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class DocumentTypeResponse(BaseModel):
+    """Document type response."""
+    id: str
+    workspace_id: str
+    slug: str
+    name: str
+    description: Optional[str] = None
+    category: str
+    requires_front_back: bool
+    is_verifiable: bool
+    icon: Optional[str] = None
+    is_default: bool
+    is_active: bool
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+# =============================================================================
+# Collection Configs
+# =============================================================================
+
+class CollectionConfigCreate(BaseModel):
+    """Create a document collection config."""
+    vacancy_id: Optional[str] = None
+    name: Optional[str] = None
+    intro_message: Optional[str] = None
+    document_type_ids: List[str] = Field(default_factory=list)
+
+
+class CollectionConfigUpdate(BaseModel):
+    """Update a collection config."""
+    name: Optional[str] = None
+    intro_message: Optional[str] = None
+    status: Optional[str] = None
+    is_online: Optional[bool] = None
+    whatsapp_enabled: Optional[bool] = None
+    document_type_ids: Optional[List[str]] = None
+
+
+class CollectionConfigStatusUpdate(BaseModel):
+    """Toggle online/whatsapp flags."""
+    is_online: Optional[bool] = None
+    whatsapp_enabled: Optional[bool] = None
+
+
+class CollectionConfigResponse(BaseModel):
+    """Collection config response."""
+    id: str
+    workspace_id: str
+    vacancy_id: Optional[str] = None
+    name: Optional[str] = None
+    intro_message: Optional[str] = None
+    status: str
+    is_online: bool
+    whatsapp_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class CollectionRequirementResponse(BaseModel):
+    """A required document within a config."""
+    id: str
+    document_type_id: str
+    document_type: DocumentTypeResponse
+    position: int
+    is_required: bool
+    notes: Optional[str] = None
+
+
+class CollectionConfigDetailResponse(CollectionConfigResponse):
+    """Config with its required documents."""
+    documents: List[CollectionRequirementResponse] = Field(default_factory=list)
+
+
+# =============================================================================
+# Document Resolution
+# =============================================================================
+
+class ResolveDocumentsResponse(BaseModel):
+    """Result of resolving which documents are needed."""
+    documents: List[DocumentTypeResponse]
+    source: str  # "default", "vacancy", "merged"
+
+
+# =============================================================================
+# Document Collections
+# =============================================================================
+
+class StartCollectionRequest(BaseModel):
+    """Start a document collection."""
+    candidate_name: str = Field(..., min_length=1)
+    candidate_lastname: str = Field(..., min_length=1)
+    whatsapp_number: str = Field(..., pattern=r"^\+?[1-9]\d{1,14}$")
+    vacancy_id: Optional[str] = None
+    application_id: Optional[str] = None
+    candidate_id: Optional[str] = None
+
+
+class StartCollectionResponse(BaseModel):
+    """Response after starting a collection."""
+    collection_id: str
+    config_id: str
+    candidate_name: str
+    whatsapp_number: str
+    documents_required: List[DocumentTypeResponse]
+    source: str  # "default", "vacancy", "merged"
+
+
+class DocumentCollectionResponse(BaseModel):
+    """Document collection summary.
+
+    Status values (general lifecycle):
+      active       — collection is ongoing
+      completed    — all documents collected
+      needs_review — documents need manual review
+      abandoned    — collection was abandoned
+
+    Progress values (derived from messages, only relevant when status=active):
+      pending     — no messages sent yet
+      started     — agent sent first message, awaiting user response
+      in_progress — user is actively engaging
+    """
+    id: str
+    config_id: str
+    workspace_id: str
+    vacancy_id: Optional[str] = None
+    vacancy_title: Optional[str] = None
+    application_id: Optional[str] = None
+    candidate_name: str
+    candidate_phone: Optional[str] = None
+    status: str
+    progress: str = "pending"
+    channel: str
+    retry_count: int
+    message_count: int
+    documents_collected: int = 0
+    documents_total: int = 0
+    started_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class CollectionMessageResponse(BaseModel):
+    """A message within a document collection."""
+    role: str
+    message: str
+    created_at: datetime
+
+
+class CollectionUploadResponse(BaseModel):
+    """A document upload within a collection."""
+    id: str
+    document_type_id: Optional[str] = None
+    document_side: str
+    verification_passed: Optional[bool] = None
+    status: str
+    uploaded_at: datetime
+
+
+class DocumentCollectionDetailResponse(DocumentCollectionResponse):
+    """Document collection with messages, uploads, and required documents."""
+    messages: List[CollectionMessageResponse] = Field(default_factory=list)
+    uploads: List[CollectionUploadResponse] = Field(default_factory=list)
+    documents_required: List[DocumentTypeResponse] = Field(default_factory=list)
+
+
+# =============================================================================
+# Candidate Documents (Portfolio)
+# =============================================================================
+
+class CandidateDocumentResponse(BaseModel):
+    """A candidate's verified document record."""
+    id: str
+    candidate_id: str
+    document_type_id: str
+    document_type: Optional[DocumentTypeResponse] = None
+    workspace_id: str
+    document_number: Optional[str] = None
+    metadata: Optional[dict] = None
+    expiration_date: Optional[date] = None
+    status: str
+    verification_passed: Optional[bool] = None
+    storage_path: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CandidateDocumentCreate(BaseModel):
+    """Manually add a candidate document record."""
+    document_type_id: str
+    document_number: Optional[str] = None
+    metadata: Optional[dict] = None
+    expiration_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class CandidateDocumentUpdate(BaseModel):
+    """Update a candidate document record."""
+    document_number: Optional[str] = None
+    metadata: Optional[dict] = None
+    expiration_date: Optional[date] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# =============================================================================
+# Requirement management helper
+# =============================================================================
+
+class RequirementItem(BaseModel):
+    """A single requirement when setting documents for a config."""
+    document_type_id: str
+    position: int = 0
+    is_required: bool = True
+    notes: Optional[str] = None
+
+
+class SetRequirementsRequest(BaseModel):
+    """Replace all requirements for a config."""
+    documents: List[RequirementItem]
