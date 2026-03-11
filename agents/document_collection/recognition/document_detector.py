@@ -147,26 +147,13 @@ _runner = Runner(
 )
 
 
+from src.utils.text_utils import extract_json_from_response
+
+
 def parse_detection_response(response_text: str) -> Optional[dict]:
     """Parse JSON response from detection agent."""
-    # Try to extract JSON from markdown code block
-    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        # Try to find raw JSON object
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            logger.error(f"Could not find JSON in detection response: {response_text[:500]}")
-            return None
-
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse detection JSON: {e}\nJSON string: {json_str[:500]}")
-        return None
+    result = extract_json_from_response(response_text)
+    return result or None
 
 
 async def detect_document_bounds(image_data: bytes) -> Optional[DocumentBounds]:

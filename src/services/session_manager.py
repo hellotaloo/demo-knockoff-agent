@@ -76,14 +76,14 @@ class SessionManager:
         # Full thinking agent for initial generation
         self.interview_runner = Runner(
             agent=interview_agent,
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             session_service=self.interview_session_service
         )
 
         # Fast agent for simple edits (no thinking)
         self.interview_editor_runner = Runner(
             agent=interview_editor_agent,
-            app_name="interview_generator",  # Same app_name to share sessions
+            app_name="interview_question_generator",  # Same app_name to share sessions
             session_service=self.interview_session_service
         )
 
@@ -201,7 +201,7 @@ class SessionManager:
             return self.document_runners[collection_id]
 
         # Create agent
-        from document_collection_agent import create_document_collection_agent
+        from agents.document_collection.whatsapp import create_document_collection_agent
         agent = create_document_collection_agent(
             collection_id=collection_id,
             candidate_name=candidate_name,

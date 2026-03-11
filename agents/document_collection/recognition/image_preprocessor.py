@@ -159,7 +159,7 @@ async def preprocess_document_image_ai(
         Tuple of (processed_image_bytes, preprocessing_applied)
     """
     try:
-        from document_recognition_agent.document_detector import detect_document_bounds
+        from .document_detector import detect_document_bounds
 
         # Decode image
         nparr = np.frombuffer(image_bytes, np.uint8)

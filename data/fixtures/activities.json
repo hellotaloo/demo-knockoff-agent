@@ -182,8 +182,8 @@
     "minutes_ago": 90
   },
   {
-    "candidate_idx": 3,
-    "vacancy_idx": 0,
+    "candidate_idx": 7,
+    "vacancy_idx": 2,
     "event_type": "interview_rescheduled",
     "channel": "web",
     "actor_type": "recruiter",

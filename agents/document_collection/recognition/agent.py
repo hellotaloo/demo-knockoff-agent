@@ -3,33 +3,45 @@ Document Recognition Agent for verifying identity documents.
 
 Uses Gemini 2.5-Flash vision capabilities to:
 - Classify document type
-- Extract candidate name
+- Extract candidate name + document-type-specific fields
 - Verify name match
 - Detect AI-generated or manipulated documents
 """
 
-from google.adk.agents.llm_agent import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
+from google import genai
 from google.genai import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
 import base64
-import json
+import io
 import logging
-import re
+import os
 import uuid
 
 logger = logging.getLogger(__name__)
 
+_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
 
 # =============================================================================
-# Data Classes for Results
+# Document type → fields to extract
+# =============================================================================
+
+DOCUMENT_FIELDS = {
+    "id_card": ["date_of_birth", "expiry_date", "national_registry_number", "nationality", "place_of_birth"],
+    "driver_license": ["date_of_birth", "expiry_date", "license_categories", "issue_date"],
+    "passport": ["date_of_birth", "expiry_date", "passport_number", "nationality", "place_of_birth"],
+    "work_permit": ["expiry_date", "permit_type", "issuing_authority"],
+    "medical_certificate": ["expiry_date", "issuing_authority", "certificate_type"],
+    "certificate_diploma": ["issue_date", "institution", "qualification_title"],
+}
+
+
+# =============================================================================
+# Data Classes
 # =============================================================================
 
 @dataclass
 class FraudIndicator:
-    """Individual fraud detection finding."""
     indicator_type: str
     description: str
     severity: str  # low, medium, high
@@ -38,7 +50,6 @@ class FraudIndicator:
 
 @dataclass
 class DocumentVerificationResult:
-    """Complete result from document verification."""
     document_category: str
     document_category_confidence: float
     extracted_name: Optional[str]
@@ -54,22 +65,17 @@ class DocumentVerificationResult:
     readability_issues: List[str]
     verification_passed: bool
     verification_summary: str
+    extracted_fields: dict = field(default_factory=dict)  # document-type-specific fields
     raw_response: Optional[str] = None
 
 
 # =============================================================================
-# Agent Instruction - Multi-language Support (Dutch/English)
+# Prompt builder
 # =============================================================================
 
-INSTRUCTION = """You are an expert document verification specialist with expertise in detecting fraudulent or AI-generated documents.
+BASE_INSTRUCTION = """You are an expert document verification specialist with expertise in detecting fraudulent or AI-generated documents.
 
-Your task is to analyze an image of an identity or qualification document and provide a comprehensive verification report.
-
-## INPUT
-You will receive:
-1. An image (JPG/PNG) of a document
-2. Optional: expected candidate name for verification
-3. Optional: document type hint
+Analyze the document image and provide a comprehensive verification report as a JSON object.
 
 ## ANALYSIS REQUIREMENTS
 
@@ -77,200 +83,147 @@ You will receive:
 Identify the document type:
 - **id_card**: National identity card (identiteitskaart / ID-kaart)
 - **driver_license**: Driving license (rijbewijs)
+- **passport**: Passport
 - **medical_certificate**: Medical fitness certificate (gezondheidsverklaring)
 - **work_permit**: Work permit or visa (werkvergunning)
 - **certificate_diploma**: Educational certificate or diploma
 - **unknown**: Recognizable document but type unclear
 - **unreadable**: Image too poor quality to identify
 
-Provide confidence score 0-1.
-
 ### 2. NAME EXTRACTION
-Extract the person's name from the document. Look for:
-- Full legal name fields
-- First name / Last name sections
-- Multiple name formats (Western, non-Western)
-- Handle prefixes (van, de, van der, etc.)
-
-Provide confidence score 0-1.
+Extract the full legal name. Handle Dutch/Belgian naming conventions (van, de, van der prefixes, multiple middle names).
 
 ### 3. NAME MATCHING (if expected name provided)
-Compare extracted name with expected candidate name:
 - **exact_match**: Names match exactly (case-insensitive)
-- **partial_match**: Same person, different format (e.g., "Jan de Vries" vs "J. de Vries") OR extra middle names present
+- **partial_match**: Same person, different format (middle names, abbreviations) — COMMON in Belgian/Dutch names
 - **no_match**: Different person
-- **ambiguous**: Cannot determine with confidence
+- **ambiguous**: Cannot determine
 
-IMPORTANT - Belgian/Dutch Naming Conventions:
-- Multiple middle names are VERY COMMON (e.g., "Jan Bart Cleasend De Vries" vs "Jan De Vries")
-- If first name AND last name match, treat as **partial_match** even if middle names differ
-- Middle names can be abbreviated or omitted in informal contexts
-- Example: "Jan Bart Cleasend De Vries" should match "Jan De Vries" - this is NORMAL
-- Another example: "Laurijn André L Deschepper" should match "Laurijn Deschepper" - this is NORMAL
+IMPORTANT: If first name AND last name match, it's partial_match even with extra middle names (e.g. "Jan Bart De Vries" vs "Jan De Vries" is NORMAL).
 
-Consider:
-- Name order variations
-- Middle name presence/absence (COMMON, not suspicious)
-- Prefixes and suffixes (van, de, van der, etc.)
-- Spelling variations (ij vs y, etc.)
+### 4. DOCUMENT-SPECIFIC FIELDS
+{extra_fields_instruction}
 
-Provide detailed explanation and confidence 0-1.
+### 5. FRAUD DETECTION
+Check for: AI-generated portraits, digital manipulation, font mismatches, inconsistent resolution, tampered data.
+For each indicator: type, description, severity (low/medium/high), confidence (0-1).
 
-### 4. FRAUD DETECTION
-Analyze for signs of manipulation or AI generation:
+### 6. IMAGE QUALITY
+- **excellent**: High res, well-lit, full document visible
+- **good**: Clear, minor issues, usable for OCR
+- **acceptable**: Readable despite slight angle/glare
+- **poor**: Difficult to read
+- **unreadable**: Cannot extract meaningful information
 
-**Synthetic Image Indicators:**
-- AI-generated portrait photos (unusual skin texture, symmetry artifacts)
-- Deepfake characteristics
-- Generated backgrounds
-
-**Digital Manipulation:**
-- Clone stamp artifacts
-- Unnatural shadows or lighting
-- Inconsistent resolution across document
-- Editing tool traces (layers, masks)
-
-**Inconsistent Fonts/Layout:**
-- Font mismatches within document
-- Improper alignment or spacing
-- Text not following document curves
-- Incorrect official logos or watermarks
-
-**Quality Issues:**
-- Deliberately poor quality to hide manipulation
-- Strategic blurring over specific fields
-- Inconsistent compression artifacts
-
-**Tampered Data:**
-- Dates or numbers that don't align with original print
-- Overwritten or replaced text fields
-- Inconsistent aging of document vs. data
-
-For each indicator found:
-- Type of indicator
-- Description of what you observed
-- Severity: low, medium, high
-- Confidence: 0-1
-
-### 5. OVERALL FRAUD RISK
-Based on all indicators:
-- **low**: No significant indicators, document appears authentic
-- **medium**: Some suspicious elements, requires human review
-- **high**: Strong indicators of fraud, likely manipulated/fake
-
-### 6. IMAGE QUALITY ASSESSMENT
-Rate image quality FOR OCR AND AUTHENTICATION PURPOSES:
-- **excellent**: High resolution, well-lit, entire document visible, perfect alignment
-- **good**: Clear and readable, minor quality issues, usable for OCR
-- **acceptable**: Readable with some issues (slight angle, some glare, minor lighting issues) BUT STILL USABLE FOR OCR
-- **poor**: Very difficult to read, text barely legible, OCR would struggle significantly
-- **unreadable**: Cannot extract meaningful information at all
-
-IMPORTANT: Be PRAGMATIC about quality issues:
-- Slight glare or reflections are COMMON and ACCEPTABLE if text is still readable
-- Photos taken at a slight angle are NORMAL and ACCEPTABLE if document is fully visible
-- Minor lighting variations are ACCEPTABLE
-- Only mark as "poor" if the document is genuinely difficult to read for authentication
-- Only mark as "unreadable" if you cannot extract ANY useful information
-
-Focus on: "Can this be used for authentication and OCR?" not "Is this a perfect scan?"
-
-List specific readability issues: blurry, low_resolution, partial_document, poor_lighting, excessive_glare, etc.
+Be PRAGMATIC: slight glare and angles are NORMAL. Only reject if genuinely unusable.
 
 ## OUTPUT FORMAT
 Respond ONLY with a JSON object:
 
 ```json
-{
-  "document_category": "driver_license",
-  "document_category_confidence": 0.95,
+{{
+  "document_category": "id_card",
+  "document_category_confidence": 0.99,
   "extracted_name": "Jan de Vries",
-  "name_extraction_confidence": 0.92,
-  "name_match_performed": true,
-  "name_match_result": "exact_match",
-  "name_match_confidence": 0.98,
-  "name_match_details": "Names match exactly when normalized",
-  "fraud_indicators": [
-    {
-      "indicator_type": "poor_quality",
-      "description": "Image intentionally blurred around date field",
-      "severity": "medium",
-      "confidence": 0.7
-    }
-  ],
-  "fraud_risk_level": "medium",
-  "overall_fraud_confidence": 0.65,
-  "image_quality": "acceptable",
-  "readability_issues": ["partial_blur", "low_resolution"],
-  "verification_summary": "Document appears to be a Dutch driving license for Jan de Vries. Medium fraud risk due to suspicious blurring around date field. Recommend manual verification."
-}
+  "name_extraction_confidence": 0.98,
+  "name_match_performed": false,
+  "name_match_result": null,
+  "name_match_confidence": null,
+  "name_match_details": null,
+  "extracted_fields": {{
+{example_fields}
+  }},
+  "fraud_indicators": [],
+  "fraud_risk_level": "low",
+  "overall_fraud_confidence": 0.05,
+  "image_quality": "good",
+  "readability_issues": [],
+  "verification_summary": "Belgian ID card for Jan de Vries. No fraud indicators. Document appears authentic."
+}}
 ```
 
-## IMPORTANT RULES
-1. Be PRAGMATIC not PERFECTIONIST - real-world photos have quality issues (glare, angles, lighting)
-2. Focus on "usable for authentication" not "perfect scan quality"
-3. Belgian/Dutch naming: Multiple middle names are VERY COMMON - first+last name match is sufficient
-4. Consider cultural context (Dutch/Belgian documents have specific layouts)
-5. High fraud confidence requires multiple strong indicators - don't be paranoid
-6. Verification summary should be clear and actionable
-7. Respond ONLY with JSON, no additional text
-8. If image is completely unreadable, still provide structured response with "unreadable" category
-9. Be conservative with fraud detection - false positives harm legitimate candidates
-10. Consider that genuine documents may have wear, folds, or age-related artifacts
-11. Minor glare or slight angles are ACCEPTABLE - only reject if genuinely unusable
-12. Think like a practical recruiter, not a forensic scientist
+IMPORTANT: Respond ONLY with JSON, no additional text.
 """
 
+EXTRA_FIELDS_BY_TYPE = {
+    "id_card": (
+        "Extract these fields from the Belgian ID card:\n"
+        "- date_of_birth (DD.MM.YYYY or as shown)\n"
+        "- expiry_date (DD.MM.YYYY or as shown)\n"
+        "- national_registry_number (rijksregisternummer, format: XX.XX.XX-XXX.XX)\n"
+        "- nationality\n"
+        "- place_of_birth\n"
+        "Set to null if not visible."
+    ),
+    "driver_license": (
+        "Extract these fields from the driving license:\n"
+        "- date_of_birth (DD.MM.YYYY or as shown)\n"
+        "- expiry_date\n"
+        "- license_categories (e.g. 'B, BE')\n"
+        "- issue_date\n"
+        "Set to null if not visible."
+    ),
+    "passport": (
+        "Extract these fields from the passport:\n"
+        "- date_of_birth\n"
+        "- expiry_date\n"
+        "- passport_number\n"
+        "- nationality\n"
+        "- place_of_birth\n"
+        "Set to null if not visible."
+    ),
+}
+
+EXAMPLE_FIELDS_BY_TYPE = {
+    "id_card": '    "date_of_birth": "01.01.1990",\n    "expiry_date": "01.01.2030",\n    "national_registry_number": "90.01.01-123.45",\n    "nationality": "Belg",\n    "place_of_birth": "Gent"',
+    "driver_license": '    "date_of_birth": "01.01.1990",\n    "expiry_date": "01.01.2030",\n    "license_categories": "B",\n    "issue_date": "01.01.2020"',
+    "passport": '    "date_of_birth": "01.01.1990",\n    "expiry_date": "01.01.2030",\n    "passport_number": "AB123456",\n    "nationality": "Belgian",\n    "place_of_birth": "Gent"',
+}
+
+
+def _build_prompt(document_type_hint: Optional[str], candidate_name: Optional[str]) -> str:
+    extra = EXTRA_FIELDS_BY_TYPE.get(document_type_hint or "", "Extract any relevant fields visible on the document.")
+    example = EXAMPLE_FIELDS_BY_TYPE.get(document_type_hint or "", '    "issue_date": "01.01.2020"')
+    prompt = BASE_INSTRUCTION.format(extra_fields_instruction=extra, example_fields=example)
+
+    parts = [prompt, "\nAnalyze this document image."]
+    if document_type_hint:
+        parts.append(f"Expected document type: {document_type_hint}")
+    if candidate_name:
+        parts.append(f"Expected candidate name: {candidate_name}")
+        parts.append("Please verify if the name on the document matches this expected name.")
+    return "\n".join(parts)
+
 
 # =============================================================================
-# Agent and Runner Setup
+# Image preprocessing
 # =============================================================================
 
-document_verification_agent = Agent(
-    name="document_verifier",
-    model="gemini-2.5-flash",  # Vision-enabled, fast, cost-effective
-    instruction=INSTRUCTION,
-    description="Agent for verifying identity and qualification documents with fraud detection",
-)
-
-_session_service = InMemorySessionService()
-
-_runner = Runner(
-    agent=document_verification_agent,
-    app_name="document_verification",
-    session_service=_session_service,
-)
-
-
-# =============================================================================
-# Helper Functions
-# =============================================================================
-
-def parse_agent_response(response_text: str) -> dict:
-    """Parse JSON response from agent."""
-    # Try to extract JSON from markdown code block
-    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        # Try to find raw JSON object
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            logger.error(f"Could not find JSON in response: {response_text[:500]}")
-            return {}
-
+def _preprocess_image(image_data: bytes, max_size: int = 1024) -> tuple[bytes, str]:
+    """Resize image to max_size on longest side and re-encode as JPEG."""
     try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON: {e}\nJSON string: {json_str[:500]}")
-        return {}
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_data))
+        img.thumbnail((max_size, max_size), Image.LANCZOS)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=88, optimize=True)
+        result = buf.getvalue()
+        logger.info(f"Image resized: {len(image_data)/1024:.1f}KB → {len(result)/1024:.1f}KB ({img.size[0]}x{img.size[1]}px)")
+        return result, "image/jpeg"
+    except Exception as e:
+        logger.warning(f"Image preprocessing failed, using original: {e}")
+        mime = "image/png" if image_data[:4] == b'\x89PNG' else "image/jpeg"
+        return image_data, mime
 
 
 # =============================================================================
-# Main Verification Function
+# Main verification function — direct Gemini API (no ADK runner overhead)
 # =============================================================================
+
+from src.utils.text_utils import extract_json_from_response as parse_agent_response
+
 
 async def verify_document(
     image_data: bytes,
@@ -278,78 +231,50 @@ async def verify_document(
     document_type_hint: Optional[str] = None,
 ) -> DocumentVerificationResult:
     """
-    Verify a document image with fraud detection.
+    Verify a document image with fraud detection and field extraction.
 
     Args:
         image_data: Raw image bytes (JPG/PNG)
         candidate_name: Expected name for verification
-        document_type_hint: Optional hint about document type
+        document_type_hint: e.g. "id_card", "driver_license", "passport"
 
     Returns:
         DocumentVerificationResult with complete analysis
     """
-    # Build prompt
-    prompt_parts = ["Analyze this document image and provide a verification report."]
-
-    if document_type_hint and document_type_hint != "unknown":
-        prompt_parts.append(f"Expected document type: {document_type_hint}")
-
-    if candidate_name:
-        prompt_parts.append(f"Expected candidate name: {candidate_name}")
-        prompt_parts.append("Please verify if the name on the document matches this expected name.")
-
-    prompt_text = "\n".join(prompt_parts)
+    import asyncio
+    import time
 
     logger.info("=" * 60)
     logger.info("DOCUMENT VERIFIER: Starting verification")
-    logger.info("=" * 60)
-    logger.info(f"Image size: {len(image_data)} bytes")
-    logger.info(f"Expected name: {candidate_name or 'None'}")
-    logger.info(f"Type hint: {document_type_hint or 'None'}")
-    logger.info("-" * 40)
+    logger.info(f"Image size: {len(image_data)/1024:.1f} KB | type: {document_type_hint} | name: {candidate_name}")
 
-    # Create unique session for this verification
-    session_id = f"doc_verify_{uuid.uuid4().hex[:8]}"
+    # Preprocess image
+    t0 = time.time()
+    processed_image, mime_type = _preprocess_image(image_data)
 
-    await _session_service.create_session(
-        app_name="document_verification",
-        user_id="system",
-        session_id=session_id
-    )
+    # Build prompt
+    prompt = _build_prompt(document_type_hint, candidate_name)
 
-    # Detect MIME type from image data
-    mime_type = "image/jpeg"
-    if image_data[:4] == b'\x89PNG':
-        mime_type = "image/png"
-
-    # Create content with image and prompt
-    content = types.Content(
-        role="user",
-        parts=[
-            types.Part(
-                inline_data=types.Blob(
-                    mime_type=mime_type,
-                    data=image_data
-                )
+    # Call Gemini directly (bypasses ADK runner overhead)
+    loop = asyncio.get_event_loop()
+    response = await loop.run_in_executor(
+        None,
+        lambda: _client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[
+                types.Part(inline_data=types.Blob(mime_type=mime_type, data=processed_image)),
+                types.Part(text=prompt),
+            ],
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
             ),
-            types.Part(text=prompt_text)
-        ]
+        )
     )
 
-    # Run agent
-    response_text = ""
-    async for event in _runner.run_async(
-        user_id="system",
-        session_id=session_id,
-        new_message=content
-    ):
-        if event.is_final_response() and event.content:
-            for part in event.content.parts:
-                if hasattr(part, 'text') and part.text:
-                    response_text += part.text
-
-    logger.info("Agent response received")
-    logger.debug(f"Raw response: {response_text[:500]}...")
+    elapsed = time.time() - t0
+    response_text = response.text or ""
+    logger.info(f"Gemini response in {elapsed:.2f}s")
 
     # Parse response
     parsed = parse_agent_response(response_text)
@@ -376,27 +301,24 @@ async def verify_document(
         )
 
     # Parse fraud indicators
-    fraud_indicators = []
-    for fi in parsed.get("fraud_indicators", []):
-        fraud_indicators.append(FraudIndicator(
+    fraud_indicators = [
+        FraudIndicator(
             indicator_type=fi.get("indicator_type", ""),
             description=fi.get("description", ""),
             severity=fi.get("severity", "low"),
             confidence=fi.get("confidence", 0.0)
-        ))
+        )
+        for fi in parsed.get("fraud_indicators", [])
+    ]
 
-    # Determine verification passed - be pragmatic!
-    # Accept if: document is recognizable, fraud risk is low/medium, and quality is usable
+    # Determine verification passed
     verification_passed = (
         parsed.get("document_category") not in ["unknown", "unreadable"] and
         parsed.get("fraud_risk_level") != "high" and
-        parsed.get("image_quality") not in ["unreadable"]  # Accept poor quality if OCR can work
+        parsed.get("image_quality") not in ["unreadable"]
     )
-
-    # Additional leniency for name matching with middle names (Belgian/Dutch convention)
+    # Leniency for Belgian/Dutch partial name match
     if candidate_name and parsed.get("name_match_result") == "partial_match":
-        # If it's a partial match (likely due to middle names), still consider it passed
-        # as long as fraud risk is not high
         if parsed.get("fraud_risk_level") != "high":
             verification_passed = True
 
@@ -416,39 +338,22 @@ async def verify_document(
         readability_issues=parsed.get("readability_issues", []),
         verification_passed=verification_passed,
         verification_summary=parsed.get("verification_summary", ""),
+        extracted_fields=parsed.get("extracted_fields", {}),
         raw_response=response_text
     )
 
-    # ========================================================================
-    # DETAILED VERIFICATION REPORT
-    # ========================================================================
     logger.info("=" * 80)
     logger.info("📄 DOCUMENT VERIFICATION REPORT")
     logger.info("=" * 80)
-    logger.info(f"Expected Name    : {candidate_name or 'N/A'}")
-    logger.info(f"Extracted Name   : {result.extracted_name or 'N/A'}")
-    logger.info("-" * 80)
-    logger.info(f"Document Category: {result.document_category} (confidence: {result.document_category_confidence:.2f})")
-    logger.info(f"Image Quality    : {result.image_quality}")
-    if result.readability_issues:
-        logger.info(f"Quality Issues   : {', '.join(result.readability_issues)}")
-    logger.info("-" * 80)
-    if result.name_match_performed:
-        logger.info(f"Name Match       : {result.name_match_result} (confidence: {result.name_match_confidence:.2f})")
-        logger.info(f"Match Details    : {result.name_match_details}")
-    logger.info("-" * 80)
-    logger.info(f"Fraud Risk Level : {result.fraud_risk_level} (confidence: {result.overall_fraud_confidence:.2f})")
-    if fraud_indicators:
-        logger.info(f"Fraud Indicators : {len(fraud_indicators)} found")
-        for i, fi in enumerate(fraud_indicators, 1):
-            logger.info(f"  {i}. [{fi.severity.upper()}] {fi.indicator_type}: {fi.description} (confidence: {fi.confidence:.2f})")
-    else:
-        logger.info("Fraud Indicators : None detected")
-    logger.info("-" * 80)
-    logger.info(f"✅ VERIFICATION  : {'PASSED' if verification_passed else 'FAILED'}")
-    logger.info(f"Summary          : {result.verification_summary}")
+    logger.info(f"Category   : {result.document_category} ({result.document_category_confidence:.2f})")
+    logger.info(f"Name       : {result.extracted_name}")
+    logger.info(f"Quality    : {result.image_quality}")
+    logger.info(f"Fraud risk : {result.fraud_risk_level}")
+    if result.extracted_fields:
+        logger.info(f"Fields     : {result.extracted_fields}")
+    logger.info(f"✅ PASSED  : {result.verification_passed}")
+    logger.info(f"Summary    : {result.verification_summary}")
     logger.info("=" * 80)
-    logger.info("")
 
     return result
 
@@ -458,17 +363,7 @@ async def verify_document_base64(
     candidate_name: Optional[str] = None,
     document_type_hint: Optional[str] = None,
 ) -> DocumentVerificationResult:
-    """
-    Convenience wrapper for base64-encoded images.
-
-    Args:
-        image_base64: Base64-encoded image string
-        candidate_name: Expected name for verification
-        document_type_hint: Optional hint about document type
-
-    Returns:
-        DocumentVerificationResult with complete analysis
-    """
+    """Convenience wrapper for base64-encoded images."""
     try:
         image_data = base64.b64decode(image_base64)
     except Exception as e:
@@ -491,5 +386,4 @@ async def verify_document_base64(
             verification_summary="Error: Invalid base64 image data",
             raw_response=None
         )
-
     return await verify_document(image_data, candidate_name, document_type_hint)

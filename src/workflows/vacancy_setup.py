@@ -118,7 +118,7 @@ async def handle_run_analysis(
     - context has require_review → awaiting_review (Teams notification)
     - otherwise → publishing
     """
-    from interview_analysis_agent import analyze_interview
+    from agents.pre_screening.interview_analyzer import analyze_interview
     from src.database import get_db_pool
     from src.repositories.pre_screening_repo import PreScreeningRepository
     from src.repositories.vacancy_repo import VacancyRepository

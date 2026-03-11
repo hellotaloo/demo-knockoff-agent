@@ -182,13 +182,14 @@ class ATSImportService:
                         row = await conn.fetchrow("""
                             INSERT INTO ats.vacancies
                             (title, company, location, description, status, source, source_id,
-                             recruiter_id, client_id, workspace_id, office_location_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                             recruiter_id, client_id, workspace_id, office_location_id, is_open_application)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                             RETURNING id
                         """, vac.title, vac.company_name, vac.work_location,
                             vac.description_html, internal_status,
                             "ats_import", vac.external_id,
-                            recruiter_id, client_id, workspace_id, office_location_id)
+                            recruiter_id, client_id, workspace_id, office_location_id,
+                            vac.is_open_application)
 
                         result.vacancies_imported += 1
                         imported_vacancies.append({
@@ -339,13 +340,14 @@ class ATSImportService:
                         row = await conn.fetchrow("""
                             INSERT INTO ats.vacancies
                             (title, company, location, description, status, source, source_id,
-                             recruiter_id, client_id, workspace_id, office_location_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                             recruiter_id, client_id, workspace_id, office_location_id, is_open_application)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                             RETURNING id
                         """, vac.title, vac.company_name, vac.work_location,
                             vac.description_html, internal_status,
                             "ats_import", vac.external_id,
-                            recruiter_id, client_id, workspace_id, office_location_id)
+                            recruiter_id, client_id, workspace_id, office_location_id,
+                            vac.is_open_application)
 
                         result.vacancies_imported += 1
                         imported_vacancies.append({
@@ -629,7 +631,7 @@ class ATSImportService:
             # 1. Create ADK session
             try:
                 await session_manager.interview_session_service.create_session(
-                    app_name="interview_generator",
+                    app_name="interview_question_generator",
                     user_id="ats_import",
                     session_id=session_id,
                 )
@@ -665,7 +667,7 @@ class ATSImportService:
             ):
                 if event.is_final_response():
                     session = await session_manager.interview_session_service.get_session(
-                        app_name="interview_generator",
+                        app_name="interview_question_generator",
                         user_id="ats_import",
                         session_id=session_id,
                     )
@@ -743,7 +745,7 @@ class ATSImportService:
             # Clean up the ADK session
             try:
                 await session_manager.interview_session_service.delete_session(
-                    app_name="interview_generator",
+                    app_name="interview_question_generator",
                     user_id="ats_import",
                     session_id=session_id,
                 )

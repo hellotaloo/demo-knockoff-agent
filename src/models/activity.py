@@ -52,6 +52,9 @@ class ActivityEventType(str, Enum):
     # System events
     APPLICATION_SYNCED = "application_synced"
 
+    # Pipeline stage transitions
+    STAGE_CHANGED = "stage_changed"
+
 
 class ActorType(str, Enum):
     """Who performed the activity."""

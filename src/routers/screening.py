@@ -8,15 +8,15 @@ from typing import AsyncGenerator, Optional
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from pre_screening_whatsapp_agent import (
+from agents.pre_screening.whatsapp import (
     create_simple_agent,
     Phase,
     is_conversation_complete,
 )
-from candidate_simulator.agent import SimulationPersona, build_simulator_instruction
+from agents.candidate_simulator.agent import SimulationPersona, build_simulator_instruction
 from src.utils.random_candidate import generate_random_candidate
 from src.models.screening import ScreeningChatRequest, SimulateInterviewRequest
-from src.repositories import ConversationRepository
+from src.repositories import ConversationRepository, CandidateRepository, ApplicationRepository
 from src.database import get_db_pool
 from src.config import logger
 
@@ -118,6 +118,25 @@ async def stream_screening_chat(
         if loc_row:
             office_location = loc_row["name"] or ""
             office_address = loc_row["address"] or ""
+
+        # Create test candidate + application so the full pipeline works
+        candidate_id = None
+        application_id = None
+        if is_test:
+            candidate_repo = CandidateRepository(pool)
+            candidate_id = await candidate_repo.find_or_create(
+                full_name=candidate_name,
+                is_test=True,
+            )
+            app_repo = ApplicationRepository(pool)
+            application_id = await app_repo.create(
+                vacancy_id=vacancy_uuid,
+                candidate_id=candidate_id,
+                candidate_name=candidate_name,
+                candidate_phone=None,
+                channel="chat",
+                is_test=True,
+            )
 
         # Create new agent
         agent = create_simple_agent(
@@ -259,8 +278,8 @@ async def get_screening_conversation(conversation_id: str):
         "session_id": conv["session_id"],
         "candidate": {
             "name": conv["candidate_name"],
-            "email": conv["candidate_email"],
-            "phone": conv["candidate_phone"]
+            "phone": conv["candidate_phone"],
+            "id": str(conv["candidate_id"]) if conv.get("candidate_id") else None,
         },
         "status": conv["status"],
         "channel": conv["channel"],
@@ -290,26 +309,43 @@ async def complete_screening_conversation(conversation_id: str, qualified: bool 
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Ensure candidate record exists
+    candidate_id = conv["candidate_id"] if "candidate_id" in conv.keys() else None
+    if not candidate_id:
+        candidate_repo = CandidateRepository(pool)
+        candidate_id = await candidate_repo.find_or_create(
+            full_name=conv["candidate_name"],
+            phone=conv["candidate_phone"] if "candidate_phone" in conv.keys() else None,
+            is_test=conv["is_test"] or False if "is_test" in conv.keys() else False,
+        )
+
+    is_test = conv["is_test"] or False if "is_test" in conv.keys() else False
+
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Update conversation status
             await conv_repo.complete(conv_uuid)
+            await conn.execute(
+                "UPDATE agents.pre_screening_sessions SET candidate_id = COALESCE(candidate_id, $1) WHERE id = $2",
+                candidate_id, conv_uuid
+            )
 
-            # Create application record
             app_row = await conn.fetchrow(
                 """
                 INSERT INTO ats.applications
-                (vacancy_id, pre_screening_id, candidate_name, channel, qualified, completed_at, status)
-                VALUES ($1, $2, $3, 'whatsapp', $4, NOW(), 'completed')
+                (vacancy_id, candidate_id, pre_screening_id, candidate_name, channel,
+                 qualified, completed_at, is_test, status)
+                VALUES ($1, $2, $3, $4, 'whatsapp', $5, NOW(), $6, 'completed')
                 RETURNING id
                 """,
-                conv["vacancy_id"], conv["pre_screening_id"], conv["candidate_name"], qualified
+                conv["vacancy_id"], candidate_id, conv["pre_screening_id"],
+                conv["candidate_name"], qualified, is_test
             )
 
     return {
         "status": "success",
         "conversation_id": str(conv_uuid),
         "application_id": str(app_row["id"]),
+        "candidate_id": str(candidate_id),
         "qualified": qualified
     }
 

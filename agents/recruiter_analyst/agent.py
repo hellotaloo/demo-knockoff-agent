@@ -4,8 +4,8 @@ from google.adk.agents import Agent
 from google.adk.tools import ToolContext
 from typing import Optional
 
-from data_query_agent.agent import root_agent as data_query_agent
-from recruiter_analyst.context import get_full_context, RECRUITMENT_BEST_PRACTICES
+from agents.database_query.agent import root_agent as database_query_agent
+from .context import get_full_context, RECRUITMENT_BEST_PRACTICES
 
 
 # ============================================================================
@@ -222,6 +222,6 @@ root_agent = Agent(
         get_recruitment_advice,
     ],
     sub_agents=[
-        data_query_agent,
+        database_query_agent,
     ],
 )

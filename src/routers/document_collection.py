@@ -477,7 +477,7 @@ async def document_webhook(
             image_base64 = base64.b64encode(image_bytes).decode()
 
             # Verify document using document_recognition_agent (with ORIGINAL image)
-            from document_recognition_agent import verify_document_base64
+            from agents.document_collection.recognition import verify_document_base64
             verification_result = await verify_document_base64(
                 image_base64=image_base64,
                 candidate_name=candidate_name,

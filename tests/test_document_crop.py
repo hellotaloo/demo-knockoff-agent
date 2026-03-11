@@ -24,7 +24,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-from document_recognition_agent.image_preprocessor import preprocess_document_image_ai
+from agents.document_collection.recognition.image_preprocessor import preprocess_document_image_ai
 
 
 async def test_crop(image_path: str):

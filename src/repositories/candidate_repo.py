@@ -63,21 +63,21 @@ class CandidateRepository:
         if workspace_id is None:
             workspace_id = DEFAULT_WORKSPACE_ID
 
-        # Try to find by phone first (primary identifier)
-        if phone:
-            existing = await self.get_by_phone(phone)
-            if existing:
-                # Don't update the name - the application's conversation stores the correct name
-                return existing["id"]
+        # Test candidates always get a fresh record (same phone is reused across test runs)
+        if not is_test:
+            # Try to find by phone first (primary identifier)
+            if phone:
+                existing = await self.get_by_phone(phone)
+                if existing:
+                    return existing["id"]
 
-        # Try email as fallback
-        if email:
-            existing = await self.get_by_email(email)
-            if existing:
-                # Update phone if we now have it (but don't change the name)
-                if phone and not existing["phone"]:
-                    await self.update(existing["id"], phone=phone)
-                return existing["id"]
+            # Try email as fallback
+            if email:
+                existing = await self.get_by_email(email)
+                if existing:
+                    if phone and not existing["phone"]:
+                        await self.update(existing["id"], phone=phone)
+                    return existing["id"]
 
         # Parse name if first/last not provided
         if not first_name and full_name:

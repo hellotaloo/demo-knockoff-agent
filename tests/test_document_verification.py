@@ -21,7 +21,7 @@ if not os.getenv("GOOGLE_API_KEY"):
     exit(1)
 
 # Test using the agent directly (without HTTP)
-from document_recognition_agent import verify_document_base64
+from agents.document_collection.recognition import verify_document_base64
 
 
 async def test_agent_directly():

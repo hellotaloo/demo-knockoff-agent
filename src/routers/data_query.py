@@ -13,8 +13,8 @@ from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 from google.adk.errors.already_exists_error import AlreadyExistsError
 
 from src.models.data_query import DataQueryRequest
-from data_query_agent.agent import set_db_pool as set_data_query_db_pool
-from recruiter_analyst.agent import root_agent as recruiter_analyst_agent
+from agents.database_query.agent import set_db_pool as set_data_query_db_pool
+from agents.recruiter_analyst.agent import root_agent as recruiter_analyst_agent
 
 logger = logging.getLogger(__name__)
 

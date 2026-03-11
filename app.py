@@ -19,11 +19,11 @@ from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.events import Event, EventActions
 from google.genai import types
 import time
-from interview_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
-from candidate_simulator.agent import SimulationPersona, create_simulator_agent, run_simulation
-from data_query_agent.agent import set_db_pool as set_data_query_db_pool
-from recruiter_analyst.agent import root_agent as recruiter_analyst_agent
-from fixtures import load_vacancies, load_applications, load_pre_screenings
+from agents.interview_question_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
+from agents.candidate_simulator.agent import SimulationPersona, create_simulator_agent, run_simulation
+from agents.database_query.agent import set_db_pool as set_data_query_db_pool
+from agents.recruiter_analyst.agent import root_agent as recruiter_analyst_agent
+from data.fixtures import load_vacancies, load_applications, load_pre_screenings
 from src.utils.random_candidate import generate_random_candidate
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 from google.adk.agents.llm_agent import Agent
@@ -116,6 +116,10 @@ from src.routers import (
     ats_simulator_router,
     playground_router,
     document_collection_v2_router,
+    ontology_router,
+    redirect_router,
+    yousign_webhook_router,
+    candidacy_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -223,12 +227,12 @@ async def lifespan(app: FastAPI):
     try:
         # Try to create and delete a test session to initialize tables
         test_session = await session_manager.interview_session_service.create_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="__init_test__",
             session_id="__init_test__"
         )
         await session_manager.interview_session_service.delete_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="__init_test__",
             session_id="__init_test__"
         )
@@ -315,6 +319,10 @@ app.include_router(interview_analysis_router)
 app.include_router(ats_simulator_router)
 app.include_router(playground_router)
 app.include_router(document_collection_v2_router)
+app.include_router(ontology_router)
+app.include_router(redirect_router)
+app.include_router(yousign_webhook_router)
+app.include_router(candidacy_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

@@ -1,5 +1,15 @@
 [
   {
+    "title": "Open Sollicitatie",
+    "company": "ITZU",
+    "location": null,
+    "description": "## Open Sollicitatie\n\nDit is de standaard vacature voor open sollicitanten — kandidaten die spontaan solliciteren zonder een specifieke vacature.\n\n### Instructies voor de agent\n\nVoer een open, verkennend gesprek. Er is geen vaste jobomschrijving, dus stel brede vragen om een goed beeld te krijgen van de kandidaat.\n\n**Verloop van het gesprek:**\n1. Stel de knockoutvraag (arbeidsrecht).\n2. Stel de 5 kwalificatievragen in een natuurlijke, vriendelijke toon.\n3. Bedank de kandidaat en sluit vriendelijk af.\n\n### Bedrijfscontext\n\nITZU is een interimkantoor actief in diverse sectoren: logistiek, productie, retail, techniek en administratie. We matchen kandidaten met de juiste opdracht op basis van hun profiel, beschikbaarheid en werkregimevoorkeur.",
+    "status": "open",
+    "source": "ats_import",
+    "source_id": "itzu-open-sollicitatie",
+    "is_open_application": true
+  },
+  {
     "title": "Operator Mengafdeling",
     "company": "Klant regio Kortrijk",
     "location": "Kortrijk, België",

@@ -17,6 +17,20 @@ Taloo Backend is an AI-powered recruitment screening platform built with Python/
 
 ```
 taloo-backend/
+├── agents/                   # All AI agents (Google ADK)
+│   ├── candidate_simulator/
+│   ├── cv_analyzer/
+│   ├── database_query/
+│   ├── document_collection/
+│   │   ├── collection/
+│   │   └── recognition/
+│   ├── interview_question_generator/
+│   ├── pre_screening/
+│   │   ├── interview_analyzer/
+│   │   ├── transcript_processor/
+│   │   ├── voice/
+│   │   └── whatsapp/
+│   └── recruiter_analyst/
 ├── src/                      # Main application code
 │   ├── config.py             # Environment config, constants
 │   ├── database.py           # DB pool, migrations
@@ -25,11 +39,12 @@ taloo-backend/
 │   ├── models/               # Pydantic schemas
 │   ├── repositories/         # Data access layer
 │   ├── services/             # Business logic layer
-│   ├── routers/              # API endpoints (15 routers)
+│   ├── routers/              # API endpoints
 │   └── utils/                # Helper functions
+├── data/                     # Data & fixtures
+│   └── fixtures/             # Demo data for seeding
 ├── tests/                    # Test files
-├── migrations/               # Database migrations
-├── fixtures/                 # Demo data for seeding
+├── scripts/                  # Utility scripts
 ├── docs/                     # API documentation
 └── app.py                    # FastAPI app entrypoint
 ```
@@ -58,7 +73,7 @@ adk web --port 8001
 python <script.py>
 
 # Deploy to Cloud Run
-gcloud run deploy taloo-agent --source . --region europe-west1
+gcloud run deploy taloo-agent --source . --region europe-west1 --project knockoff-bot-demo
 
 # Git operations
 git status
@@ -96,18 +111,19 @@ Required in `.env` (local development):
 All agents are Google ADK agents using Gemini models.
 
 ### Core Agents
-1. **Interview Generator** (`interview_generator/agent.py`) - Generates knockout + qualification questions from vacancy text
-2. **Pre-screening WhatsApp Agent** (`pre_screening_whatsapp_agent/agent.py`) - WhatsApp screening conversations (code-controlled flow)
-3. **Voice Agent** (`voice_agent/agent.py`) - ElevenLabs phone screening with Dutch prompts
+1. **Interview Generator** (`agents/interview_question_generator/agent.py`) - Generates knockout + qualification questions from vacancy text
+2. **Pre-screening WhatsApp Agent** (`agents/pre_screening/whatsapp/agent.py`) - WhatsApp screening conversations (code-controlled flow)
+3. **Voice Agent** (`agents/pre_screening/voice/`) - Self-contained pre-screening v2 microservice
 
 ### Specialized Agents
-4. **CV Analyzer** (`cv_analyzer/agent.py`) - CV analysis and parsing via Gemini
-5. **Document Collection Agent** (`document_collection_agent/agent.py`) - Document upload conversations
-6. **Document Recognition Agent** (`document_recognition_agent/agent.py`) - ID document verification
-7. **Transcript Processor** (`transcript_processor/agent.py`) - Call transcript processing
-8. **Candidate Simulator** (`candidate_simulator/agent.py`) - Testing/simulation persona
-9. **Data Query Agent** (`data_query_agent/agent.py`) - Database queries via natural language
-10. **Recruiter Analyst** (`recruiter_analyst/agent.py`) - Recruitment analytics and insights
+4. **CV Analyzer** (`agents/cv_analyzer/agent.py`) - CV analysis and parsing via Gemini
+5. **Document Collection Agent** (`agents/document_collection/whatsapp/agent.py`) - Document upload conversations
+6. **Document Recognition Agent** (`agents/document_collection/recognition/agent.py`) - ID document verification
+7. **Transcript Processor** (`agents/pre_screening/transcript_processor/agent.py`) - Call transcript processing
+8. **Candidate Simulator** (`agents/candidate_simulator/agent.py`) - Testing/simulation persona
+9. **Data Query Agent** (`agents/database_query/agent.py`) - Database queries via natural language
+10. **Recruiter Analyst** (`agents/recruiter_analyst/agent.py`) - Recruitment analytics and insights
+11. **Interview Analysis** (`agents/pre_screening/interview_analyzer/agent.py`) - Interview quality analysis
 
 ## API Endpoints
 

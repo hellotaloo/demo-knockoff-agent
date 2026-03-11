@@ -7,7 +7,7 @@ Google ADK-powered agents for candidate screening and interview generation.
 | Agent | Purpose | Interface |
 |-------|---------|-----------|
 | `pre_screening_whatsapp_agent` | WhatsApp candidate screening | Twilio webhook |
-| `interview_generator` | Generate interview questions from vacancy text | REST API + SSE |
+| `interview_question_generator` | Generate interview questions from vacancy text | REST API + SSE |
 
 ## Prerequisites
 
@@ -102,7 +102,7 @@ source .venv/bin/activate
 adk web --port 8001
 ```
 
-Open http://localhost:8001 - select `interview_generator`.
+Open http://localhost:8001 - select `interview_question_generator`.
 
 ### 5. Test WhatsApp & Voice Webhooks Locally
 
@@ -215,7 +215,7 @@ curl https://taloo-agent-182581851450.europe-west1.run.app/health
 ├── pre_screening_whatsapp_agent/
 │   ├── __init__.py
 │   └── agent.py              # WhatsApp screening agent (code-controlled flow)
-├── interview_generator/
+├── interview_question_generator/
 │   ├── __init__.py
 │   └── agent.py              # Interview question generator agent
 ├── docs/

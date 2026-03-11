@@ -46,7 +46,7 @@ class ConversationRepository:
 
         # Get conversations
         query = f"""
-            SELECT id, vacancy_id, candidate_name, candidate_email, status,
+            SELECT id, vacancy_id, candidate_name, status,
                    started_at, completed_at, message_count
             FROM agents.pre_screening_sessions
             WHERE {where_clause}
@@ -64,8 +64,8 @@ class ConversationRepository:
         return await self.pool.fetchrow(
             """
             SELECT id, vacancy_id, pre_screening_id, session_id, candidate_name,
-                   candidate_email, candidate_phone, status, started_at, completed_at,
-                   message_count, channel, is_test
+                   candidate_phone, status, started_at, completed_at,
+                   message_count, channel, is_test, candidate_id
             FROM agents.pre_screening_sessions
             WHERE id = $1
             """,
@@ -92,17 +92,21 @@ class ConversationRepository:
         candidate_name: str,
         candidate_phone: Optional[str],
         channel: str,
-        is_test: bool = False
+        is_test: bool = False,
+        candidate_id: Optional[uuid.UUID] = None,
+        application_id: Optional[uuid.UUID] = None,
     ) -> uuid.UUID:
         """Create a new screening conversation."""
         conv_id = await self.pool.fetchval(
             """
             INSERT INTO agents.pre_screening_sessions
-            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test)
-            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
+            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone,
+             channel, status, is_test, candidate_id, application_id)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $8, $9)
             RETURNING id
             """,
-            vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, is_test
+            vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone,
+            channel, is_test, candidate_id, application_id
         )
         return conv_id
 

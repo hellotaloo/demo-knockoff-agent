@@ -1,7 +1,7 @@
 """
 LiveKit Agent Models - Webhook payload models for pre-screening v2 voice agent.
 
-These models match the CandidateData.to_dict() output from pre_screening_v2/models.py.
+These models match the CandidateData.to_dict() output from pre_screening_voice_agent/models.py.
 """
 from typing import Optional
 from pydantic import BaseModel

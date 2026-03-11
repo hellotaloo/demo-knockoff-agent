@@ -21,6 +21,8 @@ from .screening_notes_integration_service import (
 from .call_result_processor import process_call_results
 from .teams_service import TeamsService, get_teams_service
 from .ats_import_service import ATSImportService
+from .short_link_service import ShortLinkService
+from .candidacy_transition_service import CandidacyStageTransitionService
 
 __all__ = [
     "SessionManager",
@@ -46,4 +48,6 @@ __all__ = [
     "TeamsService",
     "get_teams_service",
     "ATSImportService",
+    "ShortLinkService",
+    "CandidacyStageTransitionService",
 ]

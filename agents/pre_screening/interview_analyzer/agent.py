@@ -196,24 +196,7 @@ def format_questions_for_analysis(questions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def parse_agent_response(response_text: str) -> dict:
-    """Parse JSON response from the agent, handling markdown code blocks."""
-    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response_text)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            logger.error(f"Could not find JSON in response: {response_text[:500]}")
-            return {}
-
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON: {e}\nJSON string: {json_str[:500]}")
-        return {}
+from src.utils.text_utils import extract_json_from_response as parse_agent_response
 
 
 # =============================================================================

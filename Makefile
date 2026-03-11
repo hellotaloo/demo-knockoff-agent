@@ -14,16 +14,16 @@ help:
 
 lint:
 	@echo "Running ruff linter..."
-	@ruff check src/ app.py
+	@ruff check src/ agents/ app.py
 
 format:
 	@echo "Formatting code with ruff..."
-	@ruff format src/ app.py
-	@ruff check --fix src/ app.py
+	@ruff format src/ agents/ app.py
+	@ruff check --fix src/ agents/ app.py
 
 check:
 	@echo "Checking code quality..."
-	@ruff check src/ app.py
+	@ruff check src/ agents/ app.py
 	@ruff format --check src/ app.py
 
 dev:

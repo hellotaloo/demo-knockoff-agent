@@ -4,6 +4,8 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-11** — Added `custom_field_extraction` (JSONB) field to document type entities for LLM-driven field extraction config (top-level only); added CRUD endpoints `POST /ontology/entities`, `PATCH /ontology/entities/{id}`, `DELETE /ontology/entities/{id}`; updated list sorting: items with children first (A-Z), then leaf items (A-Z); updated `is_verifiable` on Arbeidskaart, Vrijstelling arbeidskaart, VakantieAttest, C3.2 afdruk, Grensarbeider
+- **2026-03-11** — Replaced planned workspace-scoped ontology with implemented `/ontology` endpoints: `GET /ontology` (overview), `GET /ontology/entities?type=document_type` (list with parent-child hierarchy), `GET /ontology/entities/{id}` (single entity). Document types seeded from Prato Flex with 43 parent types and 473 detail types across 4 categories (identity, certificate, financial, other)
 - **2026-03-09** — Added `documents_required: DocumentTypeResponse[]` to `DocumentCollectionDetailResponse` (resolves stored slugs into full document type objects with name, icon, category); added Lucide icons to seeded document types
 - **2026-03-09** — Added derived `progress` field to `DocumentCollectionResponse` (computed from messages: `"pending"` → `"started"` → `"in_progress"`); added `documents_collected` and `documents_total` fields for progress counters. General `status` remains unchanged (`active`/`completed`/`needs_review`/`abandoned`)
 - **2026-03-09** — Split `POST /demo/import-ats` with `module` query parameter: `"pre_screening"` (default, existing behavior) or `"document_collection"` (creates configs per vacancy + sample conversations). Document collection demo data moved from `/demo/seed` to this endpoint
@@ -13,7 +15,7 @@ Complete API reference for the Taloo recruitment screening platform.
 - **2026-02-28** — Replaced VAPI voice provider with LiveKit pre-screening v2 agent; added `POST /webhook/livekit/call-result` endpoint for receiving structured call results; outbound voice calls now dispatch via LiveKit SIP
 - **2026-02-28** — Added ATS Simulator endpoints (`GET /ats-simulator/api/v1/vacancies`, `GET /ats-simulator/api/v1/recruiters`, `GET /ats-simulator/api/v1/clients`) and `POST /demo/import-ats` for simulated ATS integration; demo seed now imports via ATS API instead of direct DB inserts
 - **2026-02-28** — Added Interview Analysis endpoints (`POST /pre-screenings/{id}/analyze`, `GET /pre-screenings/{id}/analysis`) with per-question clarity scoring, knockout ambiguity checks, drop-off risk, funnel data, and one-liner summary for Teams notifications
-- **2026-02-19** — Added Ontology endpoints for workspace knowledge graph management (entity types, entities, relation types, relations, graph visualization)
+- **2026-02-19** — ~~Added Ontology endpoints for workspace knowledge graph management~~ (replaced by simplified `/ontology` endpoints on 2026-03-11)
 - **2026-02-17** — Added `POST /screening/web-call` endpoint for browser-based VAPI voice simulation (no database records created, for testing/demo only)
 - **2026-02-16** — Enhanced `AgentStatusResponse` with stats: `total_screenings`, `qualified_count`, `qualification_rate`, `last_activity_at` (populated for prescreening agent)
 - **2026-02-16** — Added `candidate_name` field to ActivityResponse in vacancy timelines (`GET /vacancies/{vacancy_id}`)
@@ -4282,232 +4284,335 @@ interface ValidationErrorResponse {
 
 ## Ontology
 
-Workspace-scoped knowledge graph for defining categories, job functions, document types, skills, and their relationships.
+Generic reference data system for entity types with parent-child hierarchies and category grouping. Currently supports `document_type` — more types (job functions, skills) will be added.
 
-All endpoints are prefixed with `/workspaces/{workspace_id}/ontology`.
+All endpoints are prefixed with `/ontology`.
 
-**Permissions**: All workspace members can read. Only **owner** and **admin** can create, update, or delete.
+### Supported Entity Types
+
+| Type | Label | Status |
+|------|-------|--------|
+| `document_type` | Documenttypes | **Live** |
+| `job_function` | Functies | Planned |
+| `skill` | Vaardigheden | Planned |
 
 ### Overview
 
-#### `GET /workspaces/{workspace_id}/ontology`
+#### `GET /ontology`
 
-Returns ontology overview with type counts and totals.
+Returns all registered entity types with counts and available categories.
+
+**Query params:**
+- `workspace_id` (uuid, required) — Workspace to scope results
 
 **Response:**
 ```json
 {
   "types": [
     {
-      "id": "uuid",
-      "workspace_id": "uuid",
-      "slug": "category",
-      "name": "Categorie",
-      "name_plural": "Categorieën",
-      "description": null,
-      "icon": "folder",
-      "color": "#8B5CF6",
-      "sort_order": 0,
-      "is_system": true,
-      "entity_count": 5,
-      "created_at": "2026-02-19T10:00:00Z",
-      "updated_at": "2026-02-19T10:00:00Z"
+      "type": "document_type",
+      "label": "Documenttypes",
+      "description": "Document- en certificaattypes voor kandidaten",
+      "total": 43,
+      "categories": ["certificate", "financial", "identity", "other"]
     }
-  ],
-  "total_entities": 45,
-  "total_relations": 32
+  ]
 }
 ```
 
-### Graph
+### List Entities
 
-#### `GET /workspaces/{workspace_id}/ontology/graph`
+#### `GET /ontology/entities`
 
-Returns the full ontology graph for visualization (all active nodes and edges).
+List entities by type with parent-child hierarchy. Parents are returned with nested children.
+
+**Query params:**
+- `type` (string, required) — Entity type (`document_type`)
+- `workspace_id` (uuid, required) — Workspace to scope results
+- `category` (string, optional) — Filter by category
+- `include_children` (boolean, default `true`) — Nest children under parents
+- `include_inactive` (boolean, default `false`) — Include soft-deleted entities
+- `limit` (int, default `200`, max `1000`) — Max items to return
 
 **Response:**
 ```json
 {
-  "nodes": [
+  "type": "document_type",
+  "items": [
     {
       "id": "uuid",
-      "name": "Chauffeur CE",
-      "type_slug": "job_function",
-      "type_name": "Functie",
-      "icon": "briefcase",
-      "color": "#3B82F6",
-      "description": "Vrachtwagenchauffeur met CE-rijbewijs",
-      "metadata": {},
-      "external_id": null
-    }
-  ],
-  "edges": [
+      "type": "document_type",
+      "slug": "id_card",
+      "name": "ID-kaart",
+      "description": null,
+      "category": "identity",
+      "icon": "credit-card",
+      "is_default": true,
+      "is_active": true,
+      "sort_order": 1,
+      "metadata": {
+        "is_verifiable": true,
+        "requires_front_back": true
+      },
+      "custom_field_extraction": null,
+      "children": [],
+      "children_count": 0
+    },
     {
       "id": "uuid",
-      "source": "entity-uuid-1",
-      "target": "entity-uuid-2",
-      "relation_type": "requires",
-      "relation_label": "Vereist",
-      "metadata": { "requirement_type": "verplicht", "priority": 1 }
+      "type": "document_type",
+      "slug": "rijbewijs",
+      "name": "Rijbewijs",
+      "category": "certificate",
+      "icon": "car",
+      "is_default": true,
+      "sort_order": 3,
+      "metadata": {
+        "prato_flex_type_id": "10",
+        "is_verifiable": true,
+        "requires_front_back": true
+      },
+      "custom_field_extraction": {
+        "fields": ["expiry_date", "license_categories"],
+        "instructions": "Extract the expiry date and all license categories visible on the document."
+      },
+      "children": [
+        {
+          "id": "uuid",
+          "slug": "prato_10_AM",
+          "name": "AM",
+          "category": "certificate",
+          "sort_order": 0,
+          "metadata": {
+            "prato_flex_type_id": "10",
+            "prato_flex_detail_type_id": "AM"
+          }
+        }
+      ],
+      "children_count": 12
     }
   ],
-  "types": [ "...OntologyTypeResponse[]" ],
-  "stats": { "category": 5, "job_function": 12, "document_type": 24 }
+  "total": 43,
+  "categories": ["certificate", "financial", "identity", "other"]
 }
 ```
 
-### Entity Types
-
-#### `GET /workspaces/{workspace_id}/ontology/types`
-
-List all entity types with entity counts.
-
-#### `POST /workspaces/{workspace_id}/ontology/types`
-
-Create a custom entity type. Requires admin+.
-
-**Request:**
-```json
-{
-  "slug": "certification",
-  "name": "Certificaat",
-  "name_plural": "Certificaten",
-  "icon": "award",
-  "color": "#F97316",
-  "sort_order": 5
-}
+> **Sorting:** Items with children are returned first (A-Z), followed by leaf items (A-Z).
 ```
 
-#### `PATCH /workspaces/{workspace_id}/ontology/types/{type_id}`
+### Get Entity
 
-Update an entity type (name, icon, color, etc.). Requires admin+.
+#### `GET /ontology/entities/{entity_id}`
 
-#### `DELETE /workspaces/{workspace_id}/ontology/types/{type_id}`
-
-Delete a custom entity type. System types cannot be deleted. Requires admin+.
-
-### Entities
-
-#### `GET /workspaces/{workspace_id}/ontology/entities`
-
-List entities with optional filtering.
+Get a single entity by ID with optional children.
 
 **Query params:**
-- `type` — Filter by type slug (e.g., `job_function`)
-- `search` — Search by name (ILIKE)
-- `active` — Filter by active status (default: `true`)
-- `limit` / `offset` — Pagination
+- `include_children` (boolean, default `true`) — Nest children
 
-**Response:** `PaginatedResponse[OntologyEntityResponse]`
+**Response:** Same shape as a single item from the list endpoint.
 
-#### `POST /workspaces/{workspace_id}/ontology/entities`
+---
 
-Create an entity. Requires admin+.
+### Create Entity
 
-**Request:**
-```json
-{
-  "type_slug": "job_function",
-  "name": "Chauffeur CE",
-  "description": "Vrachtwagenchauffeur met CE-rijbewijs",
-  "icon": "truck",
-  "color": "#3B82F6",
-  "external_id": "SF-12345",
-  "metadata": {},
-  "sort_order": 0
-}
-```
+#### `POST /ontology/entities`
 
-#### `GET /workspaces/{workspace_id}/ontology/entities/{entity_id}`
-
-Get entity detail including all its relations.
-
-#### `PATCH /workspaces/{workspace_id}/ontology/entities/{entity_id}`
-
-Update entity fields. Requires admin+.
-
-#### `DELETE /workspaces/{workspace_id}/ontology/entities/{entity_id}`
-
-Soft-delete (sets `is_active=false`). Relations remain but are filtered from queries. Requires admin+.
-
-### Relation Types
-
-#### `GET /workspaces/{workspace_id}/ontology/relation-types`
-
-List all relation types.
-
-#### `POST /workspaces/{workspace_id}/ontology/relation-types`
-
-Create a custom relation type. Requires admin+.
-
-**Request:**
-```json
-{
-  "slug": "depends_on",
-  "name": "Afhankelijk van",
-  "source_type_slug": "requirement",
-  "target_type_slug": "skill"
-}
-```
-
-### Relations
-
-#### `GET /workspaces/{workspace_id}/ontology/relations`
-
-List relations with optional filtering.
+Create a new document type.
 
 **Query params:**
-- `source_id` — Filter by source entity UUID
-- `target_id` — Filter by target entity UUID
-- `type` — Filter by relation type slug
+- `workspace_id` (UUID, required)
 
-#### `POST /workspaces/{workspace_id}/ontology/relations`
-
-Create a relation. Requires admin+. Validates type constraints.
-
-**Request:**
+**Request body:**
 ```json
 {
-  "source_entity_id": "uuid",
-  "target_entity_id": "uuid",
-  "relation_type_slug": "requires",
-  "metadata": {
-    "requirement_type": "verplicht",
-    "priority": 1,
-    "condition": null
+  "slug": "my_doc_type",
+  "name": "My Document",
+  "description": null,
+  "category": "identity",
+  "icon": null,
+  "is_default": false,
+  "is_verifiable": false,
+  "requires_front_back": false,
+  "sort_order": 0,
+  "parent_id": null,
+  "custom_field_extraction": null
+}
+```
+
+**Response:** `201` — Full `OntologyEntity` object.
+
+---
+
+### Update Entity
+
+#### `PATCH /ontology/entities/{entity_id}`
+
+Partially update a document type. Only provided fields are updated.
+
+To clear `custom_field_extraction`, send `"custom_field_extraction": null` explicitly.
+
+**Request body** (all fields optional):
+```json
+{
+  "name": "Updated Name",
+  "is_verifiable": true,
+  "custom_field_extraction": {
+    "fields": ["expiry_date"],
+    "instructions": "Extract the expiry date from the document."
   }
 }
 ```
 
-**Metadata fields for `requires` relations:**
-- `requirement_type` — `"verplicht"` | `"voorwaardelijk"` | `"gewenst"`
-- `priority` — Integer ordering
-- `condition` — Optional condition text (e.g., "Bij gevaarlijk transport")
+**Response:** `200` — Full `OntologyEntity` with updated values and children.
 
-#### `PATCH /workspaces/{workspace_id}/ontology/relations/{relation_id}`
+---
 
-Update relation metadata. Requires admin+.
+### Delete Entity
 
-#### `DELETE /workspaces/{workspace_id}/ontology/relations/{relation_id}`
+#### `DELETE /ontology/entities/{entity_id}`
 
-Hard-delete a relation. Requires admin+.
+Soft-deletes a document type (sets `is_active = false`). The entity remains in the database but is excluded from default list responses.
 
-### Default Seeded Types
+**Response:** `204 No Content`
 
-Every new workspace is seeded with:
+---
 
-| Slug | Name | Icon | Color |
-|------|------|------|-------|
-| `category` | Categorie | folder | #8B5CF6 |
-| `job_function` | Functie | briefcase | #3B82F6 |
-| `document_type` | Documenttype | file-text | #10B981 |
-| `skill` | Vaardigheid | star | #F59E0B |
-| `requirement` | Vereiste | check-circle | #EF4444 |
+### Document Type Categories
 
-### Default Seeded Relation Types
+For `type=document_type`, the following categories are available:
 
-| Slug | Name | Source → Target |
-|------|------|-----------------|
-| `belongs_to` | Behoort tot | job_function → category |
-| `requires` | Vereist | job_function → document_type |
-| `has_skill` | Heeft vaardigheid | job_function → skill |
+| Category | Description | Examples |
+|----------|-------------|----------|
+| `identity` | Identity documents | ID-kaart, Paspoort, Verblijfsdocument |
+| `certificate` | Work certificates & licenses | Rijbewijs, Heftruckbrevet, VCA |
+| `financial` | Financial documents | SIS-kaart, Studentenkaart |
+| `other` | Other documents | Diploma |
+
+### Document Type Metadata Fields
+
+Type-specific fields stored in the `metadata` object for `document_type` entities:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `requires_front_back` | boolean | Upload should request front + back images |
+| `is_verifiable` | boolean | Can be sent through AI verification |
+| `prato_flex_type_id` | string | External Prato Flex certificate code (for sync) |
+| `prato_flex_detail_type_id` | string | Child-level Prato Flex detail code (children only) |
+
+### `custom_field_extraction`
+
+Top-level document types (no parent) may have a `custom_field_extraction` JSONB blob. This is passed to the LLM during document verification to instruct which fields to extract beyond the defaults.
+
+Structure is free-form — recommended shape:
+
+```json
+{
+  "fields": ["expiry_date", "license_categories"],
+  "instructions": "Extract the expiry date and all license categories visible on the document."
+}
+```
+
+- Only relevant for `is_verifiable = true` documents
+- Ignored for child document types
+- Set/clear via `PATCH /ontology/entities/{id}`
+
+### Seeded Data
+
+Document types are pre-seeded from Prato Flex (parent company workforce tool):
+- **43 parent types** across 4 categories
+- **473 detail types** (children) linked via parent-child hierarchy
+- All mapped with `prato_flex_type_id` / `prato_flex_detail_type_id` for external sync
+
+---
+
+## Candidacies
+
+Tracks a candidate's position in a vacancy pipeline (or talent pool when no vacancy is linked).
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/candidacies` | List candidacies |
+| `POST` | `/candidacies` | Add candidate to pipeline |
+| `PATCH` | `/candidacies/{id}/stage` | Move to a new stage |
+
+---
+
+### GET /candidacies
+
+**Query params:**
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `vacancy_id` | UUID | No | Scope to one vacancy (Kanban view) |
+| `workspace_id` | UUID | No | Defaults to `00000000-0000-0000-0000-000000000001` |
+| `stage` | string | No | Filter by stage |
+
+**Response:** `CandidacyResponse[]`
+
+---
+
+### POST /candidacies
+
+**Query params:** `workspace_id` (optional, defaults to default workspace)
+
+**Body:**
+```json
+{
+  "candidate_id": "uuid",
+  "vacancy_id": "uuid | null",
+  "stage": "new",
+  "source": "manual | voice | whatsapp | cv | import"
+}
+```
+
+Returns `409` if the candidate already has a candidacy for the given vacancy.
+
+---
+
+### PATCH /candidacies/{id}/stage
+
+**Query params:** `stage` (required) — new stage value
+
+**Response:** Updated `CandidacyResponse`
+
+---
+
+### CandidacyResponse
+
+```json
+{
+  "id": "uuid",
+  "vacancy_id": "uuid | null",
+  "candidate_id": "uuid",
+  "stage": "new | pre_screening | qualified | interview_planned | interview_done | offer | placed | rejected | withdrawn",
+  "source": "string | null",
+  "stage_updated_at": "datetime",
+  "created_at": "datetime",
+  "updated_at": "datetime",
+  "candidate": {
+    "id": "uuid",
+    "full_name": "string",
+    "phone": "string | null",
+    "email": "string | null"
+  },
+  "vacancy": {
+    "id": "uuid",
+    "title": "string",
+    "company": "string | null"
+  } | null,
+  "latest_application": {
+    "id": "uuid",
+    "channel": "voice | whatsapp | cv",
+    "qualified": "boolean | null",
+    "open_questions_score": "integer (0-100) | null",
+    "knockout_passed": "integer",
+    "knockout_total": "integer",
+    "completed_at": "datetime | null"
+  } | null
+}
+```
+
+`vacancy` is `null` when `vacancy_id` is null (talent pool entry).
+`latest_application` is `null` when no completed screening exists yet (e.g. manually added candidates).

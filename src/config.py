@@ -38,6 +38,10 @@ TWILIO_TEMPLATE_INITIATE_PRE_SCREENING = os.environ.get("TWILIO_TEMPLATE_INITIAT
 
 # ElevenLabs Configuration
 ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
+
+# Yousign Configuration
+YOUSIGN_API_KEY = os.environ.get("YOUSIGN_API_KEY", "")
+YOUSIGN_WEBHOOK_SECRET = os.environ.get("YOUSIGN_WEBHOOK_SECRET", "")
 ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")  # Master voice agent ID
 
 # VAPI Configuration
@@ -66,6 +70,10 @@ SIP_OUTBOUND_TRUNK_ID = os.environ.get("SIP_OUTBOUND_TRUNK_ID")
 LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "pre-screening")
 LIVEKIT_WEBHOOK_SECRET = os.environ.get("LIVEKIT_WEBHOOK_SECRET", "")
 BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "")
+
+# Prato Flex Configuration
+PRATO_FLEX_API_URL = os.environ.get("PRATO_FLEX_API_URL", "https://salesdemo.prato.be/webservice")
+PRATO_FLEX_API_TOKEN = os.environ.get("PRATO_FLEX_API_TOKEN", "")  # WB token for auth
 
 # ATS Simulator Configuration
 ATS_SIMULATOR_URL = os.environ.get("ATS_SIMULATOR_URL", "http://localhost:8080/ats-simulator")

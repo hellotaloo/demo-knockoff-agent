@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from pre_screening_whatsapp_agent.calendar_helpers import (
+from .calendar_helpers import (
     get_time_slots_for_whatsapp,
     get_slots_for_specific_day,
     TimeSlot,

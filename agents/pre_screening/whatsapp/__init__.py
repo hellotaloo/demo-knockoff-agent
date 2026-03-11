@@ -5,7 +5,7 @@ A code-controlled agent for conducting candidate pre-screening conversations.
 Flow is managed by Python code, not LLM routing decisions.
 
 Usage:
-    from pre_screening_whatsapp_agent import create_simple_agent, Phase
+    from agents.pre_screening.whatsapp import create_simple_agent, Phase
 
     agent = create_simple_agent(
         candidate_name="Jan",

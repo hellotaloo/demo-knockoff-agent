@@ -51,7 +51,7 @@ class CandidateRecord:
 
 @dataclass
 class VoiceConfig:
-    """ElevenLabs voice configuration, loaded from agents.voice_config."""
+    """ElevenLabs voice configuration, loaded from agents.agent_config settings.voice."""
     voice_id: str = "ANHrhmaFeVN0QJaa0PhL"
     model_id: str = "eleven_flash_v2_5"
     stability: float = 1.0

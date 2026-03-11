@@ -42,6 +42,7 @@ class ATSVacancy(BaseModel):
     created_date: Optional[datetime] = None
     recruiter_email: Optional[str] = None
     client_name: Optional[str] = None
+    is_open_application: bool = False
 
 
 class ATSListResponse(BaseModel):

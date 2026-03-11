@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 
-from document_recognition_agent import verify_document_base64
+from agents.document_collection.recognition import verify_document_base64
 from src.models.document import (
     DocumentVerifyRequest,
     DocumentVerifyResponse,

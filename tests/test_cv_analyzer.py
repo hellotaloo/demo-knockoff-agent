@@ -18,7 +18,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-from cv_analyzer import analyze_cv, CVAnalysisResult
+from agents.cv_analyzer import analyze_cv, CVAnalysisResult
 
 
 # Sample interview questions for testing

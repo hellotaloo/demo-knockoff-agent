@@ -6,7 +6,7 @@ Handles CV analysis endpoints including analyzing CVs against pre-screening ques
 
 from fastapi import APIRouter
 
-from cv_analyzer import analyze_cv_base64
+from agents.cv_analyzer import analyze_cv_base64
 from src.models.cv import (
     CVAnalyzeRequest,
     CVAnalyzeResponse,

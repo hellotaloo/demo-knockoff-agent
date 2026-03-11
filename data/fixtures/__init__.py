@@ -56,3 +56,9 @@ def load_activities() -> list[dict]:
         return json.load(f)
 
 
+def load_candidacies() -> list[dict]:
+    """Load demo candidacies from JSON file."""
+    with open(FIXTURES_DIR / "candidacies.json", "r", encoding="utf-8") as f:
+        return json.load(f)
+
+

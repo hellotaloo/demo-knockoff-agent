@@ -1,0 +1,10 @@
+[
+  { "candidate_idx": 0, "vacancy_idx": 0, "stage": "pre_screening",    "source": "whatsapp" },
+  { "candidate_idx": 1, "vacancy_idx": 0, "stage": "qualified",        "source": "whatsapp" },
+  { "candidate_idx": 2, "vacancy_idx": 0, "stage": "qualified",        "source": "voice" },
+  { "candidate_idx": 3, "vacancy_idx": 0, "stage": "rejected",         "source": "whatsapp" },
+  { "candidate_idx": 4, "vacancy_idx": 0, "stage": "pre_screening",    "source": "voice" },
+  { "candidate_idx": 5, "vacancy_idx": 0, "stage": "qualified",        "source": "whatsapp" },
+  { "candidate_idx": 6, "vacancy_idx": 0, "stage": "qualified",        "source": "voice" },
+  { "candidate_idx": 7, "vacancy_idx": 0, "stage": "interview_planned","source": "voice" }
+]

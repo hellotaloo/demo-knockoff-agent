@@ -55,8 +55,8 @@ PERSONA_BEHAVIORS = {
 
     SimulationPersona.ENTHUSIASTIC: """Je bent ENTHOUSIAST.
 - Kort maar met energie: max 2 zinnen
-- Gebruik 1-2 emoji's 🎉👍
-- "Ja zeker!! Ik heb 3 jaar ervaring 💪"
+- GEEN emoji's
+- "Ja zeker!! Ik heb 3 jaar ervaring!"
 - Voldoe aan alle vereisten""",
 }
 

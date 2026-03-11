@@ -23,47 +23,51 @@ from src.database import get_db_pool
 logger = logging.getLogger(__name__)
 
 
-async def fetch_voice_config() -> Optional[dict]:
-    """Fetch voice config from agents.voice_config table."""
+async def fetch_agent_config(config_type: str = "pre_screening") -> dict:
+    """Fetch active agent config settings from agents.agent_config."""
     try:
         pool = await get_db_pool()
         row = await pool.fetchrow(
-            "SELECT voice_id, model_id, stability, similarity_boost FROM agents.voice_config LIMIT 1"
+            "SELECT settings FROM agents.agent_config WHERE config_type = $1 AND is_active = true LIMIT 1",
+            config_type,
         )
         if row:
-            logger.info(f"Voice config loaded: voice_id={row['voice_id']}, model={row['model_id']}")
-            return {
-                "voice_id": row["voice_id"],
-                "model_id": row["model_id"],
-                "stability": float(row["stability"]) if row["stability"] is not None else 1.0,
-                "similarity_boost": float(row["similarity_boost"]) if row["similarity_boost"] is not None else 1.0,
-            }
-        logger.info("No voice config found in DB, using defaults")
-        return None
+            import json
+            settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
+            logger.info(f"Agent config loaded ({config_type}): {list(settings.keys())}")
+            return settings
+        logger.info(f"No agent config found for {config_type}, using defaults")
+        return {}
     except Exception as e:
-        logger.warning(f"Failed to fetch voice config: {e}")
-        return None
+        logger.warning(f"Failed to fetch agent config ({config_type}): {e}")
+        return {}
+
+
+async def fetch_voice_config() -> Optional[dict]:
+    """Fetch voice config from agents.agent_config settings.voice group."""
+    settings = await fetch_agent_config("pre_screening")
+    voice = settings.get("voice", {})
+    if voice and voice.get("voice_id"):
+        logger.info(f"Voice config loaded: voice_id={voice['voice_id']}, model={voice.get('model_id')}")
+        return {
+            "voice_id": voice["voice_id"],
+            "model_id": voice.get("model_id", "eleven_flash_v2_5"),
+            "stability": float(voice.get("stability", 1.0)),
+            "similarity_boost": float(voice.get("similarity_boost", 1.0)),
+        }
+    logger.info("No voice config found in agent_config, using defaults")
+    return None
 
 
 async def fetch_pre_screening_config() -> dict:
-    """Fetch pre-screening config from agents.pre_screening_config table."""
-    try:
-        pool = await get_db_pool()
-        row = await pool.fetchrow(
-            "SELECT require_consent, allow_escalation FROM agents.pre_screening_config LIMIT 1"
-        )
-        if row:
-            config = {
-                "require_consent": row["require_consent"],
-                "allow_escalation": row["allow_escalation"],
-            }
-            logger.info(f"Pre-screening config loaded: {config}")
-            return config
-        logger.info("No pre-screening config found in DB, using defaults")
-        return {"require_consent": False, "allow_escalation": True}
-    except Exception as e:
-        logger.warning(f"Failed to fetch pre-screening config: {e}")
-        return {"require_consent": False, "allow_escalation": True}
+    """Fetch pre-screening config from agents.agent_config grouped settings."""
+    settings = await fetch_agent_config("pre_screening")
+    escalation = settings.get("escalation", {})
+    interview = settings.get("interview", {})
+    return {
+        "require_consent": interview.get("require_consent", False),
+        "allow_escalation": escalation.get("allow_escalation", True),
+    }
 
 
 class LiveKitService:
@@ -107,7 +111,7 @@ class LiveKitService:
         persona_name: str = "Anna",
     ) -> dict:
         """
-        Map backend DB questions to pre_screening_v2 SessionInput format.
+        Map backend DB questions to pre_screening_voice_agent SessionInput format.
 
         Uses internal_id to store DB question UUIDs for round-tripping results.
         """

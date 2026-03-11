@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.database import get_db_pool
-from transcript_processor import process_transcript
+from agents.pre_screening.transcript_processor import process_transcript
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

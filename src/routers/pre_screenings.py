@@ -18,10 +18,10 @@ from src.models.pre_screening import (
     StatusUpdateRequest,
     PreScreeningSettingsResponse,
     PreScreeningSettingsUpdateRequest,
-    PreScreeningConfigResponse,
-    PreScreeningConfigUpdateRequest,
+    AgentConfigResponse,
+    AgentConfigUpdateRequest,
 )
-from src.repositories import PreScreeningRepository, PreScreeningConfigRepository, VacancyRepository
+from src.repositories import PreScreeningRepository, AgentConfigRepository, VacancyRepository
 from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ async def _run_background_analysis(pre_screening_id: uuid.UUID, vacancy_id: str)
     This ensures every save triggers a fresh analysis, keeping the
     analysis tab on the pre-screening page always up-to-date.
     """
-    from interview_analysis_agent import analyze_interview
+    from agents.pre_screening.interview_analyzer import analyze_interview
 
     try:
         pool = await get_db_pool()
@@ -313,19 +313,19 @@ async def get_pre_screening(vacancy_id: str):
         """Helper to get existing session or create new one, handling race conditions."""
         global session_manager
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator", user_id="web", session_id=session_id
+            app_name="interview_question_generator", user_id="web", session_id=session_id
         )
         if session:
             return session
         try:
             return await session_manager.interview_session_service.create_session(
-                app_name="interview_generator", user_id="web", session_id=session_id
+                app_name="interview_question_generator", user_id="web", session_id=session_id
             )
         except (IntegrityError, AlreadyExistsError):
             # Session was created by another request or already exists in ADK, fetch it
             logger.info(f"Session {session_id} already exists, fetching it")
             return await session_manager.interview_session_service.get_session(
-                app_name="interview_generator", user_id="web", session_id=session_id
+                app_name="interview_question_generator", user_id="web", session_id=session_id
             )
 
     try:
@@ -347,7 +347,7 @@ async def get_pre_screening(vacancy_id: str):
     )
     await session_manager.safe_append_event(
         session_manager.interview_session_service, session, event,
-        app_name="interview_generator", user_id="web", session_id=session_id
+        app_name="interview_question_generator", user_id="web", session_id=session_id
     )
 
     # Return response with session info
@@ -700,43 +700,67 @@ async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSe
 
 
 # ---------------------------------------------------------------------------
-# Global pre-screening agent config (agents.pre_screening_config)
+# Global pre-screening agent config (agents.agent_config)
 # ---------------------------------------------------------------------------
 
 
-@router.get("/pre-screening/config", response_model=PreScreeningConfigResponse)
+@router.get("/pre-screening/config", response_model=AgentConfigResponse)
 async def get_pre_screening_config():
-    """Get the global pre-screening agent configuration."""
+    """Get the active pre-screening agent configuration."""
     pool = await get_db_pool()
-    repo = PreScreeningConfigRepository(pool)
-    row = await repo.get()
+    repo = AgentConfigRepository(pool)
 
+    # Get workspace (single-tenant for now)
+    workspace = await pool.fetchrow("SELECT id FROM system.workspaces LIMIT 1")
+    if not workspace:
+        raise HTTPException(status_code=404, detail="No workspace found")
+
+    row = await repo.get_active(workspace["id"], "pre_screening")
     if not row:
         raise HTTPException(status_code=404, detail="Pre-screening config not found")
 
-    return PreScreeningConfigResponse(id=str(row["id"]), **{k: row[k] for k in row.keys() if k != "id"})
+    import json
+    settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
+    return AgentConfigResponse(
+        id=str(row["id"]),
+        config_type=row["config_type"],
+        version=row["version"],
+        settings=settings,
+    )
 
 
-@router.patch("/pre-screening/config", response_model=PreScreeningConfigResponse)
-async def update_pre_screening_config(request: PreScreeningConfigUpdateRequest):
+@router.patch("/pre-screening/config", response_model=AgentConfigResponse)
+async def update_pre_screening_config(request: AgentConfigUpdateRequest):
     """
-    Update the global pre-screening agent configuration.
-    All fields are optional — only provided fields will be updated.
+    Update the pre-screening agent configuration.
+    Creates a new version with merged settings — previous versions are preserved.
     """
     pool = await get_db_pool()
-    repo = PreScreeningConfigRepository(pool)
+    repo = AgentConfigRepository(pool)
 
-    # Check at least one field is provided
-    update_data = request.model_dump(exclude_none=True)
+    update_data = request.settings
     if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        raise HTTPException(status_code=400, detail="No settings to update")
 
-    # Get existing config to find the row ID
-    row = await repo.get()
-    if not row:
-        raise HTTPException(status_code=404, detail="Pre-screening config not found")
+    # Get workspace (single-tenant for now)
+    workspace = await pool.fetchrow("SELECT id FROM system.workspaces LIMIT 1")
+    if not workspace:
+        raise HTTPException(status_code=404, detail="No workspace found")
 
-    await repo.update(row["id"], **update_data)
+    # Merge with current settings
+    current = await repo.get_active(workspace["id"], "pre_screening")
+    import json
+    current_settings = {}
+    if current:
+        current_settings = current["settings"] if isinstance(current["settings"], dict) else json.loads(current["settings"])
 
-    updated = await repo.get()
-    return PreScreeningConfigResponse(id=str(updated["id"]), **{k: updated[k] for k in updated.keys() if k != "id"})
+    merged = {**current_settings, **update_data}
+    row = await repo.save(workspace["id"], "pre_screening", merged)
+
+    settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
+    return AgentConfigResponse(
+        id=str(row["id"]),
+        config_type=row["config_type"],
+        version=row["version"],
+        settings=settings,
+    )

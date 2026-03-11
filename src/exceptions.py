@@ -43,6 +43,16 @@ class ValidationError(TalooException):
         self.field = field
 
 
+class InvalidTransitionError(ValidationError):
+    """Raised when a candidacy stage transition is not allowed."""
+
+    def __init__(self, from_stage: str, to_stage: str):
+        message = f"Transition from '{from_stage}' to '{to_stage}' is not allowed"
+        super().__init__(message, details={"from_stage": from_stage, "to_stage": to_stage})
+        self.from_stage = from_stage
+        self.to_stage = to_stage
+
+
 class InvalidUUIDError(ValidationError):
     """Raised when a UUID format is invalid."""
 

@@ -8,7 +8,7 @@ open answers) and transcript in the database. This processor then:
 3. Updates application_answers with scores and applications with AI summary
 4. Triggers downstream: screening notes integration + workflow events
 
-This replaces the old transcript_processor ADK agent with a single direct API call.
+This replaces the old pre_screening_transcript_processor ADK agent with a single direct API call.
 """
 import asyncio
 import json
@@ -25,7 +25,7 @@ from src.workflows import get_orchestrator
 logger = logging.getLogger(__name__)
 
 
-# Rating labels mapped to score ranges (same as transcript_processor)
+# Rating labels mapped to score ranges (same as pre_screening_transcript_processor)
 def score_to_rating(score: int) -> str:
     """Convert a numeric score (0-100) to a rating label."""
     if score <= 20:
@@ -40,7 +40,7 @@ def score_to_rating(score: int) -> str:
         return "excellent"
 
 
-# Scoring instruction — adapted from transcript_processor/agent.py INSTRUCTION
+# Scoring instruction — adapted from pre_screening_transcript_processor/agent.py INSTRUCTION
 SCORING_INSTRUCTION = """Je bent een expert in het analyseren van sollicitatiegesprekken.
 
 Je taak is om een transcript van een screening te analyseren en de antwoorden van de kandidaat te evalueren.
@@ -288,7 +288,7 @@ async def process_call_results(
 
         client = genai.Client()
         response = await client.aio.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-2.5-flash",
             contents=[
                 types.Content(role="user", parts=[types.Part(text=SCORING_INSTRUCTION)]),
                 types.Content(role="user", parts=[types.Part(text=prompt)]),

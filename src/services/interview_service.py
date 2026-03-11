@@ -131,11 +131,11 @@ class InterviewService:
             # Try to delete existing session
             try:
                 existing = await self.session_manager.interview_session_service.get_session(
-                    app_name="interview_generator", user_id="web", session_id=session_id
+                    app_name="interview_question_generator", user_id="web", session_id=session_id
                 )
                 if existing:
                     await self.session_manager.interview_session_service.delete_session(
-                        app_name="interview_generator", user_id="web", session_id=session_id
+                        app_name="interview_question_generator", user_id="web", session_id=session_id
                     )
             except Exception as e:
                 logger.warning(f"Error checking/deleting existing session: {e}")
@@ -143,7 +143,7 @@ class InterviewService:
             # Create new session, handling case where it already exists
             try:
                 await self.session_manager.interview_session_service.create_session(
-                    app_name="interview_generator",
+                    app_name="interview_question_generator",
                     user_id="web",
                     session_id=session_id
                 )
@@ -152,7 +152,7 @@ class InterviewService:
                 logger.info(f"Session {session_id} already exists for generation")
         
         session_reset_start = time.time()
-        from interview_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
+        from agents.interview_question_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
         await self.session_manager.with_session_retry(
             reset_interview_session,
             lambda: self.session_manager.create_interview_session_service(interview_agent, interview_editor_agent),
@@ -275,10 +275,10 @@ class InterviewService:
             
             # === TIMING: Session fetch ===
             session_fetch_start = time.time()
-            from interview_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
+            from agents.interview_question_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
             session = await self.session_manager.with_session_retry(
                 lambda: self.session_manager.interview_session_service.get_session(
-                    app_name="interview_generator",
+                    app_name="interview_question_generator",
                     user_id="web",
                     session_id=session_id
                 ),

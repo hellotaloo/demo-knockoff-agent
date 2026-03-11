@@ -8,7 +8,7 @@ import uuid
 import logging
 from fastapi import APIRouter, HTTPException
 
-from interview_analysis_agent import analyze_interview
+from agents.pre_screening.interview_analyzer import analyze_interview
 from src.models.interview_analysis import (
     InterviewAnalysisRequest,
     InterviewAnalysisResponse,

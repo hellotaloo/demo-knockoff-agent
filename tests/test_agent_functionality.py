@@ -3,7 +3,7 @@
 Test document collection agent functionality (instruction builder, agent creation).
 """
 
-from document_collection_agent import (
+from agents.document_collection.whatsapp import (
     create_document_collection_agent,
     get_document_collection_agent,
     build_document_collection_instruction,

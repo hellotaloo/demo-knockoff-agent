@@ -15,14 +15,14 @@ from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
 from sqlalchemy.exc import InterfaceError, OperationalError
 
-from pre_screening_whatsapp_agent import (
+from agents.pre_screening.whatsapp import (
     create_simple_agent,
     restore_agent_from_state,
     is_conversation_complete,
     get_conversation_outcome,
     Phase,
 )
-from transcript_processor import process_transcript
+from agents.pre_screening.transcript_processor import process_transcript
 from src.config import ELEVENLABS_WEBHOOK_SECRET, logger
 from src.models.webhook import ElevenLabsWebhookPayload
 from src.models import ActivityEventType, ActorType, ActivityChannel
@@ -165,36 +165,57 @@ async def _process_whatsapp_conversation(
             logger.warning(f"Could not parse interview slot: {e}")
             interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
 
+    # Ensure candidate record exists (create if missing)
+    candidate_id = conv_row["candidate_id"]
+    if not candidate_id:
+        from src.repositories import CandidateRepository
+        candidate_repo = CandidateRepository(pool)
+        candidate_id = await candidate_repo.find_or_create(
+            full_name=candidate_name,
+            phone=candidate_phone,
+            is_test=is_test,
+        )
+        # Link candidate to session for future lookups
+        await pool.execute(
+            "UPDATE agents.pre_screening_sessions SET candidate_id = $1 WHERE id = $2",
+            candidate_id, conversation_id
+        )
+        logger.info(f"Created/linked candidate {candidate_id} for conversation {conversation_id}")
+
     # Store basic results in transaction
     async with pool.acquire() as conn:
         async with conn.transaction():
             if existing_app:
                 application_id = existing_app["id"]
+                # Link candidate if not already linked
                 await conn.execute(
                     """
                     UPDATE ats.applications
                     SET qualified = $1, interaction_seconds = $2,
                         completed_at = NOW(), channel = 'whatsapp',
-                        summary = $3, interview_slot = $4, status = 'processing'
+                        summary = $3, interview_slot = $4, status = 'processing',
+                        candidate_id = COALESCE(candidate_id, $6)
                     WHERE id = $5
                     """,
                     qualified,
                     duration_seconds,
                     "Verwerken...",
                     interview_slot,
-                    application_id
+                    application_id,
+                    candidate_id,
                 )
                 logger.info(f"Application {application_id} status -> processing")
             else:
                 app_row = await conn.fetchrow(
                     """
                     INSERT INTO ats.applications
-                    (vacancy_id, candidate_name, candidate_phone, channel, qualified,
+                    (vacancy_id, candidate_id, candidate_name, candidate_phone, channel, qualified,
                      interaction_seconds, completed_at, summary, interview_slot, is_test, status)
-                    VALUES ($1, $2, $3, 'whatsapp', $4, $5, NOW(), $6, $7, $8, 'processing')
+                    VALUES ($1, $2, $3, $4, 'whatsapp', $5, $6, NOW(), $7, $8, $9, 'processing')
                     RETURNING id
                     """,
                     vacancy_uuid,
+                    candidate_id,
                     candidate_name,
                     candidate_phone,
                     qualified,
@@ -204,7 +225,7 @@ async def _process_whatsapp_conversation(
                     is_test
                 )
                 application_id = app_row["id"]
-                logger.info(f"Created new application {application_id} with status=processing")
+                logger.info(f"Created new application {application_id} with candidate {candidate_id}, status=processing")
 
             # Store knockout results (matched by position to pre_screening_questions)
             for i, kr in enumerate(agent_knockout_results):
@@ -251,8 +272,7 @@ async def _process_whatsapp_conversation(
 
     logger.info(f"WhatsApp conversation {conversation_id} basic results stored: application {application_id}")
 
-    # Log activity
-    candidate_id = existing_app["candidate_id"] if existing_app and existing_app.get("candidate_id") else None
+    # Log activity (candidate_id was resolved earlier via find_or_create)
     if candidate_id:
         activity_service = ActivityService(pool)
         event_type = ActivityEventType.QUALIFIED if qualified else ActivityEventType.DISQUALIFIED

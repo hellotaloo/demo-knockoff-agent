@@ -6,6 +6,17 @@ import uuid
 from typing import Optional
 
 
+# All columns we select in document_type queries
+_COLUMNS = """
+    id, workspace_id, slug, name, description, category,
+    requires_front_back, is_verifiable, icon, is_default,
+    is_active, sort_order, parent_id,
+    prato_flex_type_id, prato_flex_detail_type_id,
+    scan_mode, verification_config,
+    created_at, updated_at
+"""
+
+
 class DocumentTypeRepository:
     """CRUD operations for ats.document_types."""
 
@@ -17,6 +28,7 @@ class DocumentTypeRepository:
         workspace_id: uuid.UUID,
         category: Optional[str] = None,
         is_active: Optional[bool] = True,
+        parents_only: bool = False,
     ) -> list[asyncpg.Record]:
         """List document types for a workspace with optional filters."""
         conditions = ["workspace_id = $1"]
@@ -33,12 +45,13 @@ class DocumentTypeRepository:
             params.append(is_active)
             idx += 1
 
+        if parents_only:
+            conditions.append("parent_id IS NULL")
+
         where = " AND ".join(conditions)
         return await self.pool.fetch(
             f"""
-            SELECT id, workspace_id, slug, name, description, category,
-                   requires_front_back, is_verifiable, icon, is_default,
-                   is_active, sort_order, created_at, updated_at
+            SELECT {_COLUMNS}
             FROM ats.document_types
             WHERE {where}
             ORDER BY sort_order, name
@@ -46,13 +59,91 @@ class DocumentTypeRepository:
             *params,
         )
 
+    async def list_children(
+        self,
+        parent_id: uuid.UUID,
+        is_active: Optional[bool] = True,
+    ) -> list[asyncpg.Record]:
+        """List child document types for a given parent."""
+        conditions = ["parent_id = $1"]
+        params: list = [parent_id]
+        idx = 2
+
+        if is_active is not None:
+            conditions.append(f"is_active = ${idx}")
+            params.append(is_active)
+            idx += 1
+
+        where = " AND ".join(conditions)
+        return await self.pool.fetch(
+            f"""
+            SELECT {_COLUMNS}
+            FROM ats.document_types
+            WHERE {where}
+            ORDER BY sort_order, name
+            """,
+            *params,
+        )
+
+    async def list_parents_with_children(
+        self,
+        workspace_id: uuid.UUID,
+        category: Optional[str] = None,
+        is_active: Optional[bool] = True,
+    ) -> list[asyncpg.Record]:
+        """
+        Get parent document types with their children in a single query.
+
+        The category filter only applies to parents. Children are included
+        based on parent match (a child may have a different category than
+        its parent, e.g. identity parent with certificate children).
+        """
+        parent_conditions = ["workspace_id = $1", "parent_id IS NULL"]
+        params: list = [workspace_id]
+        idx = 2
+
+        if category is not None:
+            parent_conditions.append(f"category = ${idx}")
+            params.append(category)
+            idx += 1
+
+        if is_active is not None:
+            parent_conditions.append(f"is_active = ${idx}")
+            params.append(is_active)
+
+        parent_where = " AND ".join(parent_conditions)
+
+        # Children join on parent_id; is_active filter applies to children too
+        child_active = ""
+        if is_active is not None:
+            child_active = f"AND is_active = ${idx}"
+
+        return await self.pool.fetch(
+            f"""
+            WITH matched_parents AS (
+                SELECT id FROM ats.document_types
+                WHERE {parent_where}
+            )
+            SELECT {_COLUMNS}
+            FROM ats.document_types
+            WHERE (
+                id IN (SELECT id FROM matched_parents)
+                OR
+                (parent_id IN (SELECT id FROM matched_parents) {child_active})
+            )
+            ORDER BY
+                COALESCE(parent_id, id),
+                parent_id IS NOT NULL,
+                sort_order, name
+            """,
+            *params,
+        )
+
     async def get_by_id(self, doc_type_id: uuid.UUID) -> Optional[asyncpg.Record]:
         """Get a single document type by ID."""
         return await self.pool.fetchrow(
-            """
-            SELECT id, workspace_id, slug, name, description, category,
-                   requires_front_back, is_verifiable, icon, is_default,
-                   is_active, sort_order, created_at, updated_at
+            f"""
+            SELECT {_COLUMNS}
             FROM ats.document_types
             WHERE id = $1
             """,
@@ -62,10 +153,8 @@ class DocumentTypeRepository:
     async def get_by_slug(self, workspace_id: uuid.UUID, slug: str) -> Optional[asyncpg.Record]:
         """Get a document type by workspace + slug."""
         return await self.pool.fetchrow(
-            """
-            SELECT id, workspace_id, slug, name, description, category,
-                   requires_front_back, is_verifiable, icon, is_default,
-                   is_active, sort_order, created_at, updated_at
+            f"""
+            SELECT {_COLUMNS}
             FROM ats.document_types
             WHERE workspace_id = $1 AND slug = $2
             """,
@@ -75,10 +164,8 @@ class DocumentTypeRepository:
     async def get_defaults(self, workspace_id: uuid.UUID) -> list[asyncpg.Record]:
         """Get all default document types for a workspace."""
         return await self.pool.fetch(
-            """
-            SELECT id, workspace_id, slug, name, description, category,
-                   requires_front_back, is_verifiable, icon, is_default,
-                   is_active, sort_order, created_at, updated_at
+            f"""
+            SELECT {_COLUMNS}
             FROM ats.document_types
             WHERE workspace_id = $1 AND is_default = true AND is_active = true
             ORDER BY sort_order, name
@@ -91,10 +178,8 @@ class DocumentTypeRepository:
         if not slugs:
             return []
         return await self.pool.fetch(
-            """
-            SELECT id, workspace_id, slug, name, description, category,
-                   requires_front_back, is_verifiable, icon, is_default,
-                   is_active, sort_order, created_at, updated_at
+            f"""
+            SELECT {_COLUMNS}
             FROM ats.document_types
             WHERE workspace_id = $1 AND slug = ANY($2) AND is_active = true
             ORDER BY sort_order, name
@@ -107,10 +192,8 @@ class DocumentTypeRepository:
         if not ids:
             return []
         return await self.pool.fetch(
-            """
-            SELECT id, workspace_id, slug, name, description, category,
-                   requires_front_back, is_verifiable, icon, is_default,
-                   is_active, sort_order, created_at, updated_at
+            f"""
+            SELECT {_COLUMNS}
             FROM ats.document_types
             WHERE id = ANY($1)
             ORDER BY sort_order, name
@@ -120,15 +203,17 @@ class DocumentTypeRepository:
 
     async def create(self, workspace_id: uuid.UUID, **kwargs) -> asyncpg.Record:
         """Create a new document type."""
+        import json
+        config = kwargs.get("verification_config")
         return await self.pool.fetchrow(
-            """
+            f"""
             INSERT INTO ats.document_types
                 (workspace_id, slug, name, description, category,
-                 requires_front_back, is_verifiable, icon, is_default, sort_order)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING id, workspace_id, slug, name, description, category,
-                      requires_front_back, is_verifiable, icon, is_default,
-                      is_active, sort_order, created_at, updated_at
+                 requires_front_back, is_verifiable, icon, is_default, sort_order,
+                 parent_id, prato_flex_type_id, prato_flex_detail_type_id,
+                 scan_mode, verification_config)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            RETURNING {_COLUMNS}
             """,
             workspace_id,
             kwargs["slug"],
@@ -140,6 +225,11 @@ class DocumentTypeRepository:
             kwargs.get("icon"),
             kwargs.get("is_default", False),
             kwargs.get("sort_order", 0),
+            kwargs.get("parent_id"),
+            kwargs.get("prato_flex_type_id"),
+            kwargs.get("prato_flex_detail_type_id"),
+            kwargs.get("scan_mode", "single"),
+            json.dumps(config) if config is not None else None,
         )
 
     async def update(self, doc_type_id: uuid.UUID, **kwargs) -> Optional[asyncpg.Record]:
@@ -151,11 +241,19 @@ class DocumentTypeRepository:
         for field in [
             "name", "description", "category", "requires_front_back",
             "is_verifiable", "icon", "is_default", "is_active", "sort_order",
+            "scan_mode",
         ]:
             if field in kwargs and kwargs[field] is not None:
                 updates.append(f"{field} = ${idx}")
                 params.append(kwargs[field])
                 idx += 1
+
+        if "verification_config" in kwargs:
+            import json
+            updates.append(f"verification_config = ${idx}")
+            val = kwargs["verification_config"]
+            params.append(json.dumps(val) if val is not None else None)
+            idx += 1
 
         if not updates:
             return await self.get_by_id(doc_type_id)
@@ -168,9 +266,7 @@ class DocumentTypeRepository:
             UPDATE ats.document_types
             SET {", ".join(updates)}
             WHERE id = ${idx}
-            RETURNING id, workspace_id, slug, name, description, category,
-                      requires_front_back, is_verifiable, icon, is_default,
-                      is_active, sort_order, created_at, updated_at
+            RETURNING {_COLUMNS}
             """,
             *params,
         )

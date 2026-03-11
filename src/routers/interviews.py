@@ -143,11 +143,11 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
         # Try to delete existing session
         try:
             existing = await session_manager.interview_session_service.get_session(
-                app_name="interview_generator", user_id="web", session_id=session_id
+                app_name="interview_question_generator", user_id="web", session_id=session_id
             )
             if existing:
                 await session_manager.interview_session_service.delete_session(
-                    app_name="interview_generator", user_id="web", session_id=session_id
+                    app_name="interview_question_generator", user_id="web", session_id=session_id
                 )
         except Exception as e:
             logger.warning(f"Error checking/deleting existing session: {e}")
@@ -155,7 +155,7 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
         # Create new session, handling case where it already exists
         try:
             await session_manager.interview_session_service.create_session(
-                app_name="interview_generator",
+                app_name="interview_question_generator",
                 user_id="web",
                 session_id=session_id
             )
@@ -272,7 +272,7 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
                 # Get the interview from session state
                 session_refetch_start = time.time()
                 session = await session_manager.interview_session_service.get_session(
-                    app_name="interview_generator",
+                    app_name="interview_question_generator",
                     user_id="web",
                     session_id=session_id
                 )
@@ -323,7 +323,7 @@ async def stream_feedback(session_id: str, message: str) -> AsyncGenerator[str, 
         session_fetch_start = time.time()
         session = await session_manager.with_session_retry(
             lambda: session_manager.interview_session_service.get_session(
-                app_name="interview_generator",
+                app_name="interview_question_generator",
                 user_id="web",
                 session_id=session_id
             ),
@@ -449,7 +449,7 @@ Gebruiker: {message}"""
                         # Get updated interview from session state
                         session_refetch_start = time.time()
                         session = await session_manager.interview_session_service.get_session(
-                            app_name="interview_generator",
+                            app_name="interview_question_generator",
                             user_id="web",
                             session_id=session_id
                         )
@@ -550,7 +550,7 @@ async def get_interview_session(session_id: str):
 
     try:
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=session_id
         )
@@ -561,7 +561,7 @@ async def get_interview_session(session_id: str):
             session_manager.interview_editor_agent
         )
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=session_id
         )
@@ -587,7 +587,7 @@ async def reorder_questions(request: ReorderRequest):
 
     try:
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=request.session_id
         )
@@ -598,7 +598,7 @@ async def reorder_questions(request: ReorderRequest):
             session_manager.interview_editor_agent
         )
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=request.session_id
         )
@@ -649,7 +649,7 @@ async def reorder_questions(request: ReorderRequest):
     )
     await session_manager.safe_append_event(
         session_manager.interview_session_service, session, event,
-        app_name="interview_generator", user_id="web", session_id=request.session_id
+        app_name="interview_question_generator", user_id="web", session_id=request.session_id
     )
 
     return {"status": "success", "interview": interview}
@@ -746,19 +746,19 @@ async def restore_session_from_db(request: RestoreSessionRequest):
         """Helper to get existing session or create new one, handling race conditions."""
         global session_manager
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator", user_id="web", session_id=session_id
+            app_name="interview_question_generator", user_id="web", session_id=session_id
         )
         if session:
             return session
         try:
             return await session_manager.interview_session_service.create_session(
-                app_name="interview_generator", user_id="web", session_id=session_id
+                app_name="interview_question_generator", user_id="web", session_id=session_id
             )
         except (IntegrityError, AlreadyExistsError):
             # Session was created by another request, fetch it
             logger.info(f"Session {session_id} already exists, fetching it")
             return await session_manager.interview_session_service.get_session(
-                app_name="interview_generator", user_id="web", session_id=session_id
+                app_name="interview_question_generator", user_id="web", session_id=session_id
             )
 
     try:
@@ -782,7 +782,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
     )
     await session_manager.safe_append_event(
         session_manager.interview_session_service, session, event,
-        app_name="interview_generator", user_id="web", session_id=session_id
+        app_name="interview_question_generator", user_id="web", session_id=session_id
     )
 
     return {
@@ -800,7 +800,7 @@ async def delete_question(request: DeleteQuestionRequest):
 
     try:
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=request.session_id
         )
@@ -811,7 +811,7 @@ async def delete_question(request: DeleteQuestionRequest):
             session_manager.interview_editor_agent
         )
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=request.session_id
         )
@@ -860,7 +860,7 @@ async def delete_question(request: DeleteQuestionRequest):
     )
     await session_manager.safe_append_event(
         session_manager.interview_session_service, session, event,
-        app_name="interview_generator", user_id="web", session_id=request.session_id
+        app_name="interview_question_generator", user_id="web", session_id=request.session_id
     )
 
     return {"status": "success", "deleted": question_id, "interview": interview}
@@ -881,7 +881,7 @@ async def add_question(request: AddQuestionRequest):
 
     try:
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=request.session_id
         )
@@ -892,7 +892,7 @@ async def add_question(request: AddQuestionRequest):
             session_manager.interview_editor_agent
         )
         session = await session_manager.interview_session_service.get_session(
-            app_name="interview_generator",
+            app_name="interview_question_generator",
             user_id="web",
             session_id=request.session_id
         )
@@ -948,7 +948,7 @@ async def add_question(request: AddQuestionRequest):
     )
     await session_manager.safe_append_event(
         session_manager.interview_session_service, session, event,
-        app_name="interview_generator", user_id="web", session_id=request.session_id
+        app_name="interview_question_generator", user_id="web", session_id=request.session_id
     )
 
     return {"status": "success", "added": new_id, "question": new_question, "interview": interview}

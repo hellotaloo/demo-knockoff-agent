@@ -8,7 +8,7 @@ This is NOT a Taloo endpoint — it pretends to be a third-party ATS.
 import hashlib
 import logging
 from fastapi import APIRouter, Query
-from fixtures import load_vacancies, load_recruiters, load_clients
+from data.fixtures import load_vacancies, load_recruiters, load_clients
 from src.models.ats_simulator import (
     ATSVacancy,
     ATSRecruiter,
@@ -43,6 +43,7 @@ async def list_vacancies(
             status="active" if v["status"] == "open" else v["status"],
             recruiter_email=v.get("recruiter_email"),
             client_name=v.get("client_name"),
+            is_open_application=v.get("is_open_application", False),
         ))
 
     if status:

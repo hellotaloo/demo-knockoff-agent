@@ -1,5 +1,5 @@
 """
-Google Calendar helpers for the pre_screening_v2 agent.
+Google Calendar helpers for the pre_screening_voice_agent agent.
 
 Provides real calendar availability lookup and event creation via Google Calendar API,
 with graceful fallback when credentials are not configured.

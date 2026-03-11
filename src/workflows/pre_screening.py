@@ -122,6 +122,38 @@ async def handle_screening_completed(
         f"interview_slot={interview_slot}, application_id={application_id}"
     )
 
+    # Advance candidacy stage based on screening outcome
+    candidate_id_str = context.get("candidate_id")
+    vacancy_id_str = context.get("vacancy_id")
+    if candidate_id_str and vacancy_id_str:
+        try:
+            from src.database import get_db_pool
+            from src.models.candidacy import CandidacyStage
+            from src.repositories.candidacy_repo import CandidacyRepository
+            from src.services.candidacy_transition_service import CandidacyStageTransitionService
+
+            pool = await get_db_pool()
+            candidacy_repo = CandidacyRepository(pool)
+            candidacy = await candidacy_repo.find_by_candidate_and_vacancy(
+                uuid.UUID(candidate_id_str), uuid.UUID(vacancy_id_str)
+            )
+            if candidacy:
+                to_stage = CandidacyStage.QUALIFIED if qualified else CandidacyStage.REJECTED
+                transition_service = CandidacyStageTransitionService(pool)
+                await transition_service.transition(
+                    candidacy_id=candidacy["id"],
+                    to_stage=to_stage,
+                    triggered_by="pre_screening_agent",
+                    metadata={"application_id": application_id, "channel": channel},
+                )
+            else:
+                logger.debug(
+                    f"Workflow {workflow['id']}: no candidacy found for "
+                    f"candidate={candidate_id_str} vacancy={vacancy_id_str}, skipping stage transition"
+                )
+        except Exception as e:
+            logger.error(f"Workflow {workflow['id']}: failed to advance candidacy stage: {e}")
+
     return {
         "next_step": "processed",
         "qualified": qualified,

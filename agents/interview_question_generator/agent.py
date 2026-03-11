@@ -270,8 +270,7 @@ generate_config = types.GenerateContentConfig(
 # Generator agent: No thinking mode for faster response
 # Simulated reasoning is shown in frontend instead
 generator_agent = Agent(
-    name="interview_generator",
-    #model="gemini-3-pro-preview",
+    name="interview_question_generator",
     model="gemini-2.5-flash",
     instruction=instruction,
     description="Genereert gestructureerde interviewvragen uit vacatureteksten",

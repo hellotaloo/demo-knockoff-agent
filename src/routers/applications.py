@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
-from transcript_processor import process_transcript
+from agents.pre_screening.transcript_processor import process_transcript
 
 from src.repositories import ApplicationRepository, VacancyRepository
 from src.services import ApplicationService

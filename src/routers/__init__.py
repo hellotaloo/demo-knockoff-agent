@@ -28,6 +28,10 @@ from .interview_analysis import router as interview_analysis_router
 from .ats_simulator import router as ats_simulator_router
 from .playground import router as playground_router
 from .document_collection_v2 import router as document_collection_v2_router
+from .ontology import router as ontology_router
+from .redirect import router as redirect_router
+from .yousign_webhook import router as yousign_webhook_router
+from .candidacy import router as candidacy_router
 
 __all__ = [
     "health_router",
@@ -57,4 +61,8 @@ __all__ = [
     "ats_simulator_router",
     "playground_router",
     "document_collection_v2_router",
+    "ontology_router",
+    "redirect_router",
+    "yousign_webhook_router",
+    "candidacy_router",
 ]

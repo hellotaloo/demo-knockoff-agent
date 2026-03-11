@@ -3,7 +3,7 @@
 Test script for the Interview Generator Agent - specifically testing vacancy_snippet linking.
 
 Usage:
-    python tests/test_interview_generator.py
+    python tests/test_interview_question_generator.py
 
 Tests that each generated question includes a vacancy_snippet that links back to the source text.
 """
@@ -23,7 +23,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from interview_generator.agent import generator_agent
+from agents.interview_question_generator.agent import generator_agent
 
 
 # Sample vacancy text for testing (Dutch)
@@ -67,7 +67,7 @@ async def main():
 
     # Create session
     await session_service.create_session(
-        app_name="interview_generator",
+        app_name="interview_question_generator",
         user_id="test",
         session_id=session_id
     )
@@ -75,7 +75,7 @@ async def main():
     # Create runner
     runner = Runner(
         agent=generator_agent,
-        app_name="interview_generator",
+        app_name="interview_question_generator",
         session_service=session_service
     )
 
@@ -121,7 +121,7 @@ async def main():
 
     # Get the session state to retrieve the interview
     session = await session_service.get_session(
-        app_name="interview_generator",
+        app_name="interview_question_generator",
         user_id="test",
         session_id=session_id
     )

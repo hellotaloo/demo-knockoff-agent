@@ -58,7 +58,7 @@ line-ending = "auto"
 
 [tool.ruff.lint.isort]
 # Sort imports
-known-first-party = ["src"]
+known-first-party = ["src", "agents", "data"]
 section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 
 [tool.pytest.ini_options]

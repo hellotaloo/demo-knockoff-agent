@@ -116,13 +116,13 @@ def _get_nodes() -> list[ArchitectureNode]:
 
     # Agent Layer
     agents = [
-        ("interview_generator", "Interview Generator", "interview_generator/agent.py", "Generates knockout and qualification questions"),
-        ("transcript_processor", "Transcript Processor", "transcript_processor/agent.py", "Analyzes voice call transcripts"),
-        ("pre_screening_whatsapp", "Pre-screening WhatsApp", "pre_screening_whatsapp_agent/agent.py", "WhatsApp screening conversations"),
+        ("interview_question_generator", "Interview Question Generator", "interview_question_generator/agent.py", "Generates knockout and qualification questions"),
+        ("pre_screening_transcript_processor", "Transcript Processor", "pre_screening/transcript_processor/agent.py", "Analyzes voice call transcripts"),
+        ("pre_screening_whatsapp", "Pre-screening WhatsApp", "pre_screening/whatsapp/agent.py", "WhatsApp screening conversations"),
         ("cv_analyzer", "CV Analyzer", "cv_analyzer/agent.py", "CV analysis and parsing"),
-        ("document_collection", "Document Collection", "document_collection_agent/agent.py", "Document upload handling"),
-        ("document_recognition", "Document Recognition", "document_recognition_agent/agent.py", "ID document verification"),
-        ("data_query", "Data Query", "data_query_agent/agent.py", "Natural language database queries"),
+        ("document_collection", "Document Collection", "document/collection/agent.py", "Document upload handling"),
+        ("document_recognition", "Document Recognition", "document/recognition/agent.py", "ID document verification"),
+        ("data_query", "Data Query", "database_query/agent.py", "Natural language database queries"),
         ("recruiter_analyst", "Recruiter Analyst", "recruiter_analyst/agent.py", "Recruitment analytics"),
         ("candidate_simulator", "Candidate Simulator", "candidate_simulator/agent.py", "Testing persona simulation"),
     ]
@@ -212,13 +212,13 @@ def _get_edges() -> list[ArchitectureEdge]:
 
     # Router -> Agent relationships
     router_agent_edges = [
-        ("router:interviews", "agent:interview_generator"),
+        ("router:interviews", "agent:interview_question_generator"),
         ("router:cv", "agent:cv_analyzer"),
         ("router:data_query", "agent:data_query"),
         ("router:data_query", "agent:recruiter_analyst"),
-        ("router:webhooks", "agent:transcript_processor"),
+        ("router:webhooks", "agent:pre_screening_transcript_processor"),
         ("router:webhooks", "agent:pre_screening_whatsapp"),
-        ("router:vapi", "agent:transcript_processor"),
+        ("router:vapi", "agent:pre_screening_transcript_processor"),
         ("router:screening", "agent:pre_screening_whatsapp"),
         ("router:screening", "agent:candidate_simulator"),
         ("router:document_collection", "agent:document_collection"),

@@ -9,14 +9,15 @@ from fastapi import APIRouter, HTTPException
 
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
-from src.repositories import CandidateRepository
+from src.repositories import CandidateRepository, CandidacyRepository
+from src.repositories.candidate_repo import DEFAULT_WORKSPACE_ID
 from src.services import ActivityService
 from src.database import get_db_pool
 from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
 from src.services.whatsapp_service import send_whatsapp_message, send_whatsapp_template
 from src.services.livekit_service import get_livekit_service
 from src.workflows import get_orchestrator
-from pre_screening_whatsapp_agent import create_simple_agent
+from agents.pre_screening.whatsapp import create_simple_agent
 
 router = APIRouter(tags=["Outbound Screening"])
 
@@ -167,6 +168,46 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     application_id = app_row["id"]
     logger.info(f"📝 Created application {application_id} with status=active (is_test={request.is_test})")
 
+    # Create candidacies so the candidate appears in the pipeline
+    try:
+        candidacy_repo = CandidacyRepository(pool)
+        channel_source = request.channel.value  # "voice" or "whatsapp"
+
+        # 1. Vacancy-specific candidacy (shows in vacancy kanban + linked_vacancies chips)
+        existing = await candidacy_repo.find_by_candidate_and_vacancy(candidate_id, vacancy_uuid)
+        if not existing:
+            candidacy_row = await candidacy_repo.create(
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                candidate_id=candidate_id,
+                vacancy_id=vacancy_uuid,
+                stage="pre_screening",
+                source=channel_source,
+            )
+            logger.info(f"📋 Created vacancy candidacy {candidacy_row['id']} for candidate {candidate_id}")
+
+        # 2. Open-application candidacy so candidate appears in main pipeline view
+        open_app_vacancy_id = await pool.fetchval(
+            "SELECT id FROM ats.vacancies WHERE workspace_id = $1 AND is_open_application = true LIMIT 1",
+            DEFAULT_WORKSPACE_ID,
+        )
+        if open_app_vacancy_id:
+            open_app_exists = await pool.fetchval(
+                "SELECT 1 FROM ats.candidacies WHERE candidate_id = $1 AND vacancy_id = $2",
+                candidate_id, open_app_vacancy_id,
+            )
+            if not open_app_exists:
+                candidacy_row = await candidacy_repo.create(
+                    workspace_id=DEFAULT_WORKSPACE_ID,
+                    candidate_id=candidate_id,
+                    vacancy_id=open_app_vacancy_id,
+                    stage="pre_screening",
+                    source=channel_source,
+                )
+                logger.info(f"📋 Created open-application candidacy {candidacy_row['id']} for candidate {candidate_id}")
+    except Exception as e:
+        logger.error(f"Failed to create candidacy for candidate {candidate_id}: {e}")
+        # Non-fatal: screening can proceed without candidacy
+
     # Log activity: screening started with rich metadata
     activity_service = ActivityService(pool)
     channel = ActivityChannel.VOICE if request.channel == InterviewChannel.VOICE else ActivityChannel.WHATSAPP
@@ -316,8 +357,8 @@ async def _initiate_voice_screening(
             conv_row = await pool.fetchrow(
                 """
                 INSERT INTO agents.pre_screening_sessions
-                (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, application_id)
-                VALUES ($1, $2, $3, $4, $5, 'voice', 'active', $6, $7)
+                (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, application_id, candidate_id)
+                VALUES ($1, $2, $3, $4, $5, 'voice', 'active', $6, $7, $8)
                 RETURNING id
                 """,
                 uuid.UUID(vacancy_id),
@@ -326,7 +367,8 @@ async def _initiate_voice_screening(
                 candidate_name,
                 phone_normalized,
                 is_test,
-                uuid.UUID(application_id) if application_id else None
+                uuid.UUID(application_id) if application_id else None,
+                uuid.UUID(candidate_id) if candidate_id else None,
             )
             logger.info(f"Voice screening initiated for vacancy {vacancy_id}, conversation {conv_row['id']}, call_id={result.get('call_id')}, is_test={is_test}")
 
@@ -340,6 +382,7 @@ async def _initiate_voice_screening(
                         "conversation_id": str(conv_row["id"]),
                         "candidate_name": candidate_name,
                         "candidate_phone": phone_normalized,
+                        "candidate_id": candidate_id,
                         "vacancy_id": vacancy_id,
                         "vacancy_title": vacancy_title,
                         "pre_screening_id": pre_screening_id,
@@ -488,11 +531,21 @@ async def _initiate_whatsapp_screening(
         # Create conversation record with agent state
         # Generate a session_id for database compatibility (we use JSON state, not ADK sessions)
         session_id = str(uuid.uuid4())
+        # Get candidate_id from the application record
+        candidate_id_for_session = None
+        if application_id:
+            app_row_lookup = await pool.fetchrow(
+                "SELECT candidate_id FROM ats.applications WHERE id = $1",
+                uuid.UUID(application_id)
+            )
+            if app_row_lookup:
+                candidate_id_for_session = app_row_lookup["candidate_id"]
+
         conv_row = await pool.fetchrow(
             """
             INSERT INTO agents.pre_screening_sessions
-            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, agent_state, application_id)
-            VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6, $7, $8)
+            (vacancy_id, pre_screening_id, session_id, candidate_name, candidate_phone, channel, status, is_test, agent_state, application_id, candidate_id)
+            VALUES ($1, $2, $3, $4, $5, 'whatsapp', 'active', $6, $7, $8, $9)
             RETURNING id
             """,
             uuid.UUID(vacancy_id),
@@ -501,8 +554,9 @@ async def _initiate_whatsapp_screening(
             candidate_name,
             phone_normalized,
             is_test,
-            json.dumps(agent.state.to_dict()),  # Store initial agent state as JSON string
-            uuid.UUID(application_id) if application_id else None
+            json.dumps(agent.state.to_dict()),
+            uuid.UUID(application_id) if application_id else None,
+            candidate_id_for_session,
         )
 
         conversation_id = conv_row["id"]
@@ -550,6 +604,7 @@ async def _initiate_whatsapp_screening(
                     "conversation_id": str(conversation_id),
                     "candidate_name": candidate_name,
                     "candidate_phone": phone_normalized,
+                    "candidate_id": candidate_id,
                     "vacancy_id": vacancy_id,
                     "vacancy_title": vacancy_title,
                     "pre_screening_id": pre_screening_id,
