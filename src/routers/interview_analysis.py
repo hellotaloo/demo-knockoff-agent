@@ -57,7 +57,7 @@ async def analyze_interview_endpoint(
         ps_repo = PreScreeningRepository(pool)
 
         ps_row = await pool.fetchrow(
-            "SELECT id, vacancy_id FROM ats.pre_screenings WHERE id = $1",
+            "SELECT id, vacancy_id FROM agents.pre_screenings WHERE id = $1",
             ps_uuid,
         )
         if not ps_row:

@@ -378,8 +378,8 @@ async def _send_teams_notification(
                 """
                 SELECT aa.passed, aa.score,
                        COALESCE(psq.question_type, 'qualification') AS question_type
-                FROM ats.application_answers aa
-                LEFT JOIN ats.pre_screening_questions psq ON psq.id::text = aa.question_id
+                FROM agents.pre_screening_answers aa
+                LEFT JOIN agents.pre_screening_questions psq ON psq.id::text = aa.question_id
                 WHERE aa.application_id = $1
                 """,
                 app_uuid,

@@ -131,7 +131,7 @@ async def _process_document_collection(
         # Fetch all document uploads
         uploads = await pool.fetch(
             """SELECT document_side, verification_result, verification_passed
-            FROM ats.document_uploads
+            FROM agents.document_collection_uploads
             WHERE conversation_id = $1
             ORDER BY uploaded_at""",
             conversation_id
@@ -147,7 +147,7 @@ async def _process_document_collection(
 
         # Update conversation
         await pool.execute(
-            """UPDATE ats.document_collection_conversations
+            """UPDATE agents.document_collections
             SET status = 'completed', completed_at = NOW()
             WHERE id = $1""",
             conversation_id
@@ -244,14 +244,14 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
     # Abandon ALL active sessions for this phone number (pre-screening + document collection)
     # This ensures only one active conversation per phone number
     await pool.execute(
-        """UPDATE ats.pre_screening_conversations
+        """UPDATE agents.pre_screening_sessions
         SET status = 'abandoned', updated_at = NOW()
         WHERE candidate_phone = $1 AND status = 'active'""",
         phone_normalized
     )
 
     await pool.execute(
-        """UPDATE ats.document_collection_conversations
+        """UPDATE agents.document_collections
         SET status = 'abandoned', updated_at = NOW()
         WHERE candidate_phone = $1 AND status = 'active'""",
         phone_normalized
@@ -303,7 +303,7 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
 
     # Create conversation record
     conv_row = await pool.fetchrow(
-        """INSERT INTO ats.document_collection_conversations
+        """INSERT INTO agents.document_collections
         (application_id, vacancy_id, session_id, candidate_name, candidate_phone,
          documents_required, status)
         VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'active')
@@ -320,7 +320,7 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
 
     # Store opening message
     await pool.execute(
-        """INSERT INTO ats.document_collection_messages
+        """INSERT INTO agents.document_collection_session_turns
         (conversation_id, role, message)
         VALUES ($1, 'agent', $2)""",
         conversation_id,
@@ -356,7 +356,7 @@ async def debug_active_conversations(phone_number: str):
     doc_convs = await pool.fetch(
         """SELECT id, vacancy_id, session_id, candidate_name, status,
                   documents_required, retry_count, started_at
-        FROM ats.document_collection_conversations
+        FROM agents.document_collections
         WHERE candidate_phone = $1
         ORDER BY started_at DESC LIMIT 5""",
         phone_normalized
@@ -366,7 +366,7 @@ async def debug_active_conversations(phone_number: str):
     screen_convs = await pool.fetch(
         """SELECT id, vacancy_id, session_id, candidate_name, status,
                   channel, started_at
-        FROM ats.pre_screening_conversations
+        FROM agents.pre_screening_sessions
         WHERE candidate_phone = $1
         ORDER BY started_at DESC LIMIT 5""",
         phone_normalized
@@ -436,7 +436,7 @@ async def document_webhook(
     conv_row = await pool.fetchrow(
         """SELECT dcc.id, dcc.application_id, dcc.session_id, dcc.candidate_name,
                   dcc.retry_count, dcc.documents_required
-        FROM ats.document_collection_conversations dcc
+        FROM agents.document_collections dcc
         WHERE dcc.candidate_phone = $1
         AND dcc.status = 'active'
         ORDER BY dcc.started_at DESC LIMIT 1""",
@@ -459,7 +459,7 @@ async def document_webhook(
     # Store user message
     user_message_text = Body or "[IMAGE UPLOADED]"
     await pool.execute(
-        """INSERT INTO ats.document_collection_messages
+        """INSERT INTO agents.document_collection_session_turns
         (conversation_id, role, message)
         VALUES ($1, 'user', $2)""",
         conversation_id,
@@ -486,7 +486,7 @@ async def document_webhook(
 
             # Determine which document this is
             collected_docs = await pool.fetch(
-                """SELECT document_side FROM ats.document_uploads
+                """SELECT document_side FROM agents.document_collection_uploads
                 WHERE conversation_id = $1 AND verification_passed = true""",
                 conversation_id
             )
@@ -495,7 +495,7 @@ async def document_webhook(
 
             # Store verification result
             upload_row = await pool.fetchrow(
-                """INSERT INTO ats.document_uploads
+                """INSERT INTO agents.document_collection_uploads
                 (conversation_id, application_id, document_side, image_hash,
                  verification_result, verification_passed)
                 VALUES ($1, $2, $3, $4, $5::jsonb, $6)
@@ -587,7 +587,7 @@ async def document_webhook(
             if not verification_result.verification_passed:
                 retry_count += 1
                 await pool.execute(
-                    """UPDATE ats.document_collection_conversations
+                    """UPDATE agents.document_collections
                     SET retry_count = $1, updated_at = NOW()
                     WHERE id = $2""",
                     retry_count,
@@ -652,7 +652,7 @@ Summary: {verification_result.verification_summary}
 
     # Store agent response
     await pool.execute(
-        """INSERT INTO ats.document_collection_messages
+        """INSERT INTO agents.document_collection_session_turns
         (conversation_id, role, message)
         VALUES ($1, 'agent', $2)""",
         conversation_id,
@@ -661,7 +661,7 @@ Summary: {verification_result.verification_summary}
 
     # Update message count
     await pool.execute(
-        """UPDATE ats.document_collection_conversations
+        """UPDATE agents.document_collections
         SET message_count = message_count + 1, updated_at = NOW()
         WHERE id = $1""",
         conversation_id
@@ -682,7 +682,7 @@ Summary: {verification_result.verification_summary}
         # Invalidate cache since conversation is ending
         await conversation_cache.invalidate(phone_normalized)
         await pool.execute(
-            """UPDATE ats.document_collection_conversations
+            """UPDATE agents.document_collections
             SET status = 'needs_review', completed_at = NOW()
             WHERE id = $1""",
             conversation_id

@@ -52,7 +52,7 @@ class AgentVacancyRepository:
         count_query = f"""
             SELECT COUNT(*)
             FROM ats.vacancies v
-            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             WHERE {status_condition}
         """
         total = await self.pool.fetchval(count_query)
@@ -81,7 +81,7 @@ class AgentVacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
@@ -159,7 +159,7 @@ class AgentVacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
@@ -194,6 +194,6 @@ class AgentVacancyRepository:
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND v.preonboarding_agent_enabled = true) as preonboarding_generated,
                 COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as preonboarding_archived
             FROM ats.vacancies v
-            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
         """
         return await self.pool.fetchrow(query)

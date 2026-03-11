@@ -111,7 +111,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     ps_row = await pool.fetchrow(
         """
         SELECT id, intro, knockout_failed_action, final_action
-        FROM ats.pre_screenings
+        FROM agents.pre_screenings
         WHERE vacancy_id = $1
         """,
         vacancy_uuid
@@ -126,7 +126,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     question_rows = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer
-        FROM ats.pre_screening_questions
+        FROM agents.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -228,7 +228,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
             for ka in result.knockout_analysis:
                 await conn.execute(
                     """
-                    INSERT INTO ats.application_answers
+                    INSERT INTO agents.pre_screening_answers
                     (application_id, question_id, question_text, answer, passed, source)
                     VALUES ($1, $2, $3, $4, $5, 'cv')
                     """,
@@ -247,7 +247,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
 
                 await conn.execute(
                     """
-                    INSERT INTO ats.application_answers
+                    INSERT INTO agents.pre_screening_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source)
                     VALUES ($1, $2, $3, $4, NULL, $5, $6, 'cv')
                     """,

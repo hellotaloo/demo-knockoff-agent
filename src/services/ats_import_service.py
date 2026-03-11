@@ -244,7 +244,7 @@ class ATSImportService:
             # created above and fires questions_saved, advancing it to complete.
             async with self.pool.acquire() as conn:
                 existing_ps = await conn.fetchrow(
-                    "SELECT id, status FROM ats.pre_screenings WHERE vacancy_id = $1",
+                    "SELECT id, status FROM agents.pre_screenings WHERE vacancy_id = $1",
                     UUID(vacancy_id),
                 )
             if existing_ps:
@@ -252,7 +252,7 @@ class ATSImportService:
                 questions_count = 0
                 async with self.pool.acquire() as conn:
                     questions_count = await conn.fetchval(
-                        "SELECT COUNT(*) FROM ats.pre_screening_questions WHERE pre_screening_id = $1",
+                        "SELECT COUNT(*) FROM agents.pre_screening_questions WHERE pre_screening_id = $1",
                         existing_ps["id"],
                     )
                 published_count += 1
@@ -390,12 +390,12 @@ class ATSImportService:
 
                 # Ensure workspace default config exists
                 default_config = await conn.fetchrow(
-                    "SELECT id FROM ats.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
+                    "SELECT id FROM agents.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
                     workspace_id,
                 )
                 if not default_config:
                     default_config = await conn.fetchrow("""
-                        INSERT INTO ats.document_collection_configs
+                        INSERT INTO agents.document_collection_configs
                             (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
                         VALUES ($1, NULL, $2, $3, 'active', true, true)
                         RETURNING id
@@ -406,7 +406,7 @@ class ATSImportService:
                     # Add default requirements
                     for pos, dt_id in enumerate(default_dt_ids):
                         await conn.execute("""
-                            INSERT INTO ats.document_collection_requirements
+                            INSERT INTO agents.document_collection_requirements
                                 (config_id, document_type_id, position, is_required)
                             VALUES ($1, $2, $3, true)
                             ON CONFLICT (config_id, document_type_id) DO NOTHING
@@ -421,7 +421,7 @@ class ATSImportService:
                     try:
                         # Check if config already exists for this vacancy
                         existing_config = await conn.fetchrow(
-                            "SELECT id FROM ats.document_collection_configs WHERE vacancy_id = $1",
+                            "SELECT id FROM agents.document_collection_configs WHERE vacancy_id = $1",
                             vacancy_id,
                         )
                         if existing_config:
@@ -431,7 +431,7 @@ class ATSImportService:
 
                         # Create vacancy-specific config
                         vac_config = await conn.fetchrow("""
-                            INSERT INTO ats.document_collection_configs
+                            INSERT INTO agents.document_collection_configs
                                 (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
                             VALUES ($1, $2, $3, $4, 'active', true, true)
                             RETURNING id
@@ -442,7 +442,7 @@ class ATSImportService:
                         # Add default document requirements
                         for pos, dt_id in enumerate(default_dt_ids):
                             await conn.execute("""
-                                INSERT INTO ats.document_collection_requirements
+                                INSERT INTO agents.document_collection_requirements
                                     (config_id, document_type_id, position, is_required)
                                 VALUES ($1, $2, $3, true)
                                 ON CONFLICT (config_id, document_type_id) DO NOTHING
@@ -480,7 +480,7 @@ class ATSImportService:
                     vac_configs = []
                     for vac in imported_vacancies:
                         row = await conn.fetchrow(
-                            "SELECT id FROM ats.document_collection_configs WHERE vacancy_id = $1",
+                            "SELECT id FROM agents.document_collection_configs WHERE vacancy_id = $1",
                             UUID(vac["id"]),
                         )
                         if row:
@@ -488,7 +488,7 @@ class ATSImportService:
 
                     # Get default config for remaining candidates
                     default_cfg = await conn.fetchrow(
-                        "SELECT id FROM ats.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
+                        "SELECT id FROM agents.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
                         workspace_id,
                     )
 
@@ -556,7 +556,7 @@ class ATSImportService:
                             continue
 
                         conv = await conn.fetchrow("""
-                            INSERT INTO ats.document_collections
+                            INSERT INTO agents.document_collections
                                 (config_id, workspace_id, vacancy_id, candidate_id,
                                  candidate_name, candidate_phone, status, channel, documents_required)
                             VALUES ($1, $2, $3, $4, $5, $6, 'active', 'whatsapp', $7::jsonb)
@@ -568,14 +568,14 @@ class ATSImportService:
                         for role, msg_template in scenario["messages"]:
                             msg = msg_template.replace("{name}", cand_name.split()[0])
                             await conn.execute("""
-                                INSERT INTO ats.document_collection_messages
+                                INSERT INTO agents.document_collection_session_turns
                                     (collection_id, role, message)
                                 VALUES ($1, $2, $3)
                             """, conv["id"], role, msg)
 
                         if scenario["messages"]:
                             await conn.execute("""
-                                UPDATE ats.document_collections
+                                UPDATE agents.document_collections
                                 SET message_count = $1, updated_at = NOW()
                                 WHERE id = $2
                             """, len(scenario["messages"]), conv["id"])

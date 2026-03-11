@@ -28,7 +28,7 @@ class ActivityRepository:
         """Create a new activity log entry."""
         activity_id = await self.pool.fetchval(
             """
-            INSERT INTO ats.agent_activities
+            INSERT INTO system.activity_log
             (candidate_id, application_id, vacancy_id, event_type, channel, actor_type, actor_id, metadata, summary)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
@@ -51,7 +51,7 @@ class ActivityRepository:
             """
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE id = $1
             """,
             activity_id
@@ -83,7 +83,7 @@ class ActivityRepository:
 
         # Get total count
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.agent_activities WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM system.activity_log WHERE {where_clause}",
             *params
         )
 
@@ -91,7 +91,7 @@ class ActivityRepository:
         query = f"""
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE {where_clause}
             ORDER BY created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -114,7 +114,7 @@ class ActivityRepository:
             Tuple of (activity rows, total count)
         """
         total = await self.pool.fetchval(
-            "SELECT COUNT(*) FROM ats.agent_activities WHERE application_id = $1",
+            "SELECT COUNT(*) FROM system.activity_log WHERE application_id = $1",
             application_id
         )
 
@@ -122,7 +122,7 @@ class ActivityRepository:
             """
             SELECT id, candidate_id, application_id, vacancy_id, event_type,
                    channel, actor_type, actor_id, metadata, summary, created_at
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE application_id = $1
             ORDER BY created_at DESC
             LIMIT $2 OFFSET $3
@@ -156,7 +156,7 @@ class ActivityRepository:
         where_clause = " AND ".join(conditions)
 
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.agent_activities a WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM system.activity_log a WHERE {where_clause}",
             *params
         )
 
@@ -175,7 +175,7 @@ class ActivityRepository:
                 a.created_at,
                 c.first_name AS candidate_first_name,
                 c.last_name AS candidate_last_name
-            FROM ats.agent_activities a
+            FROM system.activity_log a
             LEFT JOIN ats.candidates c ON a.candidate_id = c.id
             WHERE {where_clause}
             ORDER BY a.created_at DESC
@@ -189,7 +189,7 @@ class ActivityRepository:
     async def delete_for_candidate(self, candidate_id: uuid.UUID) -> int:
         """Delete all activities for a candidate. Returns count deleted."""
         result = await self.pool.execute(
-            "DELETE FROM ats.agent_activities WHERE candidate_id = $1",
+            "DELETE FROM system.activity_log WHERE candidate_id = $1",
             candidate_id
         )
         # Result format: "DELETE N"
@@ -198,7 +198,7 @@ class ActivityRepository:
     async def delete_for_application(self, application_id: uuid.UUID) -> int:
         """Delete all activities for an application. Returns count deleted."""
         result = await self.pool.execute(
-            "DELETE FROM ats.agent_activities WHERE application_id = $1",
+            "DELETE FROM system.activity_log WHERE application_id = $1",
             application_id
         )
         return int(result.split()[-1])
@@ -241,7 +241,7 @@ class ActivityRepository:
 
         # Get total count
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.agent_activities a WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM system.activity_log a WHERE {where_clause}",
             *params
         )
 
@@ -263,7 +263,7 @@ class ActivityRepository:
                 c.last_name AS candidate_last_name,
                 v.title AS vacancy_title,
                 v.company AS vacancy_company
-            FROM ats.agent_activities a
+            FROM system.activity_log a
             LEFT JOIN ats.candidates c ON a.candidate_id = c.id
             LEFT JOIN ats.vacancies v ON a.vacancy_id = v.id
             WHERE {where_clause}

@@ -146,27 +146,6 @@ from .workspace import (
     WorkspaceInvitationResponse,
 )
 
-# Ontology models
-from .ontology import (
-    RequirementType,
-    OntologyTypeCreate,
-    OntologyTypeUpdate,
-    OntologyTypeResponse,
-    OntologyEntityCreate,
-    OntologyEntityUpdate,
-    OntologyEntityResponse,
-    OntologyEntityDetailResponse,
-    OntologyRelationTypeCreate,
-    OntologyRelationTypeResponse,
-    OntologyRelationCreate,
-    OntologyRelationUpdate,
-    OntologyRelationResponse,
-    OntologyGraphNode,
-    OntologyGraphEdge,
-    OntologyGraphResponse,
-    OntologyOverviewResponse,
-)
-
 # Interview analysis models
 from .interview_analysis import (
     AnalysisQuestionInput,
@@ -285,24 +264,6 @@ __all__ = [
     "WorkspaceMemberUpdate",
     "WorkspaceInvitationCreate",
     "WorkspaceInvitationResponse",
-    # Ontology
-    "RequirementType",
-    "OntologyTypeCreate",
-    "OntologyTypeUpdate",
-    "OntologyTypeResponse",
-    "OntologyEntityCreate",
-    "OntologyEntityUpdate",
-    "OntologyEntityResponse",
-    "OntologyEntityDetailResponse",
-    "OntologyRelationTypeCreate",
-    "OntologyRelationTypeResponse",
-    "OntologyRelationCreate",
-    "OntologyRelationUpdate",
-    "OntologyRelationResponse",
-    "OntologyGraphNode",
-    "OntologyGraphEdge",
-    "OntologyGraphResponse",
-    "OntologyOverviewResponse",
     # Interview Analysis
     "AnalysisQuestionInput",
     "AnalysisVacancyInput",

@@ -43,7 +43,7 @@ async def reprocess_conversation(conversation_id: str):
             sc.channel,
             sc.status,
             sc.created_at
-        FROM ats.pre_screening_conversations sc
+        FROM agents.pre_screening_sessions sc
         WHERE sc.id = $1
         """,
         conversation_id
@@ -89,7 +89,7 @@ async def reprocess_conversation(conversation_id: str):
     messages = await pool.fetch(
         """
         SELECT role, message, created_at
-        FROM ats.pre_screening_messages
+        FROM agents.pre_screening_session_turns
         WHERE conversation_id = $1
         ORDER BY created_at
         """,
@@ -122,7 +122,7 @@ async def reprocess_conversation(conversation_id: str):
 
     # Fetch pre-screening questions
     ps_row = await pool.fetchrow(
-        "SELECT id FROM ats.pre_screenings WHERE vacancy_id = $1",
+        "SELECT id FROM agents.pre_screenings WHERE vacancy_id = $1",
         conv['vacancy_id']
     )
 
@@ -133,7 +133,7 @@ async def reprocess_conversation(conversation_id: str):
     questions = await pool.fetch(
         """
         SELECT id, question_type, question_text, ideal_answer
-        FROM ats.pre_screening_questions
+        FROM agents.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -238,7 +238,7 @@ async def reprocess_conversation(conversation_id: str):
 
             # Delete existing answers
             await conn.execute(
-                "DELETE FROM ats.application_answers WHERE application_id = $1",
+                "DELETE FROM agents.pre_screening_answers WHERE application_id = $1",
                 application_id
             )
 
@@ -246,7 +246,7 @@ async def reprocess_conversation(conversation_id: str):
             for kr in result.knockout_results:
                 await conn.execute(
                     """
-                    INSERT INTO ats.application_answers
+                    INSERT INTO agents.pre_screening_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     """,
@@ -264,7 +264,7 @@ async def reprocess_conversation(conversation_id: str):
             for qr in result.qualification_results:
                 await conn.execute(
                     """
-                    INSERT INTO ats.application_answers
+                    INSERT INTO agents.pre_screening_answers
                     (application_id, question_id, question_text, answer, passed, score, rating, source, motivation)
                     VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8)
                     """,

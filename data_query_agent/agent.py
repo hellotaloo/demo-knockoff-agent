@@ -335,11 +335,11 @@ Bij ELKE vraag over data:
 **Vraag: "Analyseer de pre-screening vragen"**
 → discover_columns("pre_screenings") om structuur te zien
 → discover_columns("pre_screening_questions") voor de vragen
-→ execute_sql("SELECT * FROM ats.pre_screening_questions LIMIT 20")
+→ execute_sql("SELECT * FROM agents.pre_screening_questions LIMIT 20")
 → Analyseer en geef feedback
 
 **Vraag: "Hoeveel activiteiten zijn er?"**
-→ execute_sql("SELECT COUNT(*) FROM ats.agent_activities")
+→ execute_sql("SELECT COUNT(*) FROM system.activity_log")
 → Geef het aantal
 
 **Vraag: "Welke vacatures hebben we?"**

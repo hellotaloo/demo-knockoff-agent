@@ -4,6 +4,13 @@
 
 echo "🚀 Starting local development environment..."
 
+# Create venv if it doesn't exist, then activate it
+if [ ! -d ".venv" ]; then
+    echo "📦 Creating virtual environment with uv..."
+    uv venv
+fi
+source .venv/bin/activate
+
 # Load NGROK_DOMAIN from .env if not already set (e.g. your reserved domain: taloo-dev.ngrok.app)
 if [ -z "${NGROK_DOMAIN:-}" ] && [ -f .env ]; then
     NGROK_DOMAIN=$(grep -E '^NGROK_DOMAIN=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
@@ -59,7 +66,7 @@ echo ""
 echo "Press Ctrl+C to stop..."
 
 # Start the backend
-python -m uvicorn app:app --reload --port 8080
+python3 -m uvicorn app:app --reload --port 8080
 
 # Cleanup on exit
 trap "kill $NGROK_PID 2>/dev/null" EXIT

@@ -112,7 +112,6 @@ from src.routers import (
     livekit_webhook_router,
     teams_router,
     architecture_router,
-    ontology_router,
     interview_analysis_router,
     ats_simulator_router,
     playground_router,
@@ -175,6 +174,7 @@ async def _workflow_ticker_loop():
 
             pool = await get_db_pool()
             service = WorkflowService(pool)
+            await service.ensure_table()
             result = await service.process_timers()
 
             # Handle auto triggers via orchestrator
@@ -311,7 +311,6 @@ app.include_router(workspaces_router)
 app.include_router(livekit_webhook_router)
 app.include_router(teams_router)
 app.include_router(architecture_router)
-app.include_router(ontology_router)
 app.include_router(interview_analysis_router)
 app.include_router(ats_simulator_router)
 app.include_router(playground_router)

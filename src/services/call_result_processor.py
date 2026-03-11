@@ -241,7 +241,7 @@ async def process_call_results(
         messages = await pool.fetch(
             """
             SELECT role, message
-            FROM ats.pre_screening_messages
+            FROM agents.pre_screening_session_turns
             WHERE conversation_id = $1
             ORDER BY created_at
             """,
@@ -259,7 +259,7 @@ async def process_call_results(
         questions = await pool.fetch(
             """
             SELECT id, question_type, question_text, ideal_answer
-            FROM ats.pre_screening_questions
+            FROM agents.pre_screening_questions
             WHERE pre_screening_id = $1
             ORDER BY question_type, position
             """,
@@ -272,7 +272,7 @@ async def process_call_results(
         existing_answers = await pool.fetch(
             """
             SELECT question_id, question_text, answer, passed
-            FROM ats.application_answers
+            FROM agents.pre_screening_answers
             WHERE application_id = $1
             """,
             application_id,
@@ -351,7 +351,7 @@ async def process_call_results(
                     motivation = scores.get("motivation", "")
                     result = await conn.execute(
                         """
-                        UPDATE ats.application_answers
+                        UPDATE agents.pre_screening_answers
                         SET score = $1, rating = $2, motivation = $3
                         WHERE application_id = $4 AND question_id = $5
                         """,
@@ -374,7 +374,7 @@ async def process_call_results(
                         )
                         await conn.execute(
                             """
-                            UPDATE ats.application_answers
+                            UPDATE agents.pre_screening_answers
                             SET passed = $1, motivation = $2
                             WHERE application_id = $3 AND question_id = $4
                             """,

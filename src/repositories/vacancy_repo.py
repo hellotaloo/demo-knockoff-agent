@@ -75,7 +75,7 @@ class VacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
@@ -84,7 +84,7 @@ class VacancyRepository:
                     MAX(COALESCE(completed_at, started_at)) as last_activity_at,
                     (
                         SELECT ROUND(AVG(ans.score)::numeric, 1)
-                        FROM ats.application_answers ans
+                        FROM agents.pre_screening_answers ans
                         JOIN ats.applications app ON app.id = ans.application_id
                         WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
                     ) as avg_score
@@ -130,7 +130,7 @@ class VacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
@@ -139,7 +139,7 @@ class VacancyRepository:
                     MAX(COALESCE(completed_at, started_at)) as last_activity_at,
                     (
                         SELECT ROUND(AVG(ans.score)::numeric, 1)
-                        FROM ats.application_answers ans
+                        FROM agents.pre_screening_answers ans
                         JOIN ats.applications app ON app.id = ans.application_id
                         WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
                     ) as avg_score
@@ -227,7 +227,7 @@ class VacancyRepository:
                 a.completed_at,
                 (
                     SELECT ROUND(AVG(ans.score)::numeric, 1)
-                    FROM ats.application_answers ans
+                    FROM agents.pre_screening_answers ans
                     WHERE ans.application_id = a.id AND ans.score IS NOT NULL
                 ) as score
             FROM ats.applications a

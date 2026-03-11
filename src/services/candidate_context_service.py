@@ -214,7 +214,7 @@ class CandidateContextService:
                 v.company as vacancy_company,
                 v.recruiter_id,
                 r.name as recruiter_name
-            FROM ats.agent_activities aa
+            FROM system.activity_log aa
             JOIN ats.vacancies v ON v.id = aa.vacancy_id
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             WHERE aa.candidate_id = $1
@@ -345,7 +345,7 @@ class CandidateContextService:
         channel_counts = await self.pool.fetch(
             """
             SELECT channel, COUNT(*) as count
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE candidate_id = $1
               AND channel IS NOT NULL
               AND event_type IN ('MESSAGE_RECEIVED', 'CALL_COMPLETED', 'SCREENING_COMPLETED')
@@ -379,7 +379,7 @@ class CandidateContextService:
                     (metadata->>'sent_at')::timestamp
                 )) / 60
             )
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE candidate_id = $1
               AND event_type = 'MESSAGE_RECEIVED'
               AND metadata->>'responded_at' IS NOT NULL
@@ -394,7 +394,7 @@ class CandidateContextService:
             SELECT
                 COUNT(*) FILTER (WHERE event_type = 'MESSAGE_RECEIVED') as messages,
                 COUNT(*) FILTER (WHERE event_type = 'CALL_COMPLETED') as calls
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE candidate_id = $1
             """,
             candidate_id
@@ -404,7 +404,7 @@ class CandidateContextService:
         last_channel_row = await self.pool.fetchrow(
             """
             SELECT channel, created_at
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE candidate_id = $1
               AND channel IS NOT NULL
             ORDER BY created_at DESC
@@ -435,7 +435,7 @@ class CandidateContextService:
         activities = await self.pool.fetch(
             """
             SELECT event_type, channel, summary, created_at, metadata
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE candidate_id = $1
               AND event_type IN (
                 'SCREENING_STARTED', 'SCREENING_COMPLETED', 'QUALIFIED', 'DISQUALIFIED',
@@ -489,7 +489,7 @@ class CandidateContextService:
         last = await self.pool.fetchval(
             """
             SELECT MAX(created_at)
-            FROM ats.agent_activities
+            FROM system.activity_log
             WHERE candidate_id = $1
             """,
             candidate_id

@@ -9,8 +9,6 @@ import asyncpg
 
 from src.auth.exceptions import AuthorizationError, WorkspaceAccessDenied, InsufficientRoleError
 from src.repositories import WorkspaceRepository, WorkspaceMembershipRepository, UserProfileRepository
-from src.repositories.ontology_repo import OntologyRepository
-
 logger = logging.getLogger(__name__)
 
 
@@ -64,14 +62,6 @@ class WorkspaceService:
             workspace_id=workspace_row["id"],
             role="owner",
         )
-
-        # Seed default ontology types and relation types
-        try:
-            ontology_repo = OntologyRepository(self.pool)
-            await ontology_repo.seed_defaults(workspace_row["id"])
-            logger.info(f"Seeded ontology defaults for new workspace {workspace_row['id']}")
-        except Exception as e:
-            logger.warning(f"Failed to seed ontology defaults for workspace {workspace_row['id']}: {e}")
 
         return self._workspace_to_dict(workspace_row, role="owner")
 

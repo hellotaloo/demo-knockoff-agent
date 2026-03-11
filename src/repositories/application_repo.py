@@ -108,7 +108,7 @@ class ApplicationRepository:
         return await self.pool.fetch(
             """
             SELECT question_id, question_text, answer, passed, score, rating, motivation
-            FROM ats.application_answers
+            FROM agents.pre_screening_answers
             WHERE application_id = $1
             ORDER BY id
             """,
@@ -120,8 +120,8 @@ class ApplicationRepository:
         return await self.pool.fetch(
             """
             SELECT psq.id, psq.question_type, psq.position, psq.question_text, psq.ideal_answer
-            FROM ats.pre_screening_questions psq
-            JOIN ats.pre_screenings ps ON ps.id = psq.pre_screening_id
+            FROM agents.pre_screening_questions psq
+            JOIN agents.pre_screenings ps ON ps.id = psq.pre_screening_id
             WHERE ps.vacancy_id = $1
             ORDER BY
                 CASE psq.question_type WHEN 'knockout' THEN 0 ELSE 1 END,
@@ -195,7 +195,7 @@ class ApplicationRepository:
         """Insert a knockout question answer."""
         await self.pool.execute(
             """
-            INSERT INTO ats.application_answers (application_id, question_id, question_text, answer, passed)
+            INSERT INTO agents.pre_screening_answers (application_id, question_id, question_text, answer, passed)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (application_id, question_id) DO UPDATE
             SET answer = EXCLUDED.answer, passed = EXCLUDED.passed
@@ -216,7 +216,7 @@ class ApplicationRepository:
         """Insert a qualification question answer with scoring."""
         await self.pool.execute(
             """
-            INSERT INTO ats.application_answers (
+            INSERT INTO agents.pre_screening_answers (
                 application_id, question_id, question_text, answer,
                 score, rating, motivation
             )
@@ -233,7 +233,7 @@ class ApplicationRepository:
     async def delete_answers(self, application_id: uuid.UUID):
         """Delete all answers for an application."""
         await self.pool.execute(
-            "DELETE FROM ats.application_answers WHERE application_id = $1",
+            "DELETE FROM agents.pre_screening_answers WHERE application_id = $1",
             application_id
         )
 
@@ -287,7 +287,7 @@ class ApplicationRepository:
         if app_id:
             # Delete answers
             await self.pool.execute(
-                "DELETE FROM ats.application_answers WHERE application_id = $1",
+                "DELETE FROM agents.pre_screening_answers WHERE application_id = $1",
                 app_id
             )
             # Delete application

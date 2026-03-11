@@ -142,7 +142,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                         AND table_name = 'pre_screening_conversations'
                         AND column_name = 'channel'
                     ) THEN
-                        ALTER TABLE ats.pre_screening_conversations ADD COLUMN channel VARCHAR(20) DEFAULT 'chat';
+                        ALTER TABLE agents.pre_screening_sessions ADD COLUMN channel VARCHAR(20) DEFAULT 'chat';
                     END IF;
                 END IF;
             END $$;
@@ -226,141 +226,12 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
 
         # =====================================================================
-        # Ontology tables
-        # =====================================================================
-        await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.ontology_types (
-                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
-                slug        VARCHAR(50) NOT NULL,
-                name        VARCHAR(100) NOT NULL,
-                name_plural VARCHAR(100),
-                description TEXT,
-                icon        VARCHAR(50),
-                color       VARCHAR(7),
-                sort_order  INTEGER NOT NULL DEFAULT 0,
-                is_system   BOOLEAN NOT NULL DEFAULT false,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                CONSTRAINT uq_ontology_type_workspace_slug UNIQUE (workspace_id, slug)
-            );
-        """)
-
-        await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.ontology_entities (
-                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
-                type_id     UUID NOT NULL REFERENCES ats.ontology_types(id) ON DELETE CASCADE,
-                name        VARCHAR(200) NOT NULL,
-                description TEXT,
-                icon        VARCHAR(50),
-                color       VARCHAR(7),
-                external_id VARCHAR(255),
-                metadata    JSONB NOT NULL DEFAULT '{}',
-                sort_order  INTEGER NOT NULL DEFAULT 0,
-                is_active   BOOLEAN NOT NULL DEFAULT true,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                CONSTRAINT uq_ontology_entity_workspace_name UNIQUE (workspace_id, type_id, name)
-            );
-        """)
-
-        await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.ontology_relation_types (
-                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
-                slug        VARCHAR(50) NOT NULL,
-                name        VARCHAR(100) NOT NULL,
-                source_type_id UUID REFERENCES ats.ontology_types(id) ON DELETE SET NULL,
-                target_type_id UUID REFERENCES ats.ontology_types(id) ON DELETE SET NULL,
-                is_system   BOOLEAN NOT NULL DEFAULT false,
-                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                CONSTRAINT uq_ontology_reltype_workspace_slug UNIQUE (workspace_id, slug)
-            );
-        """)
-
-        await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.ontology_relations (
-                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id    UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
-                source_entity_id UUID NOT NULL REFERENCES ats.ontology_entities(id) ON DELETE CASCADE,
-                target_entity_id UUID NOT NULL REFERENCES ats.ontology_entities(id) ON DELETE CASCADE,
-                relation_type_id UUID NOT NULL REFERENCES ats.ontology_relation_types(id) ON DELETE CASCADE,
-                metadata        JSONB NOT NULL DEFAULT '{}',
-                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                CONSTRAINT uq_ontology_relation UNIQUE (source_entity_id, target_entity_id, relation_type_id),
-                CONSTRAINT chk_no_self_relation CHECK (source_entity_id != target_entity_id)
-            );
-        """)
-
-        # Ontology indexes
-        await pool.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ontology_types_workspace ON ats.ontology_types(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_entities_workspace ON ats.ontology_entities(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_entities_type ON ats.ontology_entities(type_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_entities_workspace_type ON ats.ontology_entities(workspace_id, type_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_entities_external ON ats.ontology_entities(workspace_id, external_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_relations_workspace ON ats.ontology_relations(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_relations_source ON ats.ontology_relations(source_entity_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_relations_target ON ats.ontology_relations(target_entity_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_relations_type ON ats.ontology_relations(relation_type_id);
-            CREATE INDEX IF NOT EXISTS idx_ontology_relation_types_workspace ON ats.ontology_relation_types(workspace_id);
-        """)
-
-        # Ontology seed function
-        await pool.execute("""
-            CREATE OR REPLACE FUNCTION ats.seed_ontology_defaults(p_workspace_id UUID)
-            RETURNS void AS $$
-            DECLARE
-                v_category_type_id UUID;
-                v_function_type_id UUID;
-                v_document_type_id UUID;
-                v_skill_type_id UUID;
-            BEGIN
-                INSERT INTO ats.ontology_types (workspace_id, slug, name, name_plural, icon, color, sort_order, is_system) VALUES
-                    (p_workspace_id, 'category',      'Categorie',    'Categorieën',   'folder',       '#8B5CF6', 0, true),
-                    (p_workspace_id, 'job_function',   'Functie',      'Functies',      'briefcase',    '#3B82F6', 1, true),
-                    (p_workspace_id, 'document_type',  'Documenttype', 'Documenttypes', 'file-text',    '#10B981', 2, true),
-                    (p_workspace_id, 'skill',          'Vaardigheid',  'Vaardigheden',  'star',         '#F59E0B', 3, true),
-                    (p_workspace_id, 'requirement',    'Vereiste',     'Vereisten',     'check-circle', '#EF4444', 4, true)
-                ON CONFLICT (workspace_id, slug) DO NOTHING;
-
-                SELECT id INTO v_category_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'category';
-                SELECT id INTO v_function_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'job_function';
-                SELECT id INTO v_document_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'document_type';
-                SELECT id INTO v_skill_type_id FROM ats.ontology_types WHERE workspace_id = p_workspace_id AND slug = 'skill';
-
-                INSERT INTO ats.ontology_relation_types (workspace_id, slug, name, source_type_id, target_type_id, is_system) VALUES
-                    (p_workspace_id, 'belongs_to',  'Behoort tot',      v_function_type_id, v_category_type_id, true),
-                    (p_workspace_id, 'requires',    'Vereist',           v_function_type_id, v_document_type_id, true),
-                    (p_workspace_id, 'has_skill',   'Heeft vaardigheid', v_function_type_id, v_skill_type_id,    true)
-                ON CONFLICT (workspace_id, slug) DO NOTHING;
-            END;
-            $$ LANGUAGE plpgsql;
-        """)
-
-        # Seed defaults for all existing workspaces
-        await pool.execute("""
-            DO $$
-            DECLARE
-                ws RECORD;
-            BEGIN
-                FOR ws IN SELECT id FROM ats.workspaces LOOP
-                    PERFORM ats.seed_ontology_defaults(ws.id);
-                END LOOP;
-            END $$;
-        """)
-
-        logger.info("Ontology tables and seed data initialized")
-
-        # =====================================================================
         # Office locations table
         # =====================================================================
         await pool.execute("""
             CREATE TABLE IF NOT EXISTS ats.office_locations (
                 id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                workspace_id UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 name        VARCHAR(200) NOT NULL,
                 address     VARCHAR(500) NOT NULL,
                 is_default  BOOLEAN NOT NULL DEFAULT false,
@@ -392,7 +263,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
 
         # Add analysis_result JSONB column to pre_screenings (for interview analysis cache)
         await pool.execute("""
-            ALTER TABLE ats.pre_screenings
+            ALTER TABLE agents.pre_screenings
             ADD COLUMN IF NOT EXISTS analysis_result JSONB DEFAULT NULL;
         """)
 
@@ -412,7 +283,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         await pool.execute("""
             CREATE TABLE IF NOT EXISTS ats.document_types (
                 id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id    UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                workspace_id    UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 slug            VARCHAR(50) NOT NULL,
                 name            VARCHAR(200) NOT NULL,
                 description     TEXT,
@@ -437,9 +308,9 @@ async def run_schema_migrations(pool: asyncpg.Pool):
 
         # 2. Document collection configs
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.document_collection_configs (
+            CREATE TABLE IF NOT EXISTS agents.document_collection_configs (
                 id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id    UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                workspace_id    UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 vacancy_id      UUID REFERENCES ats.vacancies(id) ON DELETE CASCADE,
                 name            VARCHAR(200),
                 intro_message   TEXT,
@@ -453,20 +324,20 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
         await pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_dc_configs_workspace
-            ON ats.document_collection_configs(workspace_id);
+            ON agents.document_collection_configs(workspace_id);
         """)
         # Partial unique index: one default per workspace (vacancy_id IS NULL)
         await pool.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS uq_dc_config_workspace_default
-            ON ats.document_collection_configs(workspace_id)
+            ON agents.document_collection_configs(workspace_id)
             WHERE vacancy_id IS NULL;
         """)
 
         # 3. Document collection requirements
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.document_collection_requirements (
+            CREATE TABLE IF NOT EXISTS agents.document_collection_requirements (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                config_id           UUID NOT NULL REFERENCES ats.document_collection_configs(id) ON DELETE CASCADE,
+                config_id           UUID NOT NULL REFERENCES agents.document_collection_configs(id) ON DELETE CASCADE,
                 document_type_id    UUID NOT NULL REFERENCES ats.document_types(id) ON DELETE CASCADE,
                 position            INTEGER NOT NULL DEFAULT 0,
                 is_required         BOOLEAN NOT NULL DEFAULT true,
@@ -477,15 +348,15 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
         await pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_dc_requirements_config
-            ON ats.document_collection_requirements(config_id);
+            ON agents.document_collection_requirements(config_id);
         """)
 
         # 4. Document collections (main entry table)
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.document_collections (
+            CREATE TABLE IF NOT EXISTS agents.document_collections (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                config_id           UUID NOT NULL REFERENCES ats.document_collection_configs(id) ON DELETE CASCADE,
-                workspace_id        UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                config_id           UUID NOT NULL REFERENCES agents.document_collection_configs(id) ON DELETE CASCADE,
+                workspace_id        UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 vacancy_id          UUID REFERENCES ats.vacancies(id) ON DELETE SET NULL,
                 application_id      UUID REFERENCES ats.applications(id) ON DELETE SET NULL,
                 candidate_id        UUID REFERENCES ats.candidates(id) ON DELETE SET NULL,
@@ -504,16 +375,16 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             );
         """)
         await pool.execute("""
-            CREATE INDEX IF NOT EXISTS idx_dc_workspace ON ats.document_collections(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_dc_phone ON ats.document_collections(candidate_phone);
-            CREATE INDEX IF NOT EXISTS idx_dc_status ON ats.document_collections(status) WHERE status = 'active';
+            CREATE INDEX IF NOT EXISTS idx_dc_workspace ON agents.document_collections(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_dc_phone ON agents.document_collections(candidate_phone);
+            CREATE INDEX IF NOT EXISTS idx_dc_status ON agents.document_collections(status) WHERE status = 'active';
         """)
 
         # 5. Document collection messages
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.document_collection_messages (
+            CREATE TABLE IF NOT EXISTS agents.document_collection_session_turns (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                collection_id       UUID NOT NULL REFERENCES ats.document_collections(id) ON DELETE CASCADE,
+                collection_id       UUID NOT NULL REFERENCES agents.document_collections(id) ON DELETE CASCADE,
                 role                VARCHAR(20) NOT NULL,
                 message             TEXT NOT NULL,
                 created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -521,14 +392,14 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
         await pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_dc_msg_collection
-            ON ats.document_collection_messages(collection_id);
+            ON agents.document_collection_session_turns(collection_id);
         """)
 
         # 6. Document collection uploads
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.document_collection_uploads (
+            CREATE TABLE IF NOT EXISTS agents.document_collection_uploads (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                collection_id       UUID NOT NULL REFERENCES ats.document_collections(id) ON DELETE CASCADE,
+                collection_id       UUID NOT NULL REFERENCES agents.document_collections(id) ON DELETE CASCADE,
                 application_id      UUID REFERENCES ats.applications(id) ON DELETE SET NULL,
                 document_type_id    UUID REFERENCES ats.document_types(id) ON DELETE SET NULL,
                 document_side       VARCHAR(20) NOT NULL DEFAULT 'single',
@@ -543,7 +414,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
         await pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_dc_upl_collection
-            ON ats.document_collection_uploads(collection_id);
+            ON agents.document_collection_uploads(collection_id);
         """)
 
         # 7. Candidate documents (portfolio)
@@ -552,13 +423,13 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 candidate_id        UUID NOT NULL REFERENCES ats.candidates(id) ON DELETE CASCADE,
                 document_type_id    UUID NOT NULL REFERENCES ats.document_types(id) ON DELETE CASCADE,
-                workspace_id        UUID NOT NULL REFERENCES ats.workspaces(id) ON DELETE CASCADE,
+                workspace_id        UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 document_number     VARCHAR(100),
                 metadata            JSONB DEFAULT '{}',
                 expiration_date     DATE,
                 status              VARCHAR(20) NOT NULL DEFAULT 'pending_review',
                 verification_passed BOOLEAN,
-                upload_id           UUID REFERENCES ats.document_collection_uploads(id) ON DELETE SET NULL,
+                upload_id           UUID REFERENCES agents.document_collection_uploads(id) ON DELETE SET NULL,
                 storage_path        VARCHAR(500),
                 notes               TEXT,
                 created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -597,7 +468,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             DECLARE
                 ws RECORD;
             BEGIN
-                FOR ws IN SELECT id FROM ats.workspaces LOOP
+                FOR ws IN SELECT id FROM system.workspaces LOOP
                     PERFORM ats.seed_document_type_defaults(ws.id);
                 END LOOP;
             END $$;

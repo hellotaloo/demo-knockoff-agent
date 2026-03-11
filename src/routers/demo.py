@@ -10,7 +10,7 @@ import uuid
 import logging
 from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Query
-from fixtures import load_candidates, load_applications, load_pre_screenings, load_activities, load_ontology
+from fixtures import load_candidates, load_applications, load_pre_screenings, load_activities
 import json
 
 from src.database import get_db_pool
@@ -29,7 +29,7 @@ router = APIRouter(tags=["Demo Data"])
 
 @router.post("/demo/seed")
 async def seed_demo_data(activities: bool = Query(True, description="Include activities in seed")):
-    """Seed base data (candidates, ontology). Vacancies are imported separately via POST /demo/import-ats."""
+    """Seed base data (candidates). Vacancies are imported separately via POST /demo/import-ats."""
     pool = await get_db_pool()
 
     # Load fixtures from JSON files (non-ATS data only)
@@ -131,7 +131,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 # Insert answers
                 for answer in app_data["answers"]:
                     await conn.execute("""
-                        INSERT INTO ats.application_answers
+                        INSERT INTO agents.pre_screening_answers
                         (application_id, question_id, question_text, answer, passed)
                         VALUES ($1, $2, $3, $4, $5)
                     """, application_id, answer["question_id"], answer["question_text"],
@@ -152,13 +152,13 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 if fixed_id:
                     pre_screening_id = uuid.UUID(fixed_id)
                     await conn.execute("""
-                        INSERT INTO ats.pre_screenings (id, vacancy_id, intro, knockout_failed_action, final_action, status)
+                        INSERT INTO agents.pre_screenings (id, vacancy_id, intro, knockout_failed_action, final_action, status)
                         VALUES ($1, $2, $3, $4, $5, $6)
                     """, pre_screening_id, vacancy_id, ps_data["intro"], ps_data["knockout_failed_action"],
                         ps_data["final_action"], ps_data["status"])
                 else:
                     row = await conn.fetchrow("""
-                        INSERT INTO ats.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
+                        INSERT INTO agents.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
                         VALUES ($1, $2, $3, $4, $5)
                         RETURNING id
                     """, vacancy_id, ps_data["intro"], ps_data["knockout_failed_action"],
@@ -168,7 +168,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 # Insert knockout questions
                 for position, q in enumerate(ps_data.get("knockout_questions", [])):
                     await conn.execute("""
-                        INSERT INTO ats.pre_screening_questions
+                        INSERT INTO agents.pre_screening_questions
                         (pre_screening_id, question_type, position, question_text, is_approved)
                         VALUES ($1, $2, $3, $4, $5)
                     """, pre_screening_id, "knockout", position, q["question"], q.get("is_approved", False))
@@ -176,7 +176,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 # Insert qualification questions (with ideal_answer)
                 for position, q in enumerate(ps_data.get("qualification_questions", [])):
                     await conn.execute("""
-                        INSERT INTO ats.pre_screening_questions
+                        INSERT INTO agents.pre_screening_questions
                         (pre_screening_id, question_type, position, question_text, ideal_answer, is_approved)
                         VALUES ($1, $2, $3, $4, $5, $6)
                     """, pre_screening_id, "qualification", position, q["question"], q.get("ideal_answer"), q.get("is_approved", False))
@@ -219,109 +219,13 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                     candidate_id = uuid.UUID(created_candidates[0]["id"])
 
                 await conn.execute("""
-                    INSERT INTO ats.agent_activities
+                    INSERT INTO system.activity_log
                     (candidate_id, vacancy_id, event_type, channel, actor_type, metadata, summary, created_at)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """, candidate_id, vacancy_id, act_data["event_type"], act_data.get("channel"),
                     act_data["actor_type"], json.dumps(metadata), act_data.get("summary"), created_at)
 
                 created_activities += 1
-
-            # ---- Ontology demo data ----
-            ontology_data = load_ontology()
-            created_ontology_entities = 0
-            created_ontology_relations = 0
-
-            # Ensure ontology types are seeded for default workspace
-            await conn.execute("SELECT ats.seed_ontology_defaults($1)", DEFAULT_WORKSPACE_ID)
-
-            # Look up type IDs
-            type_rows = await conn.fetch(
-                "SELECT id, slug FROM ats.ontology_types WHERE workspace_id = $1",
-                DEFAULT_WORKSPACE_ID,
-            )
-            type_map = {r["slug"]: r["id"] for r in type_rows}
-
-            # Look up relation type IDs
-            rel_type_rows = await conn.fetch(
-                "SELECT id, slug FROM ats.ontology_relation_types WHERE workspace_id = $1",
-                DEFAULT_WORKSPACE_ID,
-            )
-            rel_type_map = {r["slug"]: r["id"] for r in rel_type_rows}
-
-            # Track entity name → id for building relations
-            entity_name_to_id = {}
-
-            # Insert categories
-            for i, cat in enumerate(ontology_data.get("categories", [])):
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.ontology_entities (workspace_id, type_id, name, description, icon, color, sort_order)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (workspace_id, type_id, name) DO UPDATE SET description = EXCLUDED.description
-                    RETURNING id
-                """, DEFAULT_WORKSPACE_ID, type_map["category"],
-                    cat["name"], cat.get("description"), cat.get("icon"), cat.get("color"), i)
-                entity_name_to_id[cat["name"]] = row["id"]
-                created_ontology_entities += 1
-
-            # Insert document types
-            for i, doc in enumerate(ontology_data.get("document_types", [])):
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.ontology_entities (workspace_id, type_id, name, description, icon, sort_order)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (workspace_id, type_id, name) DO UPDATE SET description = EXCLUDED.description
-                    RETURNING id
-                """, DEFAULT_WORKSPACE_ID, type_map["document_type"],
-                    doc["name"], doc.get("description"), doc.get("icon"), i)
-                entity_name_to_id[doc["name"]] = row["id"]
-                created_ontology_entities += 1
-
-            # Insert job functions
-            for i, func in enumerate(ontology_data.get("job_functions", [])):
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.ontology_entities (workspace_id, type_id, name, description, icon, sort_order)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (workspace_id, type_id, name) DO UPDATE SET description = EXCLUDED.description
-                    RETURNING id
-                """, DEFAULT_WORKSPACE_ID, type_map["job_function"],
-                    func["name"], func.get("description"), func.get("icon"), i)
-                entity_name_to_id[func["name"]] = row["id"]
-                created_ontology_entities += 1
-
-                # Create belongs_to relation (function → category)
-                if func.get("category") and func["category"] in entity_name_to_id:
-                    await conn.execute("""
-                        INSERT INTO ats.ontology_relations
-                            (workspace_id, source_entity_id, target_entity_id, relation_type_id, metadata)
-                        VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (source_entity_id, target_entity_id, relation_type_id) DO NOTHING
-                    """, DEFAULT_WORKSPACE_ID, row["id"],
-                        entity_name_to_id[func["category"]], rel_type_map["belongs_to"], "{}")
-                    created_ontology_relations += 1
-
-            # Insert document requirements (function → document relations)
-            for func_name, reqs in ontology_data.get("requirements", {}).items():
-                func_id = entity_name_to_id.get(func_name)
-                if not func_id:
-                    continue
-                for req in reqs:
-                    doc_id = entity_name_to_id.get(req["document"])
-                    if not doc_id:
-                        continue
-                    metadata = {
-                        "requirement_type": req["requirement_type"],
-                        "priority": req["priority"],
-                    }
-                    if req.get("condition"):
-                        metadata["condition"] = req["condition"]
-                    await conn.execute("""
-                        INSERT INTO ats.ontology_relations
-                            (workspace_id, source_entity_id, target_entity_id, relation_type_id, metadata)
-                        VALUES ($1, $2, $3, $4, $5)
-                        ON CONFLICT (source_entity_id, target_entity_id, relation_type_id) DO NOTHING
-                    """, DEFAULT_WORKSPACE_ID, func_id, doc_id, rel_type_map["requires"],
-                        json.dumps(metadata))
-                    created_ontology_relations += 1
 
     # ---- Seed default office location and assign to all vacancies ----
     office_location_id = None
@@ -348,15 +252,13 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 
     return {
         "status": "success",
-        "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities, {created_ontology_entities} ontology entities, {created_ontology_relations} ontology relations. Use POST /demo/import-ats to import vacancies from ATS.",
+        "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities. Use POST /demo/import-ats to import vacancies from ATS.",
         "candidates_count": len(created_candidates),
         "skills_count": created_skills,
         "vacancies": created_vacancies,
         "applications_count": len(created_applications),
         "pre_screenings": created_pre_screenings,
         "activities_count": created_activities,
-        "ontology_entities_count": created_ontology_entities,
-        "ontology_relations_count": created_ontology_relations,
     }
 
 
@@ -374,17 +276,17 @@ async def reset_demo_data(
         async with conn.transaction():
             # Delete in correct order respecting foreign key constraints
             # First: pre_screening_messages (references pre_screening_conversations)
-            await conn.execute("DELETE FROM ats.pre_screening_messages")
+            await conn.execute("DELETE FROM agents.pre_screening_session_turns")
 
             # Document collection v2 tables (in FK order)
             # Each uses a savepoint so a missing table doesn't abort the transaction
             for tbl in [
                 "ats.candidate_documents",
-                "ats.document_collection_uploads",
-                "ats.document_collection_messages",
-                "ats.document_collections",
-                "ats.document_collection_requirements",
-                "ats.document_collection_configs",
+                "agents.document_collection_uploads",
+                "agents.document_collection_session_turns",
+                "agents.document_collections",
+                "agents.document_collection_requirements",
+                "agents.document_collection_configs",
                 "ats.document_types",
             ]:
                 try:
@@ -394,14 +296,14 @@ async def reset_demo_data(
                     pass  # Table may not exist yet
 
             # Then: tables that reference applications/candidates
-            await conn.execute("DELETE FROM ats.pre_screening_conversations")
-            await conn.execute("DELETE FROM ats.application_answers")
+            await conn.execute("DELETE FROM agents.pre_screening_sessions")
+            await conn.execute("DELETE FROM agents.pre_screening_answers")
             await conn.execute("DELETE FROM ats.scheduled_interviews")
 
             # Try to delete agent_activities and candidate_skills if tables exist
             try:
                 async with conn.transaction():
-                    await conn.execute("DELETE FROM ats.agent_activities")
+                    await conn.execute("DELETE FROM system.activity_log")
             except Exception:
                 pass  # Table may not exist yet
 
@@ -418,8 +320,8 @@ async def reset_demo_data(
             await conn.execute("DELETE FROM ats.candidates")
 
             # Then: pre-screening related
-            await conn.execute("DELETE FROM ats.pre_screening_questions")
-            await conn.execute("DELETE FROM ats.pre_screenings")
+            await conn.execute("DELETE FROM agents.pre_screening_questions")
+            await conn.execute("DELETE FROM agents.pre_screenings")
 
             # Finally: vacancies (clear recruiter_id and client_id first for FK safety)
             await conn.execute("DELETE FROM ats.vacancies")
@@ -436,16 +338,10 @@ async def reset_demo_data(
 
             # Delete workflows (activities dashboard)
             try:
-                await conn.execute("DELETE FROM ats.workflows")
+                await conn.execute("DELETE FROM agents.workflows")
             except Exception:
                 pass  # Table may not exist yet
 
-            # Delete ontology data (relations first, then entities; keep types)
-            try:
-                await conn.execute("DELETE FROM ats.ontology_relations")
-                await conn.execute("DELETE FROM ats.ontology_entities")
-            except Exception:
-                pass  # Tables may not exist yet
 
     result = {
         "status": "success",

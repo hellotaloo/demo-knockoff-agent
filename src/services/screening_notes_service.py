@@ -97,7 +97,7 @@ async def generate_screening_notes_sections(
     answers = await pool.fetch(
         """
         SELECT question_id, question_text, answer, passed, score, rating, motivation
-        FROM ats.application_answers
+        FROM agents.pre_screening_answers
         WHERE application_id = $1
         ORDER BY id
         """,

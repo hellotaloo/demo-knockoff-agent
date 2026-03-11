@@ -13,7 +13,6 @@ from .agent_vacancy_repo import AgentVacancyRepository
 from .user_repo import UserProfileRepository
 from .workspace_repo import WorkspaceRepository
 from .membership_repo import WorkspaceMembershipRepository
-from .ontology_repo import OntologyRepository
 from .pre_screening_config_repo import PreScreeningConfigRepository
 
 __all__ = [
@@ -29,6 +28,5 @@ __all__ = [
     "UserProfileRepository",
     "WorkspaceRepository",
     "WorkspaceMembershipRepository",
-    "OntologyRepository",
     "PreScreeningConfigRepository",
 ]

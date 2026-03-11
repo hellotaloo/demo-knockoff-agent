@@ -72,7 +72,7 @@ async def start_playground_session(request: PlaygroundStartRequest):
                ps.id as pre_screening_id, ps.is_online, ps.published_at,
                COALESCE(ol.spoken_name, ol.name) as office_name, ol.address as office_address
         FROM ats.vacancies v
-        LEFT JOIN ats.pre_screenings ps ON ps.vacancy_id = v.id
+        LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
         LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
         WHERE v.id = $1
         """,
@@ -92,7 +92,7 @@ async def start_playground_session(request: PlaygroundStartRequest):
     questions = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer
-        FROM ats.pre_screening_questions
+        FROM agents.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,

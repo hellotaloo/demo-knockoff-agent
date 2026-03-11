@@ -27,8 +27,8 @@ class WorkspaceMembershipRepository:
         return await self.pool.fetchrow(
             """
             SELECT wm.*, w.name as workspace_name, w.slug as workspace_slug
-            FROM ats.workspace_memberships wm
-            JOIN ats.workspaces w ON w.id = wm.workspace_id
+            FROM system.workspace_memberships wm
+            JOIN system.workspaces w ON w.id = wm.workspace_id
             WHERE wm.user_profile_id = $1 AND wm.workspace_id = $2
             """,
             user_profile_id,
@@ -49,8 +49,8 @@ class WorkspaceMembershipRepository:
                 w.updated_at,
                 wm.role,
                 wm.created_at as joined_at
-            FROM ats.workspace_memberships wm
-            JOIN ats.workspaces w ON w.id = wm.workspace_id
+            FROM system.workspace_memberships wm
+            JOIN system.workspaces w ON w.id = wm.workspace_id
             WHERE wm.user_profile_id = $1
             ORDER BY w.name
             """,
@@ -69,8 +69,8 @@ class WorkspaceMembershipRepository:
                 up.email,
                 up.full_name,
                 up.avatar_url
-            FROM ats.workspace_memberships wm
-            JOIN ats.user_profiles up ON up.id = wm.user_profile_id
+            FROM system.workspace_memberships wm
+            JOIN system.user_profiles up ON up.id = wm.user_profile_id
             WHERE wm.workspace_id = $1
             ORDER BY
                 CASE wm.role
@@ -93,7 +93,7 @@ class WorkspaceMembershipRepository:
         """Add a member to a workspace."""
         return await self.pool.fetchrow(
             """
-            INSERT INTO ats.workspace_memberships (user_profile_id, workspace_id, role, invited_by)
+            INSERT INTO system.workspace_memberships (user_profile_id, workspace_id, role, invited_by)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (user_profile_id, workspace_id) DO UPDATE
             SET role = EXCLUDED.role
@@ -114,7 +114,7 @@ class WorkspaceMembershipRepository:
         """Update a member's role."""
         return await self.pool.fetchrow(
             """
-            UPDATE ats.workspace_memberships
+            UPDATE system.workspace_memberships
             SET role = $3
             WHERE user_profile_id = $1 AND workspace_id = $2
             RETURNING *
@@ -132,7 +132,7 @@ class WorkspaceMembershipRepository:
         """Remove a member from a workspace."""
         result = await self.pool.execute(
             """
-            DELETE FROM ats.workspace_memberships
+            DELETE FROM system.workspace_memberships
             WHERE user_profile_id = $1 AND workspace_id = $2
             """,
             user_profile_id,
@@ -143,7 +143,7 @@ class WorkspaceMembershipRepository:
     async def count_workspace_members(self, workspace_id: uuid.UUID) -> int:
         """Count members in a workspace."""
         row = await self.pool.fetchrow(
-            "SELECT COUNT(*) as count FROM ats.workspace_memberships WHERE workspace_id = $1",
+            "SELECT COUNT(*) as count FROM system.workspace_memberships WHERE workspace_id = $1",
             workspace_id
         )
         return row["count"]
@@ -152,7 +152,7 @@ class WorkspaceMembershipRepository:
         """Count owners in a workspace."""
         row = await self.pool.fetchrow(
             """
-            SELECT COUNT(*) as count FROM ats.workspace_memberships
+            SELECT COUNT(*) as count FROM system.workspace_memberships
             WHERE workspace_id = $1 AND role = 'owner'
             """,
             workspace_id
@@ -166,7 +166,7 @@ class WorkspaceMembershipRepository:
     async def get_invitation_by_id(self, invitation_id: uuid.UUID) -> Optional[asyncpg.Record]:
         """Get an invitation by ID."""
         return await self.pool.fetchrow(
-            "SELECT * FROM ats.workspace_invitations WHERE id = $1",
+            "SELECT * FROM system.workspace_invitations WHERE id = $1",
             invitation_id
         )
 
@@ -175,8 +175,8 @@ class WorkspaceMembershipRepository:
         return await self.pool.fetchrow(
             """
             SELECT wi.*, w.name as workspace_name, w.slug as workspace_slug
-            FROM ats.workspace_invitations wi
-            JOIN ats.workspaces w ON w.id = wi.workspace_id
+            FROM system.workspace_invitations wi
+            JOIN system.workspaces w ON w.id = wi.workspace_id
             WHERE wi.token = $1
             """,
             token
@@ -190,7 +190,7 @@ class WorkspaceMembershipRepository:
         """Get a pending (not accepted, not expired) invitation."""
         return await self.pool.fetchrow(
             """
-            SELECT * FROM ats.workspace_invitations
+            SELECT * FROM system.workspace_invitations
             WHERE workspace_id = $1
               AND email = $2
               AND accepted_at IS NULL
@@ -205,8 +205,8 @@ class WorkspaceMembershipRepository:
         return await self.pool.fetch(
             """
             SELECT wi.*, up.full_name as invited_by_name
-            FROM ats.workspace_invitations wi
-            JOIN ats.user_profiles up ON up.id = wi.invited_by
+            FROM system.workspace_invitations wi
+            JOIN system.user_profiles up ON up.id = wi.invited_by
             WHERE wi.workspace_id = $1
               AND wi.accepted_at IS NULL
               AND wi.expires_at > NOW()
@@ -229,7 +229,7 @@ class WorkspaceMembershipRepository:
 
         return await self.pool.fetchrow(
             """
-            INSERT INTO ats.workspace_invitations (workspace_id, email, role, token, invited_by, expires_at)
+            INSERT INTO system.workspace_invitations (workspace_id, email, role, token, invited_by, expires_at)
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (workspace_id, email)
             DO UPDATE SET
@@ -252,7 +252,7 @@ class WorkspaceMembershipRepository:
         """Mark an invitation as accepted."""
         return await self.pool.fetchrow(
             """
-            UPDATE ats.workspace_invitations
+            UPDATE system.workspace_invitations
             SET accepted_at = NOW()
             WHERE id = $1
             RETURNING *
@@ -263,7 +263,7 @@ class WorkspaceMembershipRepository:
     async def delete_invitation(self, invitation_id: uuid.UUID) -> bool:
         """Delete an invitation."""
         result = await self.pool.execute(
-            "DELETE FROM ats.workspace_invitations WHERE id = $1",
+            "DELETE FROM system.workspace_invitations WHERE id = $1",
             invitation_id
         )
         return result == "DELETE 1"
@@ -273,8 +273,8 @@ class WorkspaceMembershipRepository:
         return await self.pool.fetch(
             """
             SELECT wi.*, w.name as workspace_name, w.slug as workspace_slug
-            FROM ats.workspace_invitations wi
-            JOIN ats.workspaces w ON w.id = wi.workspace_id
+            FROM system.workspace_invitations wi
+            JOIN system.workspaces w ON w.id = wi.workspace_id
             WHERE wi.email = $1
               AND wi.accepted_at IS NULL
               AND wi.expires_at > NOW()

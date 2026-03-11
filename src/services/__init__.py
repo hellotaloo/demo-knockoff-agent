@@ -20,7 +20,6 @@ from .screening_notes_integration_service import (
 )
 from .call_result_processor import process_call_results
 from .teams_service import TeamsService, get_teams_service
-from .ontology_service import OntologyService
 from .ats_import_service import ATSImportService
 
 __all__ = [
@@ -46,6 +45,5 @@ __all__ = [
     "process_call_results",
     "TeamsService",
     "get_teams_service",
-    "OntologyService",
     "ATSImportService",
 ]

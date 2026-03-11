@@ -24,7 +24,6 @@ from .workspaces import router as workspaces_router
 from .livekit_webhook import router as livekit_webhook_router
 from .teams import router as teams_router
 from .architecture import router as architecture_router
-from .ontology import router as ontology_router
 from .interview_analysis import router as interview_analysis_router
 from .ats_simulator import router as ats_simulator_router
 from .playground import router as playground_router
@@ -54,7 +53,6 @@ __all__ = [
     "livekit_webhook_router",
     "teams_router",
     "architecture_router",
-    "ontology_router",
     "interview_analysis_router",
     "ats_simulator_router",
     "playground_router",

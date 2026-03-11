@@ -65,7 +65,7 @@ async def livekit_call_result(
         SELECT sc.id, sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone,
                sc.candidate_name, sc.is_test, sc.application_id, sc.candidate_id,
                v.title as vacancy_title
-        FROM ats.pre_screening_conversations sc
+        FROM agents.pre_screening_sessions sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
         """,
@@ -139,7 +139,7 @@ async def livekit_call_result(
                     question_id = answer.internal_id or answer.question_id
                     await conn.execute(
                         """
-                        INSERT INTO ats.application_answers
+                        INSERT INTO agents.pre_screening_answers
                         (application_id, question_id, question_text, answer, passed, source)
                         VALUES ($1, $2, $3, $4, $5, 'voice')
                         """,
@@ -155,7 +155,7 @@ async def livekit_call_result(
                     question_id = answer.internal_id or answer.question_id
                     await conn.execute(
                         """
-                        INSERT INTO ats.application_answers
+                        INSERT INTO agents.pre_screening_answers
                         (application_id, question_id, question_text, answer, source, motivation)
                         VALUES ($1, $2, $3, $4, 'voice', $5)
                         """,
@@ -170,7 +170,7 @@ async def livekit_call_result(
             for msg in payload.transcript:
                 await conn.execute(
                     """
-                    INSERT INTO ats.pre_screening_messages (conversation_id, role, message)
+                    INSERT INTO agents.pre_screening_session_turns (conversation_id, role, message)
                     VALUES ($1, $2, $3)
                     """,
                     screening_conv["id"],
@@ -182,7 +182,7 @@ async def livekit_call_result(
             conv_status = "abandoned" if is_abandoned else "completed"
             await conn.execute(
                 """
-                UPDATE ats.pre_screening_conversations
+                UPDATE agents.pre_screening_sessions
                 SET status = $1, completed_at = NOW(), updated_at = NOW()
                 WHERE session_id = $2 AND channel = 'voice'
                 """,

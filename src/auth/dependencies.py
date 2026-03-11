@@ -127,7 +127,7 @@ async def get_user_profile_by_auth_id(pool: asyncpg.Pool, auth_user_id: str) -> 
     """Get user profile by Supabase auth user ID."""
     query = """
         SELECT id, auth_user_id, email, full_name, avatar_url, phone, is_active
-        FROM ats.user_profiles
+        FROM system.user_profiles
         WHERE auth_user_id = $1
     """
     row = await pool.fetchrow(query, UUID(auth_user_id))
@@ -157,8 +157,8 @@ async def get_workspace_membership(
             w.name as workspace_name,
             w.slug as workspace_slug,
             wm.role
-        FROM ats.workspace_memberships wm
-        JOIN ats.workspaces w ON w.id = wm.workspace_id
+        FROM system.workspace_memberships wm
+        JOIN system.workspaces w ON w.id = wm.workspace_id
         WHERE wm.user_profile_id = $1 AND wm.workspace_id = $2
     """
     row = await pool.fetchrow(query, user_profile_id, workspace_id)
@@ -181,8 +181,8 @@ async def get_user_workspaces(pool: asyncpg.Pool, user_profile_id: UUID) -> list
             w.name as workspace_name,
             w.slug as workspace_slug,
             wm.role
-        FROM ats.workspace_memberships wm
-        JOIN ats.workspaces w ON w.id = wm.workspace_id
+        FROM system.workspace_memberships wm
+        JOIN system.workspaces w ON w.id = wm.workspace_id
         WHERE wm.user_profile_id = $1
         ORDER BY w.name
     """
@@ -207,7 +207,7 @@ async def create_user_profile(
 ) -> UserProfile:
     """Create a new user profile."""
     query = """
-        INSERT INTO ats.user_profiles (auth_user_id, email, full_name, avatar_url)
+        INSERT INTO system.user_profiles (auth_user_id, email, full_name, avatar_url)
         VALUES ($1, $2, $3, $4)
         RETURNING id, auth_user_id, email, full_name, avatar_url, phone, is_active
     """
@@ -235,7 +235,7 @@ async def create_workspace_with_owner(
             # Create workspace
             workspace_row = await conn.fetchrow(
                 """
-                INSERT INTO ats.workspaces (name, slug)
+                INSERT INTO system.workspaces (name, slug)
                 VALUES ($1, $2)
                 RETURNING id, name, slug
                 """,
@@ -246,7 +246,7 @@ async def create_workspace_with_owner(
             # Add user as owner
             await conn.execute(
                 """
-                INSERT INTO ats.workspace_memberships (user_profile_id, workspace_id, role)
+                INSERT INTO system.workspace_memberships (user_profile_id, workspace_id, role)
                 VALUES ($1, $2, 'owner')
                 """,
                 user_profile_id,

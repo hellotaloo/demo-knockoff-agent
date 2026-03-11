@@ -230,8 +230,8 @@ class ScreeningNotesIntegrationService:
             """
             SELECT aa.question_text, aa.answer, aa.passed, aa.score, aa.rating,
                    COALESCE(psq.question_type, 'qualification') AS question_type
-            FROM ats.application_answers aa
-            LEFT JOIN ats.pre_screening_questions psq ON psq.id::text = aa.question_id
+            FROM agents.pre_screening_answers aa
+            LEFT JOIN agents.pre_screening_questions psq ON psq.id::text = aa.question_id
             WHERE aa.application_id = $1
             ORDER BY psq.position ASC NULLS LAST
             """,

@@ -2,7 +2,7 @@
 Workflow Service - State machine for managing workflow instances.
 
 Provides:
-1. Storing workflow state in PostgreSQL (ats.workflows table)
+1. Storing workflow state in PostgreSQL (agents.workflows table)
 2. Advancing through steps based on events
 3. Timer-based triggers (next_action_at column)
 4. Context lookup for finding workflows by conversation_id, etc.
@@ -31,7 +31,7 @@ class WorkflowService:
     async def ensure_table(self):
         """Create the workflows table if it doesn't exist."""
         await self.pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.workflows (
+            CREATE TABLE IF NOT EXISTS agents.workflows (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 workflow_type VARCHAR(50) NOT NULL,
                 current_step VARCHAR(50) NOT NULL,
@@ -46,7 +46,7 @@ class WorkflowService:
         # Create index for timer processing
         await self.pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_workflows_timers
-            ON ats.workflows(next_action_at)
+            ON agents.workflows(next_action_at)
             WHERE status = 'active' AND next_action_at IS NOT NULL;
         """)
         logger.info("workflows table ensured")
@@ -79,7 +79,7 @@ class WorkflowService:
 
         row = await self.pool.fetchrow(
             """
-            INSERT INTO ats.workflows
+            INSERT INTO agents.workflows
             (workflow_type, current_step, status, context, next_action_at, next_action_type)
             VALUES ($1, $2, 'active', $3::jsonb, $4, $5)
             RETURNING id, workflow_type, current_step, status, context, next_action_at, created_at
@@ -101,7 +101,7 @@ class WorkflowService:
             """
             SELECT id, workflow_type, current_step, status, context,
                    next_action_at, next_action_type, created_at, updated_at
-            FROM ats.workflows
+            FROM agents.workflows
             WHERE id = $1
             """,
             UUID(workflow_id),
@@ -129,7 +129,7 @@ class WorkflowService:
             """
             SELECT id, workflow_type, current_step, status, context,
                    next_action_at, next_action_type, created_at, updated_at
-            FROM ats.workflows
+            FROM agents.workflows
             WHERE status = 'active'
               AND context->>$1 = $2
             ORDER BY created_at DESC
@@ -172,7 +172,7 @@ class WorkflowService:
             # Terminal status - clear timers
             await self.pool.execute(
                 """
-                UPDATE ats.workflows
+                UPDATE agents.workflows
                 SET current_step = $2,
                     status = $3,
                     next_action_at = NULL,
@@ -188,7 +188,7 @@ class WorkflowService:
             # Update step with new timeout
             await self.pool.execute(
                 """
-                UPDATE ats.workflows
+                UPDATE agents.workflows
                 SET current_step = $2,
                     next_action_at = $3,
                     next_action_type = 'timeout',
@@ -203,7 +203,7 @@ class WorkflowService:
             # Just update step, keep existing timer
             await self.pool.execute(
                 """
-                UPDATE ats.workflows
+                UPDATE agents.workflows
                 SET current_step = $2,
                     updated_at = NOW()
                 WHERE id = $1
@@ -229,7 +229,7 @@ class WorkflowService:
         """
         await self.pool.execute(
             """
-            UPDATE ats.workflows
+            UPDATE agents.workflows
             SET context = context || $2::jsonb,
                 updated_at = NOW()
             WHERE id = $1
@@ -258,7 +258,7 @@ class WorkflowService:
 
         await self.pool.execute(
             """
-            UPDATE ats.workflows
+            UPDATE agents.workflows
             SET next_action_at = $2,
                 next_action_type = $3,
                 updated_at = NOW()
@@ -291,7 +291,7 @@ class WorkflowService:
         rows = await self.pool.fetch(
             """
             SELECT id, workflow_type, current_step, next_action_type
-            FROM ats.workflows
+            FROM agents.workflows
             WHERE status = 'active'
               AND next_action_at IS NOT NULL
               AND next_action_at <= $1
@@ -322,7 +322,7 @@ class WorkflowService:
                     # Clear the timer, return for caller to trigger
                     await self.pool.execute(
                         """
-                        UPDATE ats.workflows
+                        UPDATE agents.workflows
                         SET next_action_at = NULL,
                             next_action_type = NULL,
                             updated_at = NOW()
@@ -373,7 +373,7 @@ class WorkflowService:
                     AND next_action_at IS NOT NULL
                     AND next_action_at <= NOW()
                 ) AS stuck_count
-            FROM ats.workflows
+            FROM agents.workflows
             WHERE status = 'active'
             """
         )
@@ -389,7 +389,7 @@ class WorkflowService:
             """
             SELECT id, workflow_type, current_step, status, context,
                    next_action_at, next_action_type, created_at, updated_at
-            FROM ats.workflows
+            FROM agents.workflows
             WHERE status = 'active'
             ORDER BY created_at DESC
             LIMIT 50
@@ -404,7 +404,7 @@ class WorkflowService:
             """
             SELECT id, workflow_type, current_step, status, context,
                    next_action_at, next_action_type, created_at, updated_at
-            FROM ats.workflows
+            FROM agents.workflows
             ORDER BY created_at DESC
             LIMIT 100
             """,

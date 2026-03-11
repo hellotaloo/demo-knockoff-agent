@@ -20,7 +20,7 @@ class PreScreeningRepository:
             SELECT id, vacancy_id, intro, knockout_failed_action, final_action, status,
                    created_at, updated_at, published_at, is_online, elevenlabs_agent_id, whatsapp_agent_id,
                    voice_enabled, whatsapp_enabled, cv_enabled
-            FROM ats.pre_screenings
+            FROM agents.pre_screenings
             WHERE vacancy_id = $1
             """,
             vacancy_id
@@ -31,7 +31,7 @@ class PreScreeningRepository:
         return await self.pool.fetch(
             """
             SELECT id, question_type, position, question_text, ideal_answer, vacancy_snippet, is_approved
-            FROM ats.pre_screening_questions
+            FROM agents.pre_screening_questions
             WHERE pre_screening_id = $1
             ORDER BY question_type, position
             """,
@@ -57,7 +57,7 @@ class PreScreeningRepository:
             async with conn.transaction():
                 # Check if pre-screening already exists for this vacancy
                 existing_id = await conn.fetchval(
-                    "SELECT id FROM ats.pre_screenings WHERE vacancy_id = $1",
+                    "SELECT id FROM agents.pre_screenings WHERE vacancy_id = $1",
                     vacancy_id
                 )
 
@@ -65,7 +65,7 @@ class PreScreeningRepository:
                     # Update existing pre-screening
                     await conn.execute(
                         """
-                        UPDATE ats.pre_screenings
+                        UPDATE agents.pre_screenings
                         SET intro = $1, knockout_failed_action = $2, final_action = $3,
                             status = 'active', updated_at = NOW()
                         WHERE id = $4
@@ -76,14 +76,14 @@ class PreScreeningRepository:
 
                     # Delete existing questions (will be replaced)
                     await conn.execute(
-                        "DELETE FROM ats.pre_screening_questions WHERE pre_screening_id = $1",
+                        "DELETE FROM agents.pre_screening_questions WHERE pre_screening_id = $1",
                         pre_screening_id
                     )
                 else:
                     # Create new pre-screening
                     row = await conn.fetchrow(
                         """
-                        INSERT INTO ats.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
+                        INSERT INTO agents.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
                         VALUES ($1, $2, $3, $4, 'active')
                         RETURNING id
                         """,
@@ -96,7 +96,7 @@ class PreScreeningRepository:
                     is_approved = q["id"] in approved_ids
                     await conn.execute(
                         """
-                        INSERT INTO ats.pre_screening_questions
+                        INSERT INTO agents.pre_screening_questions
                         (pre_screening_id, question_type, position, question_text, vacancy_snippet, is_approved)
                         VALUES ($1, 'knockout', $2, $3, $4, $5)
                         """,
@@ -108,7 +108,7 @@ class PreScreeningRepository:
                     is_approved = q["id"] in approved_ids
                     await conn.execute(
                         """
-                        INSERT INTO ats.pre_screening_questions
+                        INSERT INTO agents.pre_screening_questions
                         (pre_screening_id, question_type, position, question_text, ideal_answer, vacancy_snippet, is_approved)
                         VALUES ($1, 'qualification', $2, $3, $4, $5, $6)
                         """,
@@ -127,7 +127,7 @@ class PreScreeningRepository:
             async with conn.transaction():
                 # Check if pre-screening exists
                 pre_screening_id = await conn.fetchval(
-                    "SELECT id FROM ats.pre_screenings WHERE vacancy_id = $1",
+                    "SELECT id FROM agents.pre_screenings WHERE vacancy_id = $1",
                     vacancy_id
                 )
 
@@ -136,7 +136,7 @@ class PreScreeningRepository:
 
                 # Delete pre-screening (questions cascade automatically)
                 await conn.execute(
-                    "DELETE FROM ats.pre_screenings WHERE id = $1",
+                    "DELETE FROM agents.pre_screenings WHERE id = $1",
                     pre_screening_id
                 )
 
@@ -156,7 +156,7 @@ class PreScreeningRepository:
         """Update pre-screening publish state with agent IDs and channel flags."""
         await self.pool.execute(
             """
-            UPDATE ats.pre_screenings
+            UPDATE agents.pre_screenings
             SET published_at = $1,
                 elevenlabs_agent_id = $2,
                 whatsapp_agent_id = $3,
@@ -180,12 +180,12 @@ class PreScreeningRepository:
         """Update a specific agent ID (elevenlabs or whatsapp)."""
         if agent_type == "elevenlabs":
             await self.pool.execute(
-                "UPDATE ats.pre_screenings SET elevenlabs_agent_id = $1, updated_at = NOW() WHERE id = $2",
+                "UPDATE agents.pre_screenings SET elevenlabs_agent_id = $1, updated_at = NOW() WHERE id = $2",
                 agent_id, pre_screening_id
             )
         elif agent_type == "whatsapp":
             await self.pool.execute(
-                "UPDATE ats.pre_screenings SET whatsapp_agent_id = $1, updated_at = NOW() WHERE id = $2",
+                "UPDATE agents.pre_screenings SET whatsapp_agent_id = $1, updated_at = NOW() WHERE id = $2",
                 agent_id, pre_screening_id
             )
 
@@ -235,7 +235,7 @@ class PreScreeningRepository:
 
         # Execute update
         query = f"""
-            UPDATE ats.pre_screenings
+            UPDATE agents.pre_screenings
             SET {", ".join(updates)}
             WHERE id = ${param_idx}
         """
@@ -247,7 +247,7 @@ class PreScreeningRepository:
             """
             SELECT is_online, voice_enabled, whatsapp_enabled, cv_enabled,
                    elevenlabs_agent_id, whatsapp_agent_id
-            FROM ats.pre_screenings
+            FROM agents.pre_screenings
             WHERE id = $1
             """,
             pre_screening_id
@@ -256,7 +256,7 @@ class PreScreeningRepository:
     async def update_online_status(self, pre_screening_id: uuid.UUID, is_online: bool):
         """Toggle online/offline status."""
         await self.pool.execute(
-            "UPDATE ats.pre_screenings SET is_online = $1, updated_at = NOW() WHERE id = $2",
+            "UPDATE agents.pre_screenings SET is_online = $1, updated_at = NOW() WHERE id = $2",
             is_online, pre_screening_id
         )
 
@@ -268,7 +268,7 @@ class PreScreeningRepository:
         """Get cached interview analysis result."""
         import json as _json
         row = await self.pool.fetchval(
-            "SELECT analysis_result FROM ats.pre_screenings WHERE id = $1",
+            "SELECT analysis_result FROM agents.pre_screenings WHERE id = $1",
             pre_screening_id
         )
         if row is None:
@@ -282,14 +282,14 @@ class PreScreeningRepository:
         """Save interview analysis result as JSONB."""
         import json as _json
         await self.pool.execute(
-            "UPDATE ats.pre_screenings SET analysis_result = $1::jsonb, updated_at = NOW() WHERE id = $2",
+            "UPDATE agents.pre_screenings SET analysis_result = $1::jsonb, updated_at = NOW() WHERE id = $2",
             _json.dumps(result), pre_screening_id
         )
 
     async def clear_analysis_result(self, pre_screening_id: uuid.UUID):
         """Clear cached analysis result (called when questions change)."""
         await self.pool.execute(
-            "UPDATE ats.pre_screenings SET analysis_result = NULL WHERE id = $1",
+            "UPDATE agents.pre_screenings SET analysis_result = NULL WHERE id = $1",
             pre_screening_id
         )
 
@@ -302,7 +302,7 @@ class PreScreeningRepository:
         return await self.pool.fetchrow(
             """
             SELECT voice_enabled, whatsapp_enabled, cv_enabled
-            FROM ats.pre_screenings
+            FROM agents.pre_screenings
             WHERE id = $1
             """,
             pre_screening_id
@@ -337,7 +337,7 @@ class PreScreeningRepository:
         params.append(pre_screening_id)
 
         query = f"""
-            UPDATE ats.pre_screenings
+            UPDATE agents.pre_screenings
             SET {", ".join(updates)}
             WHERE id = ${param_idx}
         """

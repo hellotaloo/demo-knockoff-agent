@@ -7,7 +7,7 @@ from typing import Optional
 
 
 class DocumentCollectionConfigRepository:
-    """CRUD operations for ats.document_collection_configs + ats.document_collection_requirements."""
+    """CRUD operations for agents.document_collection_configs + agents.document_collection_requirements."""
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
@@ -27,7 +27,7 @@ class DocumentCollectionConfigRepository:
                 """
                 SELECT id, workspace_id, vacancy_id, name, intro_message,
                        status, is_online, whatsapp_enabled, created_at, updated_at
-                FROM ats.document_collection_configs
+                FROM agents.document_collection_configs
                 WHERE workspace_id = $1 AND vacancy_id = $2
                 ORDER BY created_at DESC
                 """,
@@ -37,7 +37,7 @@ class DocumentCollectionConfigRepository:
             """
             SELECT id, workspace_id, vacancy_id, name, intro_message,
                    status, is_online, whatsapp_enabled, created_at, updated_at
-            FROM ats.document_collection_configs
+            FROM agents.document_collection_configs
             WHERE workspace_id = $1
             ORDER BY created_at DESC
             """,
@@ -50,7 +50,7 @@ class DocumentCollectionConfigRepository:
             """
             SELECT id, workspace_id, vacancy_id, name, intro_message,
                    status, is_online, whatsapp_enabled, created_at, updated_at
-            FROM ats.document_collection_configs
+            FROM agents.document_collection_configs
             WHERE id = $1
             """,
             config_id,
@@ -62,7 +62,7 @@ class DocumentCollectionConfigRepository:
             """
             SELECT id, workspace_id, vacancy_id, name, intro_message,
                    status, is_online, whatsapp_enabled, created_at, updated_at
-            FROM ats.document_collection_configs
+            FROM agents.document_collection_configs
             WHERE vacancy_id = $1
             """,
             vacancy_id,
@@ -74,7 +74,7 @@ class DocumentCollectionConfigRepository:
             """
             SELECT id, workspace_id, vacancy_id, name, intro_message,
                    status, is_online, whatsapp_enabled, created_at, updated_at
-            FROM ats.document_collection_configs
+            FROM agents.document_collection_configs
             WHERE workspace_id = $1 AND vacancy_id IS NULL
             """,
             workspace_id,
@@ -93,7 +93,7 @@ class DocumentCollectionConfigRepository:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO ats.document_collection_configs
+                    INSERT INTO agents.document_collection_configs
                         (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
                     VALUES ($1, $2, $3, $4, 'draft', false, true)
                     RETURNING id, workspace_id, vacancy_id, name, intro_message,
@@ -107,7 +107,7 @@ class DocumentCollectionConfigRepository:
                 for position, dt_id in enumerate(document_type_ids):
                     await conn.execute(
                         """
-                        INSERT INTO ats.document_collection_requirements
+                        INSERT INTO agents.document_collection_requirements
                             (config_id, document_type_id, position, is_required)
                         VALUES ($1, $2, $3, true)
                         """,
@@ -136,7 +136,7 @@ class DocumentCollectionConfigRepository:
 
         return await self.pool.fetchrow(
             f"""
-            UPDATE ats.document_collection_configs
+            UPDATE agents.document_collection_configs
             SET {", ".join(updates)}
             WHERE id = ${idx}
             RETURNING id, workspace_id, vacancy_id, name, intro_message,
@@ -148,7 +148,7 @@ class DocumentCollectionConfigRepository:
     async def delete(self, config_id: uuid.UUID) -> bool:
         """Delete a config (requirements cascade)."""
         result = await self.pool.execute(
-            "DELETE FROM ats.document_collection_configs WHERE id = $1",
+            "DELETE FROM agents.document_collection_configs WHERE id = $1",
             config_id,
         )
         return result == "DELETE 1"
@@ -170,7 +170,7 @@ class DocumentCollectionConfigRepository:
                 dt.is_default AS dt_is_default, dt.is_active AS dt_is_active,
                 dt.sort_order AS dt_sort_order,
                 dt.created_at AS dt_created_at, dt.updated_at AS dt_updated_at
-            FROM ats.document_collection_requirements r
+            FROM agents.document_collection_requirements r
             JOIN ats.document_types dt ON dt.id = r.document_type_id
             WHERE r.config_id = $1
             ORDER BY r.position
@@ -187,13 +187,13 @@ class DocumentCollectionConfigRepository:
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
-                    "DELETE FROM ats.document_collection_requirements WHERE config_id = $1",
+                    "DELETE FROM agents.document_collection_requirements WHERE config_id = $1",
                     config_id,
                 )
                 for req in requirements:
                     await conn.execute(
                         """
-                        INSERT INTO ats.document_collection_requirements
+                        INSERT INTO agents.document_collection_requirements
                             (config_id, document_type_id, position, is_required, notes)
                         VALUES ($1, $2, $3, $4, $5)
                         """,

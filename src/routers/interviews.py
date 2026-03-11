@@ -693,7 +693,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
     question_rows = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer, vacancy_snippet, is_approved
-        FROM ats.pre_screening_questions
+        FROM agents.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,

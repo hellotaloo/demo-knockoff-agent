@@ -16,21 +16,21 @@ class WorkspaceRepository:
     async def get_by_id(self, workspace_id: uuid.UUID) -> Optional[asyncpg.Record]:
         """Get a workspace by ID."""
         return await self.pool.fetchrow(
-            "SELECT * FROM ats.workspaces WHERE id = $1",
+            "SELECT * FROM system.workspaces WHERE id = $1",
             workspace_id
         )
 
     async def get_by_slug(self, slug: str) -> Optional[asyncpg.Record]:
         """Get a workspace by slug."""
         return await self.pool.fetchrow(
-            "SELECT * FROM ats.workspaces WHERE slug = $1",
+            "SELECT * FROM system.workspaces WHERE slug = $1",
             slug
         )
 
     async def list_all(self) -> List[asyncpg.Record]:
         """Get all workspaces."""
         return await self.pool.fetch(
-            "SELECT * FROM ats.workspaces ORDER BY name"
+            "SELECT * FROM system.workspaces ORDER BY name"
         )
 
     async def create(
@@ -45,7 +45,7 @@ class WorkspaceRepository:
         settings_json = json.dumps(settings or {})
         return await self.pool.fetchrow(
             """
-            INSERT INTO ats.workspaces (name, slug, logo_url, settings)
+            INSERT INTO system.workspaces (name, slug, logo_url, settings)
             VALUES ($1, $2, $3, $4::jsonb)
             RETURNING *
             """,
@@ -88,7 +88,7 @@ class WorkspaceRepository:
 
         values.append(workspace_id)
         query = f"""
-            UPDATE ats.workspaces
+            UPDATE system.workspaces
             SET {', '.join(updates)}
             WHERE id = ${param_num}
             RETURNING *
@@ -98,7 +98,7 @@ class WorkspaceRepository:
     async def delete(self, workspace_id: uuid.UUID) -> bool:
         """Delete a workspace."""
         result = await self.pool.execute(
-            "DELETE FROM ats.workspaces WHERE id = $1",
+            "DELETE FROM system.workspaces WHERE id = $1",
             workspace_id
         )
         return result == "DELETE 1"
@@ -106,7 +106,7 @@ class WorkspaceRepository:
     async def get_by_domain(self, domain: str) -> Optional[asyncpg.Record]:
         """Find a workspace that has the given domain in its domains array."""
         return await self.pool.fetchrow(
-            "SELECT * FROM ats.workspaces WHERE $1 = ANY(domains)",
+            "SELECT * FROM system.workspaces WHERE $1 = ANY(domains)",
             domain.lower()
         )
 

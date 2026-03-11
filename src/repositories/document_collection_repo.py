@@ -8,7 +8,7 @@ from typing import Optional
 
 
 class DocumentCollectionRepository:
-    """CRUD operations for ats.document_collections, _messages, _uploads."""
+    """CRUD operations for agents.document_collections, _messages, _uploads."""
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
@@ -44,7 +44,7 @@ class DocumentCollectionRepository:
 
         # Count
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM ats.document_collections dc WHERE {where}",
+            f"SELECT COUNT(*) FROM agents.document_collections dc WHERE {where}",
             *params,
         )
 
@@ -58,11 +58,11 @@ class DocumentCollectionRepository:
                    dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
                    COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
-                   COALESCE((SELECT COUNT(*) FROM ats.document_collection_uploads u
+                   COALESCE((SELECT COUNT(*) FROM agents.document_collection_uploads u
                              WHERE u.collection_id = dc.id AND u.status = 'verified'), 0) AS documents_collected,
-                   COALESCE((SELECT COUNT(*) FROM ats.document_collection_messages m
+                   COALESCE((SELECT COUNT(*) FROM agents.document_collection_session_turns m
                              WHERE m.collection_id = dc.id AND m.role = 'user'), 0) AS user_message_count
-            FROM ats.document_collections dc
+            FROM agents.document_collections dc
             LEFT JOIN ats.vacancies v ON dc.vacancy_id = v.id
             WHERE {where}
             ORDER BY dc.started_at DESC
@@ -83,11 +83,11 @@ class DocumentCollectionRepository:
                    dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
                    COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
-                   COALESCE((SELECT COUNT(*) FROM ats.document_collection_uploads u
+                   COALESCE((SELECT COUNT(*) FROM agents.document_collection_uploads u
                              WHERE u.collection_id = dc.id AND u.status = 'verified'), 0) AS documents_collected,
-                   COALESCE((SELECT COUNT(*) FROM ats.document_collection_messages m
+                   COALESCE((SELECT COUNT(*) FROM agents.document_collection_session_turns m
                              WHERE m.collection_id = dc.id AND m.role = 'user'), 0) AS user_message_count
-            FROM ats.document_collections dc
+            FROM agents.document_collections dc
             LEFT JOIN ats.vacancies v ON dc.vacancy_id = v.id
             WHERE dc.id = $1
             """,
@@ -102,7 +102,7 @@ class DocumentCollectionRepository:
                    candidate_id, session_id, candidate_name, candidate_phone,
                    status, channel, retry_count, message_count,
                    documents_required, started_at, updated_at, completed_at
-            FROM ats.document_collections
+            FROM agents.document_collections
             WHERE candidate_phone = $1 AND status = 'active'
             ORDER BY started_at DESC
             LIMIT 1
@@ -126,7 +126,7 @@ class DocumentCollectionRepository:
         docs_json = json.dumps(documents_required) if documents_required else None
         return await self.pool.fetchrow(
             """
-            INSERT INTO ats.document_collections
+            INSERT INTO agents.document_collections
                 (config_id, workspace_id, vacancy_id, application_id, candidate_id,
                  candidate_name, candidate_phone, status, channel, documents_required)
             VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9::jsonb)
@@ -146,7 +146,7 @@ class DocumentCollectionRepository:
         completed_clause = ", completed_at = NOW()" if status in ("completed", "abandoned") else ""
         await self.pool.execute(
             f"""
-            UPDATE ats.document_collections
+            UPDATE agents.document_collections
             SET status = $1, updated_at = NOW(){completed_clause}
             WHERE id = $2
             """,
@@ -157,7 +157,7 @@ class DocumentCollectionRepository:
         """Abandon all active document collections for a phone number."""
         result = await self.pool.execute(
             """
-            UPDATE ats.document_collections
+            UPDATE agents.document_collections
             SET status = 'abandoned', updated_at = NOW(), completed_at = NOW()
             WHERE candidate_phone = $1 AND status = 'active'
             """,
@@ -175,7 +175,7 @@ class DocumentCollectionRepository:
         return await self.pool.fetch(
             """
             SELECT id, collection_id, role, message, created_at
-            FROM ats.document_collection_messages
+            FROM agents.document_collection_session_turns
             WHERE collection_id = $1
             ORDER BY created_at
             """,
@@ -190,7 +190,7 @@ class DocumentCollectionRepository:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO ats.document_collection_messages (collection_id, role, message)
+                    INSERT INTO agents.document_collection_session_turns (collection_id, role, message)
                     VALUES ($1, $2, $3)
                     RETURNING id, collection_id, role, message, created_at
                     """,
@@ -198,7 +198,7 @@ class DocumentCollectionRepository:
                 )
                 await conn.execute(
                     """
-                    UPDATE ats.document_collections
+                    UPDATE agents.document_collections
                     SET message_count = message_count + 1, updated_at = NOW()
                     WHERE id = $1
                     """,
@@ -218,7 +218,7 @@ class DocumentCollectionRepository:
                    document_side, image_hash, storage_path,
                    verification_result, verification_passed,
                    status, uploaded_at, verified_at
-            FROM ats.document_collection_uploads
+            FROM agents.document_collection_uploads
             WHERE collection_id = $1
             ORDER BY uploaded_at
             """,
@@ -237,7 +237,7 @@ class DocumentCollectionRepository:
         """Create a new upload record."""
         return await self.pool.fetchrow(
             """
-            INSERT INTO ats.document_collection_uploads
+            INSERT INTO agents.document_collection_uploads
                 (collection_id, application_id, document_type_id,
                  document_side, image_hash, storage_path, status)
             VALUES ($1, $2, $3, $4, $5, $6, 'pending')
@@ -259,7 +259,7 @@ class DocumentCollectionRepository:
         """Update an upload with verification results."""
         await self.pool.execute(
             """
-            UPDATE ats.document_collection_uploads
+            UPDATE agents.document_collection_uploads
             SET verification_result = $1::jsonb,
                 verification_passed = $2,
                 status = CASE WHEN $2 THEN 'verified' ELSE 'rejected' END,

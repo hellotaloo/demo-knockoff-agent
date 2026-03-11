@@ -61,7 +61,7 @@ async def stream_screening_chat(
     ps_row = await pool.fetchrow(
         """
         SELECT id, intro, knockout_failed_action, final_action
-        FROM ats.pre_screenings WHERE vacancy_id = $1
+        FROM agents.pre_screenings WHERE vacancy_id = $1
         """,
         vacancy_uuid
     )
@@ -74,7 +74,7 @@ async def stream_screening_chat(
     questions = await pool.fetch(
         """
         SELECT id, question_type, position, question_text, ideal_answer
-        FROM ats.pre_screening_questions
+        FROM agents.pre_screening_questions
         WHERE pre_screening_id = $1
         ORDER BY question_type, position
         """,
@@ -354,7 +354,7 @@ async def stream_interview_simulation(
 
     # Get pre-screening config
     pre_screening = await pool.fetchrow(
-        "SELECT * FROM ats.pre_screenings WHERE vacancy_id = $1",
+        "SELECT * FROM agents.pre_screenings WHERE vacancy_id = $1",
         vacancy_uuid
     )
     if not pre_screening:
@@ -365,7 +365,7 @@ async def stream_interview_simulation(
     # Build pre-screening config dict for simulator
     questions = await pool.fetch(
         """SELECT id, question_type, question_text, ideal_answer, position
-           FROM ats.pre_screening_questions
+           FROM agents.pre_screening_questions
            WHERE pre_screening_id = $1
            ORDER BY question_type DESC, position ASC""",
         pre_screening["id"]

@@ -203,7 +203,7 @@ class ScheduledInterviewRepository:
             """
             SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone,
                    v.title as vacancy_title
-            FROM ats.pre_screening_conversations sc
+            FROM agents.pre_screening_sessions sc
             JOIN ats.vacancies v ON v.id = sc.vacancy_id
             WHERE sc.session_id = $1 AND sc.channel = 'voice'
             """,
