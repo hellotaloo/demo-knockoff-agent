@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
-from src.repositories import CandidateRepository, CandidacyRepository
+from src.repositories import CandidateRepository, CandidacyRepository, ApplicationRepository
 from src.repositories.candidate_repo import DEFAULT_WORKSPACE_ID
 from src.services import ActivityService
 from src.database import get_db_pool
@@ -150,32 +150,16 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     )
     logger.info(f"👤 Using candidate {candidate_id} for {candidate_name} (is_test={request.is_test})")
 
-    # Create new application record linked to candidate
-    app_row = await pool.fetchrow(
-        """
-        INSERT INTO ats.applications
-        (vacancy_id, candidate_id, candidate_name, candidate_phone, channel, qualified, is_test, status)
-        VALUES ($1, $2, $3, $4, $5, false, $6, 'active')
-        RETURNING id
-        """,
-        vacancy_uuid,
-        candidate_id,
-        candidate_name,
-        phone_normalized,
-        request.channel.value,
-        request.is_test
-    )
-    application_id = app_row["id"]
-    logger.info(f"📝 Created application {application_id} with status=active (is_test={request.is_test})")
-
-    # Create candidacies so the candidate appears in the pipeline
+    # Create candidacy so the candidate appears in the pipeline
+    candidacy_id = None
     try:
         candidacy_repo = CandidacyRepository(pool)
         channel_source = request.channel.value  # "voice" or "whatsapp"
 
-        # 1. Vacancy-specific candidacy (shows in vacancy kanban + linked_vacancies chips)
         existing = await candidacy_repo.find_by_candidate_and_vacancy(candidate_id, vacancy_uuid)
-        if not existing:
+        if existing:
+            candidacy_id = existing["id"]
+        else:
             candidacy_row = await candidacy_repo.create(
                 workspace_id=DEFAULT_WORKSPACE_ID,
                 candidate_id=candidate_id,
@@ -183,11 +167,24 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
                 stage="pre_screening",
                 source=channel_source,
             )
-            logger.info(f"📋 Created vacancy candidacy {candidacy_row['id']} for candidate {candidate_id}")
-
+            candidacy_id = candidacy_row["id"]
+            logger.info(f"📋 Created candidacy {candidacy_id} for candidate {candidate_id}")
     except Exception as e:
         logger.error(f"Failed to create candidacy for candidate {candidate_id}: {e}")
-        # Non-fatal: screening can proceed without candidacy
+
+    # Create application record linked to candidate and candidacy
+    app_repo = ApplicationRepository(pool)
+    app_row = await app_repo.create(
+        vacancy_id=vacancy_uuid,
+        candidate_name=candidate_name,
+        channel=request.channel.value,
+        candidate_phone=phone_normalized,
+        candidate_id=candidate_id,
+        candidacy_id=candidacy_id,
+        is_test=request.is_test,
+    )
+    application_id = app_row["id"]
+    logger.info(f"📝 Created application {application_id} with status=active (is_test={request.is_test})")
 
     # Log activity: screening started with rich metadata
     activity_service = ActivityService(pool)

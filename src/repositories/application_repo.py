@@ -3,7 +3,7 @@ Application repository - handles all application-related database operations.
 """
 import asyncpg
 import uuid
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from datetime import datetime
 
 
@@ -134,25 +134,65 @@ class ApplicationRepository:
         self,
         vacancy_id: uuid.UUID,
         candidate_name: str,
-        candidate_phone: Optional[str],
         channel: str,
+        *,
+        candidate_phone: Optional[str] = None,
+        candidate_id: Optional[uuid.UUID] = None,
+        candidacy_id: Optional[uuid.UUID] = None,
+        pre_screening_id: Optional[uuid.UUID] = None,
+        conversation_id: Optional[str] = None,
+        qualified: bool = False,
+        status: str = "active",
+        summary: Optional[str] = None,
+        interview_slot: Optional[str] = None,
+        interaction_seconds: int = 0,
         is_test: bool = False,
-        candidate_id: Optional[uuid.UUID] = None
-    ) -> uuid.UUID:
-        """Create a new application."""
-        app_id = await self.pool.fetchval(
-            """
-            INSERT INTO ats.applications (
-                vacancy_id, candidate_id, candidate_name, candidate_phone, channel,
-                status, qualified, started_at, interaction_seconds,
-                synced, is_test
-            )
-            VALUES ($1, $2, $3, $4, $5, 'active', false, NOW(), 0, false, $6)
-            RETURNING id
-            """,
-            vacancy_id, candidate_id, candidate_name, candidate_phone, channel, is_test
-        )
-        return app_id
+        completed_at: Optional[datetime] = None,
+        set_completed_now: bool = False,
+        conn: Optional[Union[asyncpg.Pool, asyncpg.Connection]] = None,
+    ) -> asyncpg.Record:
+        """
+        Create a new application. Returns a Record with id, started_at, completed_at.
+
+        Args:
+            set_completed_now: If True, sets completed_at = NOW() in the DB.
+            completed_at: Explicit completed_at value (mutually exclusive with set_completed_now).
+            conn: Optional connection/pool to use (for running inside an existing transaction).
+        """
+        cols = [
+            "vacancy_id", "candidate_id", "candidacy_id", "candidate_name",
+            "candidate_phone", "channel", "pre_screening_id", "conversation_id",
+            "qualified", "status", "summary", "interview_slot",
+            "interaction_seconds", "is_test",
+        ]
+        vals = [
+            vacancy_id, candidate_id, candidacy_id, candidate_name,
+            candidate_phone, channel, pre_screening_id, conversation_id,
+            qualified, status, summary, interview_slot,
+            interaction_seconds, is_test,
+        ]
+
+        if set_completed_now:
+            cols.append("completed_at")
+            vals.append(datetime.now())  # Will be overridden by NOW() below
+            # Use SQL NOW() for precision — replace the placeholder
+            placeholders = [f"${i+1}" for i in range(len(vals) - 1)] + ["NOW()"]
+            vals = vals[:-1]  # Remove the datetime placeholder
+        elif completed_at is not None:
+            cols.append("completed_at")
+            vals.append(completed_at)
+            placeholders = [f"${i+1}" for i in range(len(vals))]
+        else:
+            placeholders = [f"${i+1}" for i in range(len(vals))]
+
+        sql = f"""
+            INSERT INTO ats.applications ({', '.join(cols)})
+            VALUES ({', '.join(placeholders)})
+            RETURNING id, started_at, completed_at
+        """
+
+        executor = conn or self.pool
+        return await executor.fetchrow(sql, *vals)
 
     async def update_completed(
         self,

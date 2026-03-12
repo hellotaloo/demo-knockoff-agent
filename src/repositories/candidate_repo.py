@@ -196,13 +196,16 @@ class CandidateRepository:
         is_test: Optional[bool] = None,
         sort_by: str = "status",
         sort_order: str = "asc"
-    ) -> List[asyncpg.Record]:
+    ) -> tuple[List[asyncpg.Record], int]:
         """
         Get candidates list with vacancy count and last activity.
         Used for the candidates overview page.
 
         Args:
             is_test: Filter by test flag. True = test candidates only, False = real candidates only, None = all
+
+        Returns:
+            Tuple of (rows, total_count)
         """
         # Build WHERE clause
         conditions = []
@@ -230,6 +233,10 @@ class CandidateRepository:
             param_idx += 1
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        # Get total count with same filters
+        count_query = f"SELECT COUNT(*) FROM ats.candidates c {where_clause}"
+        total = await self.pool.fetchval(count_query, *params)
 
         # Build ORDER BY clause
         sort_map = {
@@ -267,7 +274,8 @@ class CandidateRepository:
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
 
-        return await self.pool.fetch(query, *params)
+        rows = await self.pool.fetch(query, *params)
+        return rows, total
 
     async def get_skills(self, candidate_id: uuid.UUID) -> List[asyncpg.Record]:
         """Get all skills for a candidate."""

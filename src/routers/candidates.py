@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, HTTPException
 from src.database import get_db_pool
 from src.repositories import CandidateRepository
 from src.services import ActivityService
+from src.models.common import PaginatedResponse
 from src.models.candidate import (
     CandidateStatus,
     AvailabilityStatus,
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/candidates", tags=["Candidates"])
 
 
-@router.get("", response_model=list[CandidateListResponse])
+@router.get("", response_model=PaginatedResponse[CandidateListResponse])
 async def list_candidates(
     limit: int = Query(50, ge=1, le=100, description="Number of candidates to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -45,7 +46,7 @@ async def list_candidates(
     repo = CandidateRepository(pool)
 
     # Get candidates with computed fields
-    candidates = await repo.get_list(
+    candidates, total = await repo.get_list(
         limit=limit,
         offset=offset,
         status=status.value if status else None,
@@ -57,7 +58,7 @@ async def list_candidates(
     )
 
     if not candidates:
-        return []
+        return PaginatedResponse(items=[], total=total, limit=limit, offset=offset)
 
     # Batch load skills and vacancies for all candidates
     candidate_ids = [c["id"] for c in candidates]
@@ -93,9 +94,9 @@ async def list_candidates(
         )
 
     # Build response
-    result = []
+    items = []
     for c in candidates:
-        result.append(
+        items.append(
             CandidateListResponse(
                 id=str(c["id"]),
                 phone=c["phone"],
@@ -119,7 +120,7 @@ async def list_candidates(
             )
         )
 
-    return result
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{candidate_id}", response_model=CandidateWithApplicationsResponse)

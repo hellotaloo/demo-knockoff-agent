@@ -4,6 +4,7 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-12** — Standardized all list endpoint responses to use `PaginatedResponse<T>` envelope (`{ items, total, limit, offset }`). Changed: `GET /candidates` (was bare array → paginated), `GET /vacancies` (`vacancies` key → `items`), `GET /monitoring` (`activities` key → `items`, added `limit`/`offset`). `GET /candidacies` already used `items` key — no change needed. Vacancy `agents` field is always present (never null/missing)
 - **2026-03-11** — Added `custom_field_extraction` (JSONB) field to document type entities for LLM-driven field extraction config (top-level only); added CRUD endpoints `POST /ontology/entities`, `PATCH /ontology/entities/{id}`, `DELETE /ontology/entities/{id}`; updated list sorting: items with children first (A-Z), then leaf items (A-Z); updated `is_verifiable` on Arbeidskaart, Vrijstelling arbeidskaart, VakantieAttest, C3.2 afdruk, Grensarbeider
 - **2026-03-11** — Replaced planned workspace-scoped ontology with implemented `/ontology` endpoints: `GET /ontology` (overview), `GET /ontology/entities?type=document_type` (list with parent-child hierarchy), `GET /ontology/entities/{id}` (single entity). Document types seeded from Prato Flex with 43 parent types and 473 detail types across 4 categories (identity, certificate, financial, other)
 - **2026-03-09** — Added `documents_required: DocumentTypeResponse[]` to `DocumentCollectionDetailResponse` (resolves stored slugs into full document type objects with name, icon, category); added Lucide icons to seeded document types
@@ -460,7 +461,7 @@ interface VacancyResponse {
 }
 
 interface VacanciesListResponse {
-  vacancies: VacancyResponse[];
+  items: VacancyResponse[];
   total: number;
   limit: number;
   offset: number;
@@ -783,6 +784,13 @@ interface CandidateListResponse {
   skills: CandidateSkillResponse[];
   vacancy_count: number;
   last_activity?: string;
+}
+
+interface CandidatesListResponse {
+  items: CandidateListResponse[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 ```
 

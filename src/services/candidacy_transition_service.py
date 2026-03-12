@@ -5,11 +5,6 @@ Owns all logic for moving a candidacy through the recruitment pipeline:
   - Validates that the transition is allowed (state machine)
   - Persists the new stage + resets stage_updated_at
   - Logs a STAGE_CHANGED activity event
-  - Fires optional stage-entry side effects (agent triggers)
-
-Two directions are supported:
-  1. Agent → Stage:  call transition() after a workflow event fires
-  2. Stage → Agent:  register a handler in STAGE_ENTRY_TRIGGERS
 
 Usage:
     service = CandidacyStageTransitionService(pool)
@@ -20,7 +15,6 @@ Usage:
         metadata={"application_id": "..."},
     )
 """
-import asyncio
 import logging
 import uuid
 from typing import Optional
@@ -75,48 +69,6 @@ VALID_TRANSITIONS: dict[CandidacyStage, list[CandidacyStage]] = {
     CandidacyStage.REJECTED: [],
     CandidacyStage.WITHDRAWN: [],
 }
-
-# ---------------------------------------------------------------------------
-# Stage-entry triggers: functions called (as background tasks) after a stage
-# transition. Each function receives the candidacy record and optional metadata.
-#
-# Agents own the early funnel:
-#   PRE_SCREENING  → trigger outbound screening (voice / whatsapp)
-#   INTERVIEW_PLANNED → trigger scheduling agent (not built yet)
-# ---------------------------------------------------------------------------
-
-
-async def _trigger_outbound_screening(candidacy: asyncpg.Record, metadata: dict) -> None:
-    """
-    Trigger an outbound screening call/chat when a candidacy enters PRE_SCREENING.
-
-    TODO: extract the shared initiation logic from src/routers/outbound.py into a
-    service method and call it here. For now this is a stub that logs intent.
-    """
-    logger.info(
-        f"[STAGE_TRIGGER] PRE_SCREENING entered for candidacy {candidacy['id']} "
-        f"(candidate={candidacy['candidate_id']}, vacancy={candidacy['vacancy_id']}) "
-        f"— outbound screening trigger not yet wired (implement when ready)"
-    )
-
-
-async def _trigger_scheduling_agent(candidacy: asyncpg.Record, metadata: dict) -> None:
-    """
-    Trigger the interview scheduling agent when a candidacy enters INTERVIEW_PLANNED.
-    Stub — scheduling agent not yet built.
-    """
-    logger.info(
-        f"[STAGE_TRIGGER] INTERVIEW_PLANNED entered for candidacy {candidacy['id']} "
-        f"— scheduling agent trigger not yet wired"
-    )
-
-
-# Map: stage → async trigger function(candidacy, metadata)
-STAGE_ENTRY_TRIGGERS: dict[CandidacyStage, callable] = {
-    CandidacyStage.PRE_SCREENING: _trigger_outbound_screening,
-    CandidacyStage.INTERVIEW_PLANNED: _trigger_scheduling_agent,
-}
-
 
 class CandidacyStageTransitionService:
     """
@@ -195,10 +147,5 @@ class CandidacyStageTransitionService:
         except Exception as e:
             # Don't fail the transition if activity logging fails
             logger.error(f"Failed to log STAGE_CHANGED activity for candidacy {candidacy_id}: {e}")
-
-        # 5. Fire stage-entry trigger (if any) as a background coroutine
-        trigger = STAGE_ENTRY_TRIGGERS.get(to_stage)
-        if trigger:
-            asyncio.create_task(trigger(updated, metadata or {}))
 
         return updated

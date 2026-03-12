@@ -9,9 +9,10 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from agents.cv_analyzer import analyze_cv_base64
 from src.utils.date_utils import get_next_business_days, get_dutch_date
 
-from src.models.vacancy import VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse
+from src.models.common import PaginatedResponse
+from src.models.vacancy import VacancyResponse, VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse
 from src.models.application import ApplicationResponse, QuestionAnswerResponse, CVApplicationRequest
-from src.repositories import VacancyRepository
+from src.repositories import VacancyRepository, ApplicationRepository
 from src.services import VacancyService, ActivityService
 from src.database import get_db_pool
 from src.dependencies import get_vacancy_repo, get_vacancy_service
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Vacancies"])
 
 
-@router.get("/vacancies")
+@router.get("/vacancies", response_model=PaginatedResponse[VacancyResponse])
 async def list_vacancies(
     status: Optional[str] = Query(None, description="Filter by status"),
     source: Optional[str] = Query(None, description="Filter by source"),
@@ -39,17 +40,12 @@ async def list_vacancies(
     applicants_by_vacancy = await repo.get_applicants_by_vacancy_ids(vacancy_ids)
 
     # Build responses with applicants
-    vacancies = [
+    items = [
         service.build_vacancy_response(row, applicants_by_vacancy.get(row["id"], []))
         for row in rows
     ]
 
-    return {
-        "vacancies": vacancies,
-        "total": total,
-        "limit": limit,
-        "offset": offset
-    }
+    return PaginatedResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/vacancies/{vacancy_id}", response_model=VacancyDetailResponse)
@@ -179,45 +175,21 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     application_status = 'completed' if knockout_all_passed else 'active'
 
     # Create application
+    app_repo = ApplicationRepository(pool)
     async with pool.acquire() as conn:
         async with conn.transaction():
-            # Insert application
-            # Only set completed_at if status is 'completed'
-            # qualified = true if all knockout questions passed
-            if application_status == 'completed':
-                app_row = await conn.fetchrow(
-                    """
-                    INSERT INTO ats.applications
-                    (vacancy_id, candidate_name, candidate_phone, channel, qualified,
-                     completed_at, summary, status, is_test)
-                    VALUES ($1, $2, $3, 'cv', $4, NOW(), $5, $6, $7)
-                    RETURNING id, started_at, completed_at
-                    """,
-                    vacancy_uuid,
-                    request.candidate_name,
-                    request.candidate_phone,
-                    knockout_all_passed,  # True if all knockouts passed
-                    result.cv_summary,
-                    application_status,
-                    True  # CV applications are always in test mode for now
-                )
-            else:
-                app_row = await conn.fetchrow(
-                    """
-                    INSERT INTO ats.applications
-                    (vacancy_id, candidate_name, candidate_phone, channel, qualified,
-                     summary, status, is_test)
-                    VALUES ($1, $2, $3, 'cv', $4, $5, $6, $7)
-                    RETURNING id, started_at, completed_at
-                    """,
-                    vacancy_uuid,
-                    request.candidate_name,
-                    request.candidate_phone,
-                    False,  # Not qualified - knockouts need clarification
-                    result.cv_summary,
-                    application_status,
-                    True  # CV applications are always in test mode for now
-                )
+            app_row = await app_repo.create(
+                vacancy_id=vacancy_uuid,
+                candidate_name=request.candidate_name,
+                channel="cv",
+                candidate_phone=request.candidate_phone,
+                qualified=knockout_all_passed if application_status == "completed" else False,
+                status=application_status,
+                summary=result.cv_summary,
+                is_test=True,  # CV applications are always in test mode for now
+                set_completed_now=(application_status == "completed"),
+                conn=conn,
+            )
             application_id = app_row["id"]
             started_at = app_row["started_at"]
 

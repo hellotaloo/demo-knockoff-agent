@@ -8,17 +8,18 @@ from fastapi import APIRouter, Query
 
 from src.database import get_db_pool
 from src.services import ActivityService
+from src.models.common import PaginatedResponse
 from src.models.activity import (
     ActorType,
     ActivityEventType,
     ActivityChannel,
-    GlobalActivitiesResponse,
+    GlobalActivityResponse,
 )
 
 router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 
 
-@router.get("", response_model=GlobalActivitiesResponse)
+@router.get("", response_model=PaginatedResponse[GlobalActivityResponse])
 async def list_activities(
     actor_type: Optional[ActorType] = Query(None, description="Filter by actor type: agent, recruiter, candidate, system"),
     event_type: Optional[list[ActivityEventType]] = Query(None, description="Filter by event type(s)"),
@@ -35,10 +36,17 @@ async def list_activities(
     pool = await get_db_pool()
     service = ActivityService(pool)
 
-    return await service.get_all_activities(
+    result = await service.get_all_activities(
         actor_type=actor_type,
         event_types=event_type,
         channel=channel,
         limit=limit,
         offset=offset
+    )
+
+    return PaginatedResponse(
+        items=result.activities,
+        total=result.total,
+        limit=limit,
+        offset=offset,
     )

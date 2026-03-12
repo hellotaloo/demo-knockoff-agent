@@ -16,7 +16,7 @@ from agents.pre_screening.whatsapp import (
 from agents.candidate_simulator.agent import SimulationPersona, build_simulator_instruction
 from src.utils.random_candidate import generate_random_candidate
 from src.models.screening import ScreeningChatRequest, SimulateInterviewRequest
-from src.repositories import ConversationRepository, CandidateRepository, ApplicationRepository
+from src.repositories import ConversationRepository, CandidateRepository, ApplicationRepository, CandidacyRepository
 from src.database import get_db_pool
 from src.config import logger
 
@@ -321,6 +321,14 @@ async def complete_screening_conversation(conversation_id: str, qualified: bool 
 
     is_test = conv["is_test"] or False if "is_test" in conv.keys() else False
 
+    # Look up candidacy for this candidate+vacancy pair
+    candidacy_id = None
+    candidacy_repo = CandidacyRepository(pool)
+    candidacy_row = await candidacy_repo.find_by_candidate_and_vacancy(candidate_id, conv["vacancy_id"])
+    if candidacy_row:
+        candidacy_id = candidacy_row["id"]
+
+    app_repo = ApplicationRepository(pool)
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conv_repo.complete(conv_uuid)
@@ -329,16 +337,18 @@ async def complete_screening_conversation(conversation_id: str, qualified: bool 
                 candidate_id, conv_uuid
             )
 
-            app_row = await conn.fetchrow(
-                """
-                INSERT INTO ats.applications
-                (vacancy_id, candidate_id, pre_screening_id, candidate_name, channel,
-                 qualified, completed_at, is_test, status)
-                VALUES ($1, $2, $3, $4, 'whatsapp', $5, NOW(), $6, 'completed')
-                RETURNING id
-                """,
-                conv["vacancy_id"], candidate_id, conv["pre_screening_id"],
-                conv["candidate_name"], qualified, is_test
+            app_row = await app_repo.create(
+                vacancy_id=conv["vacancy_id"],
+                candidate_name=conv["candidate_name"],
+                channel="whatsapp",
+                candidate_id=candidate_id,
+                candidacy_id=candidacy_id,
+                pre_screening_id=conv["pre_screening_id"],
+                qualified=qualified,
+                status="completed",
+                is_test=is_test,
+                set_completed_now=True,
+                conn=conn,
             )
 
     return {

@@ -17,7 +17,7 @@ from src.database import get_db_pool
 from src.services import DemoService
 from src.services.ats_import_service import ATSImportService, get_import_progress, clear_import_progress
 from src.services.workflow_service import WorkflowService
-from src.repositories import ConversationRepository
+from src.repositories import ConversationRepository, ApplicationRepository
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                     created_skills += 1
 
             # Insert applications (with candidate_id linked)
+            app_repo = ApplicationRepository(pool)
             for app_data in applications_data:
                 vacancy_id = uuid.UUID(created_vacancies[app_data["vacancy_idx"]]["id"])
                 candidate_id = uuid.UUID(created_candidates[app_data["candidate_idx"]]["id"])
@@ -110,21 +111,22 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 # Calculate completed_at if completed
                 completed_at = None
                 if app_data["completed"]:
-                    # Use current time minus some offset for realism
                     completed_at = datetime.now() - timedelta(hours=len(created_applications) * 2)
 
-                # Convert completed boolean to status
                 status = "completed" if app_data["completed"] else "active"
 
-                row = await conn.fetchrow("""
-                    INSERT INTO ats.applications
-                    (vacancy_id, candidate_id, candidate_name, candidate_phone, channel, qualified,
-                     interaction_seconds, completed_at, status)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    RETURNING id, started_at
-                """, vacancy_id, candidate_id, candidate_name, candidate_phone, app_data["channel"],
-                    app_data["qualified"],
-                    app_data["interaction_seconds"], completed_at, status)
+                row = await app_repo.create(
+                    vacancy_id=vacancy_id,
+                    candidate_name=candidate_name,
+                    channel=app_data["channel"],
+                    candidate_phone=candidate_phone,
+                    candidate_id=candidate_id,
+                    qualified=app_data["qualified"],
+                    status=status,
+                    interaction_seconds=app_data["interaction_seconds"],
+                    completed_at=completed_at,
+                    conn=conn,
+                )
 
                 application_id = row["id"]
 

@@ -50,6 +50,7 @@ _LINKED_VACANCIES_LATERAL = """
         JOIN ats.vacancies v2 ON v2.id = c2.vacancy_id
         WHERE c2.candidate_id = c.candidate_id
           AND c2.vacancy_id IS NOT NULL
+          AND c2.id != c.id
     ) lv ON true
 """
 

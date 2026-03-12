@@ -28,6 +28,7 @@ from src.models.webhook import ElevenLabsWebhookPayload
 from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
 from src.services.call_result_processor import process_call_results
+from src.repositories import ApplicationRepository, CandidacyRepository
 from src.database import get_db_pool
 from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
 from src.services.whatsapp_service import send_whatsapp_message
@@ -182,19 +183,28 @@ async def _process_whatsapp_conversation(
         )
         logger.info(f"Created/linked candidate {candidate_id} for conversation {conversation_id}")
 
+    # Look up candidacy for this candidate+vacancy pair
+    candidacy_id = None
+    candidacy_repo = CandidacyRepository(pool)
+    candidacy_row = await candidacy_repo.find_by_candidate_and_vacancy(candidate_id, vacancy_uuid)
+    if candidacy_row:
+        candidacy_id = candidacy_row["id"]
+
     # Store basic results in transaction
+    app_repo = ApplicationRepository(pool)
     async with pool.acquire() as conn:
         async with conn.transaction():
             if existing_app:
                 application_id = existing_app["id"]
-                # Link candidate if not already linked
+                # Link candidate and candidacy if not already linked
                 await conn.execute(
                     """
                     UPDATE ats.applications
                     SET qualified = $1, interaction_seconds = $2,
                         completed_at = NOW(), channel = 'whatsapp',
                         summary = $3, interview_slot = $4, status = 'processing',
-                        candidate_id = COALESCE(candidate_id, $6)
+                        candidate_id = COALESCE(candidate_id, $6),
+                        candidacy_id = COALESCE(candidacy_id, $7)
                     WHERE id = $5
                     """,
                     qualified,
@@ -203,26 +213,25 @@ async def _process_whatsapp_conversation(
                     interview_slot,
                     application_id,
                     candidate_id,
+                    candidacy_id,
                 )
                 logger.info(f"Application {application_id} status -> processing")
             else:
-                app_row = await conn.fetchrow(
-                    """
-                    INSERT INTO ats.applications
-                    (vacancy_id, candidate_id, candidate_name, candidate_phone, channel, qualified,
-                     interaction_seconds, completed_at, summary, interview_slot, is_test, status)
-                    VALUES ($1, $2, $3, $4, 'whatsapp', $5, $6, NOW(), $7, $8, $9, 'processing')
-                    RETURNING id
-                    """,
-                    vacancy_uuid,
-                    candidate_id,
-                    candidate_name,
-                    candidate_phone,
-                    qualified,
-                    duration_seconds,
-                    "Verwerken...",
-                    interview_slot,
-                    is_test
+                app_row = await app_repo.create(
+                    vacancy_id=vacancy_uuid,
+                    candidate_name=candidate_name,
+                    channel="whatsapp",
+                    candidate_phone=candidate_phone,
+                    candidate_id=candidate_id,
+                    candidacy_id=candidacy_id,
+                    qualified=qualified,
+                    status="processing",
+                    summary="Verwerken...",
+                    interview_slot=interview_slot,
+                    interaction_seconds=duration_seconds,
+                    is_test=is_test,
+                    set_completed_now=True,
+                    conn=conn,
                 )
                 application_id = app_row["id"]
                 logger.info(f"Created new application {application_id} with candidate {candidate_id}, status=processing")
@@ -1010,7 +1019,7 @@ async def elevenlabs_webhook(request: Request):
     screening_conv = await pool.fetchrow(
         """
         SELECT sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone, sc.candidate_name, sc.is_test,
-               sc.application_id, v.title as vacancy_title
+               sc.application_id, sc.candidate_id, v.title as vacancy_title
         FROM agents.pre_screening_sessions sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
@@ -1138,6 +1147,16 @@ async def elevenlabs_webhook(request: Request):
             logger.warning(f"Could not parse interview slot for voice: {e}")
             interview_slot = f"{scheduled['selected_date']} {scheduled['selected_time']}"
 
+    # Look up candidacy for this candidate+vacancy pair
+    voice_candidate_id = screening_conv["candidate_id"]
+    voice_candidacy_id = None
+    if voice_candidate_id:
+        candidacy_repo = CandidacyRepository(pool)
+        candidacy_row = await candidacy_repo.find_by_candidate_and_vacancy(voice_candidate_id, vacancy_id)
+        if candidacy_row:
+            voice_candidacy_id = candidacy_row["id"]
+
+    app_repo = ApplicationRepository(pool)
     async with pool.acquire() as conn:
         async with conn.transaction():
             # Use the existing_app we found earlier (already set to 'processing')
@@ -1149,7 +1168,8 @@ async def elevenlabs_webhook(request: Request):
                     UPDATE ats.applications
                     SET qualified = $1, interaction_seconds = $2,
                         completed_at = NOW(), conversation_id = $3, channel = 'voice',
-                        summary = $4, interview_slot = $5, status = 'completed'
+                        summary = $4, interview_slot = $5, status = 'completed',
+                        candidacy_id = COALESCE(candidacy_id, $7)
                     WHERE id = $6
                     """,
                     result.overall_passed,
@@ -1157,27 +1177,27 @@ async def elevenlabs_webhook(request: Request):
                     data.conversation_id,
                     result.summary,
                     interview_slot,
-                    application_id
+                    application_id,
+                    voice_candidacy_id,
                 )
                 logger.info(f"Updated existing application {application_id} for phone {candidate_phone} with status=completed")
             else:
                 # Create new application record
-                app_row = await conn.fetchrow(
-                    """
-                    INSERT INTO ats.applications
-                    (vacancy_id, candidate_name, candidate_phone, channel, qualified,
-                     interaction_seconds, completed_at, conversation_id, summary, interview_slot, status)
-                    VALUES ($1, $2, $3, 'voice', $4, $5, NOW(), $6, $7, $8, 'completed')
-                    RETURNING id
-                    """,
-                    vacancy_id,
-                    candidate_name,
-                    candidate_phone,
-                    result.overall_passed,
-                    call_duration,
-                    data.conversation_id,
-                    result.summary,
-                    interview_slot
+                app_row = await app_repo.create(
+                    vacancy_id=vacancy_id,
+                    candidate_name=candidate_name,
+                    channel="voice",
+                    candidate_phone=candidate_phone,
+                    candidate_id=voice_candidate_id,
+                    candidacy_id=voice_candidacy_id,
+                    conversation_id=data.conversation_id,
+                    qualified=result.overall_passed,
+                    status="completed",
+                    summary=result.summary,
+                    interview_slot=interview_slot,
+                    interaction_seconds=call_duration,
+                    set_completed_now=True,
+                    conn=conn,
                 )
                 application_id = app_row["id"]
                 logger.info(f"Created new application {application_id}")
