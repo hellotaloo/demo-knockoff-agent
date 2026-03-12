@@ -184,7 +184,11 @@
       "Bash(npx next:*)",
       "Bash(.venv/bin/python -c \"import PIL; print\\(''pillow ok''\\)\")",
       "Bash(.venv/bin/python -c \"from google import genai; print\\(''genai ok''\\)\")",
-      "Bash(cat \"/Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\(dashboard\\)/records/mock-data.ts\")"
+      "Bash(cat \"/Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\(dashboard\\)/records/mock-data.ts\")",
+      "Bash(gtimeout 8 uvicorn app:app --port 8080)",
+      "Bash(python -c \":*)",
+      "Bash(sqlite3 /tmp/schema.db \".schema ats_applications 2>/dev/null\")",
+      "Bash(psql --version)"
     ],
     "defaultMode": "acceptEdits"
   },

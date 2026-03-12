@@ -254,7 +254,7 @@ class CandidateRepository:
             FROM ats.candidates c
             LEFT JOIN (
                 SELECT candidate_id, COUNT(DISTINCT vacancy_id) as vacancy_count
-                FROM ats.applications
+                FROM ats.candidacies
                 GROUP BY candidate_id
             ) app_stats ON app_stats.candidate_id = c.id
             LEFT JOIN (
@@ -289,6 +289,21 @@ class CandidateRepository:
             SELECT * FROM ats.candidate_skills
             WHERE candidate_id = ANY($1)
             ORDER BY candidate_id, score DESC NULLS LAST, skill_name
+            """,
+            candidate_ids
+        )
+
+    async def get_vacancies_for_candidates(self, candidate_ids: List[uuid.UUID]) -> List[asyncpg.Record]:
+        """Get linked vacancies (via candidacies) for multiple candidates."""
+        if not candidate_ids:
+            return []
+        return await self.pool.fetch(
+            """
+            SELECT c.candidate_id, v.id, v.title, v.company, v.is_open_application
+            FROM ats.candidacies c
+            JOIN ats.vacancies v ON v.id = c.vacancy_id
+            WHERE c.candidate_id = ANY($1)
+            ORDER BY c.candidate_id, c.created_at DESC
             """,
             candidate_ids
         )

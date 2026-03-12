@@ -10,7 +10,7 @@ import uuid
 import logging
 from datetime import datetime, timedelta, date
 from fastapi import APIRouter, Query
-from data.fixtures import load_candidates, load_applications, load_pre_screenings, load_activities, load_candidacies
+from data.fixtures import load_candidates, load_applications, load_pre_screenings, load_activities
 import json
 
 from src.database import get_db_pool
@@ -227,31 +227,8 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 
                 created_activities += 1
 
-    # ---- Seed candidacies (pipeline positions) ----
-    created_candidacies = 0
-    candidacies_data = load_candidacies()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            for cand_data in candidacies_data:
-                candidate_idx = cand_data["candidate_idx"]
-                vacancy_idx = cand_data.get("vacancy_idx")
-
-                if candidate_idx >= len(created_candidates):
-                    continue
-
-                candidate_id = uuid.UUID(created_candidates[candidate_idx]["id"])
-                if vacancy_idx is None or vacancy_idx >= len(created_vacancies):
-                    continue
-                vacancy_id = uuid.UUID(created_vacancies[vacancy_idx]["id"])
-
-                await conn.execute("""
-                    INSERT INTO ats.candidacies
-                        (workspace_id, candidate_id, vacancy_id, stage, source)
-                    VALUES ($1, $2, $3, $4, $5)
-                """, DEFAULT_WORKSPACE_ID, candidate_id, vacancy_id,
-                    cand_data["stage"], cand_data.get("source"))
-
-                created_candidacies += 1
+    # Candidacies are seeded after ATS import (in ATSImportService._seed_candidacies_from_fixtures)
+    # because vacancies don't exist yet at this point.
 
     # ---- Seed default office location and assign to all vacancies ----
     office_location_id = None

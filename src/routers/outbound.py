@@ -185,25 +185,6 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
             )
             logger.info(f"📋 Created vacancy candidacy {candidacy_row['id']} for candidate {candidate_id}")
 
-        # 2. Open-application candidacy so candidate appears in main pipeline view
-        open_app_vacancy_id = await pool.fetchval(
-            "SELECT id FROM ats.vacancies WHERE workspace_id = $1 AND is_open_application = true LIMIT 1",
-            DEFAULT_WORKSPACE_ID,
-        )
-        if open_app_vacancy_id:
-            open_app_exists = await pool.fetchval(
-                "SELECT 1 FROM ats.candidacies WHERE candidate_id = $1 AND vacancy_id = $2",
-                candidate_id, open_app_vacancy_id,
-            )
-            if not open_app_exists:
-                candidacy_row = await candidacy_repo.create(
-                    workspace_id=DEFAULT_WORKSPACE_ID,
-                    candidate_id=candidate_id,
-                    vacancy_id=open_app_vacancy_id,
-                    stage="pre_screening",
-                    source=channel_source,
-                )
-                logger.info(f"📋 Created open-application candidacy {candidacy_row['id']} for candidate {candidate_id}")
     except Exception as e:
         logger.error(f"Failed to create candidacy for candidate {candidate_id}: {e}")
         # Non-fatal: screening can proceed without candidacy

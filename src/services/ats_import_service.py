@@ -295,6 +295,53 @@ class ATSImportService:
             f"{published_count} published, {failed_count} failed"
         )
 
+        # Seed candidacies for existing candidates that don't have one yet.
+        # This handles the case where candidates were seeded before vacancies were imported.
+        await self._seed_candidacies_from_fixtures(workspace_id)
+
+    async def _seed_candidacies_from_fixtures(self, workspace_id: UUID):
+        """Create candidacies from fixture data for candidates that don't have any yet."""
+        from data.fixtures import load_candidacies
+
+        candidacies_data = load_candidacies()
+        if not candidacies_data:
+            return
+
+        async with self.pool.acquire() as conn:
+            candidates = await conn.fetch(
+                "SELECT id FROM ats.candidates WHERE workspace_id = $1 ORDER BY created_at, id",
+                workspace_id,
+            )
+            vacancies = await conn.fetch(
+                "SELECT id FROM ats.vacancies WHERE workspace_id = $1 ORDER BY created_at, id",
+                workspace_id,
+            )
+            if not candidates or not vacancies:
+                return
+
+            for cand_data in candidacies_data:
+                candidate_idx = cand_data["candidate_idx"]
+                vacancy_idx = cand_data.get("vacancy_idx")
+
+                if candidate_idx >= len(candidates) or vacancy_idx is None or vacancy_idx >= len(vacancies):
+                    continue
+
+                candidate_id = candidates[candidate_idx]["id"]
+                vacancy_id = vacancies[vacancy_idx]["id"]
+
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM ats.candidacies WHERE candidate_id = $1 AND vacancy_id = $2",
+                    candidate_id, vacancy_id,
+                )
+                if not exists:
+                    await conn.execute("""
+                        INSERT INTO ats.candidacies (workspace_id, candidate_id, vacancy_id, stage, source)
+                        VALUES ($1, $2, $3, $4, $5)
+                    """, workspace_id, candidate_id, vacancy_id,
+                        cand_data["stage"], cand_data.get("source"))
+
+            logger.info("Seeded candidacies from fixture data after ATS import")
+
     async def import_and_setup_documents(self, workspace_id: UUID):
         """
         Background import: imports ATS data, then creates document collection

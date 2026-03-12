@@ -15,6 +15,7 @@ from src.models.candidate import (
     AvailabilityStatus,
     CandidateListResponse,
     CandidateSkillResponse,
+    CandidateVacancyLink,
     CandidateWithApplicationsResponse,
     CandidateApplicationSummary,
 )
@@ -58,9 +59,10 @@ async def list_candidates(
     if not candidates:
         return []
 
-    # Batch load skills for all candidates
+    # Batch load skills and vacancies for all candidates
     candidate_ids = [c["id"] for c in candidates]
     all_skills = await repo.get_skills_for_candidates(candidate_ids)
+    all_vacancies = await repo.get_vacancies_for_candidates(candidate_ids)
 
     # Group skills by candidate_id
     skills_by_candidate = defaultdict(list)
@@ -75,6 +77,18 @@ async def list_candidates(
                 evidence=skill["evidence"],
                 source=skill["source"] or "manual",
                 created_at=skill["created_at"],
+            )
+        )
+
+    # Group vacancies by candidate_id
+    vacancies_by_candidate = defaultdict(list)
+    for v in all_vacancies:
+        vacancies_by_candidate[v["candidate_id"]].append(
+            CandidateVacancyLink(
+                id=str(v["id"]),
+                title=v["title"],
+                company=v["company"],
+                is_open_application=v["is_open_application"] or False,
             )
         )
 
@@ -99,6 +113,7 @@ async def list_candidates(
                 created_at=c["created_at"],
                 updated_at=c["updated_at"],
                 skills=skills_by_candidate.get(c["id"], []),
+                vacancies=vacancies_by_candidate.get(c["id"], []),
                 vacancy_count=c["vacancy_count"],
                 last_activity=c["last_activity"],
             )

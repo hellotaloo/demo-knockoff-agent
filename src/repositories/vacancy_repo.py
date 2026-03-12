@@ -67,7 +67,7 @@ class VacancyRepository:
                    COALESCE(ps.voice_enabled, false) as voice_enabled,
                    COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
                    COALESCE(ps.cv_enabled, false) as cv_enabled,
-                   COALESCE(app_stats.candidates_count, 0) as candidates_count,
+                   COALESCE(cand_stats.candidacy_count, 0) as candidates_count,
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
                    app_stats.avg_score,
@@ -78,7 +78,6 @@ class VacancyRepository:
             LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
-                    COUNT(*) as candidates_count,
                     COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
                     COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
                     MAX(COALESCE(completed_at, started_at)) as last_activity_at,
@@ -91,6 +90,11 @@ class VacancyRepository:
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) as candidacy_count
+                FROM ats.candidacies cd
+                WHERE cd.vacancy_id = v.id
+            ) cand_stats ON true
             {where_clause}
             ORDER BY v.created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -122,7 +126,7 @@ class VacancyRepository:
                    COALESCE(ps.voice_enabled, false) as voice_enabled,
                    COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
                    COALESCE(ps.cv_enabled, false) as cv_enabled,
-                   COALESCE(app_stats.candidates_count, 0) as candidates_count,
+                   COALESCE(cand_stats.candidacy_count, 0) as candidates_count,
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
                    app_stats.avg_score,
@@ -133,7 +137,6 @@ class VacancyRepository:
             LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
-                    COUNT(*) as candidates_count,
                     COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
                     COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
                     MAX(COALESCE(completed_at, started_at)) as last_activity_at,
@@ -146,6 +149,11 @@ class VacancyRepository:
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) as candidacy_count
+                FROM ats.candidacies cd
+                WHERE cd.vacancy_id = v.id
+            ) cand_stats ON true
             WHERE v.id = $1
         """
 

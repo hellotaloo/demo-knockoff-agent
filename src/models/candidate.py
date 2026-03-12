@@ -85,9 +85,18 @@ class CandidateSkillResponse(BaseModel):
         from_attributes = True
 
 
+class CandidateVacancyLink(BaseModel):
+    """A vacancy linked to a candidate via candidacy."""
+    id: str
+    title: str
+    company: Optional[str] = None
+    is_open_application: bool = False
+
+
 class CandidateListResponse(CandidateResponse):
     """Response model for candidate list (includes computed fields)."""
     skills: List[CandidateSkillResponse] = []
+    vacancies: List[CandidateVacancyLink] = []
     vacancy_count: int = 0
     last_activity: Optional[datetime] = None
 
