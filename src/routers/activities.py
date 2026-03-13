@@ -313,6 +313,7 @@ def _get_workflow_steps(workflow_type: str, current_step: str, status: str, cont
             ("complete", "Afgerond"),
         ],
         "document_collection": [
+            ("generating_plan", "Plan genereren"),
             ("plan_generated", "Plan opgesteld"),
             ("collecting", "Documenten verzamelen"),
             ("reviewing_skipped", "Opvolging"),

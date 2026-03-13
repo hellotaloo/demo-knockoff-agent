@@ -342,6 +342,21 @@ async def abandon_collection(
     return {"success": True}
 
 
+@router.post("/collections/{collection_id}/tasks/{task_slug}/trigger")
+async def trigger_task_now(
+    workspace_id: str = Path(...),
+    collection_id: str = Path(...),
+    task_slug: str = Path(..., description="Slug of the task to trigger immediately"),
+    user: UserProfile = Depends(get_current_user),
+    service: DocumentCollectionService = Depends(get_dc_service),
+):
+    """Trigger a scheduled task immediately (e.g. send a day contract now instead of waiting)."""
+    ws_uuid = parse_uuid(workspace_id, field="workspace_id")
+    coll_uuid = parse_uuid(collection_id, field="collection_id")
+    await service.trigger_task_now(ws_uuid, user.id, coll_uuid, task_slug)
+    return {"success": True}
+
+
 # =============================================================================
 # Start Collection
 # =============================================================================

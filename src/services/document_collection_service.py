@@ -432,6 +432,7 @@ class DocumentCollectionService:
             vacancy_title=collection.get("vacancy_title"),
             application_id=str(collection["application_id"]) if collection.get("application_id") else None,
             candidacy_stage=collection.get("candidacy_stage"),
+            goal=collection.get("goal", "collect_basic"),
             candidate_name=collection["candidate_name"],
             candidate_phone=collection.get("candidate_phone"),
             status=collection["status"],
@@ -560,12 +561,70 @@ class DocumentCollectionService:
                 value=value,
             ))
 
+        # Friendly labels for known task slugs
+        TASK_LABELS = {
+            "contract_signing_day": "Dagcontract genereren",
+            "contract_signing": "Contract ondertekening",
+            "medical_screening": "Medisch onderzoek inplannen",
+        }
+
+        # Tasks from the plan (e.g. medical screening, contract signing)
+        for task in (plan.agent_managed_tasks or []):
+            slug = task.get("slug", "") if isinstance(task, dict) else str(task)
+            name = TASK_LABELS.get(slug) or (task.get("name") if isinstance(task, dict) else None) or slug
+            priority = task.get("priority", "required") if isinstance(task, dict) else "required"
+
+            raw_status = item_statuses.get(slug, "pending")
+            value = None
+            scheduled_at = None
+            if isinstance(raw_status, dict):
+                value = raw_status.get("value")
+                scheduled_at = raw_status.get("scheduled_at")
+                raw_status = raw_status.get("status", "pending")
+
+            items.append(CollectionItemStatusResponse(
+                slug=slug,
+                name=name,
+                type="task",
+                priority=priority,
+                status=raw_status,
+                value=value,
+                scheduled_at=scheduled_at,
+            ))
+
+        # Final step (contract signing follow-up) — add as task if present
+        final_step = plan.final_step
+        if final_step and isinstance(final_step, dict):
+            slug = final_step.get("action", "contract_signing")
+            # Don't duplicate if already in agent_managed_tasks
+            existing_slugs = {i.slug for i in items if i.type == "task"}
+            if slug not in existing_slugs:
+                name = TASK_LABELS.get(slug, slug)
+                raw_status = item_statuses.get(slug, "pending")
+                value = None
+                scheduled_at = None
+                if isinstance(raw_status, dict):
+                    value = raw_status.get("value")
+                    scheduled_at = raw_status.get("scheduled_at")
+                    raw_status = raw_status.get("status", "pending")
+
+                items.append(CollectionItemStatusResponse(
+                    slug=slug,
+                    name=name,
+                    type="task",
+                    priority="required",
+                    status=raw_status,
+                    value=value,
+                    scheduled_at=scheduled_at,
+                ))
+
         return items
 
     async def _get_workflow_steps(self, collection_id: str) -> list[WorkflowStepResponse]:
         """Look up workflow progress for a document collection."""
         # Document collection workflow step sequence
         step_sequence = [
+            ("generating_plan", "Plan genereren"),
             ("plan_generated", "Plan opgesteld"),
             ("collecting", "Documenten verzamelen"),
             ("reviewing_skipped", "Opvolging"),
@@ -616,6 +675,43 @@ class DocumentCollectionService:
             raise NotFoundError("Document collection", str(collection_id))
 
         await self.collection_repo.update_status(collection_id, "abandoned")
+
+    async def trigger_task_now(
+        self, workspace_id: UUID, user_id: UUID, collection_id: UUID, task_slug: str
+    ) -> None:
+        """
+        Trigger a scheduled task immediately.
+
+        Updates the agent_state to clear scheduled_at and set status to 'triggered',
+        signalling the agent to execute the task on next run.
+        """
+        await self._check_write_access(workspace_id, user_id)
+
+        collection = await self.collection_repo.get_by_id(collection_id)
+        if not collection or collection["workspace_id"] != workspace_id:
+            raise NotFoundError("Document collection", str(collection_id))
+
+        agent_state = collection.get("agent_state") or {}
+        if isinstance(agent_state, str):
+            agent_state = json.loads(agent_state)
+
+        item_statuses = agent_state.get("item_statuses", {})
+        task_status = item_statuses.get(task_slug, {})
+
+        if isinstance(task_status, str):
+            task_status = {"status": task_status}
+
+        task_status["status"] = "triggered"
+        task_status.pop("scheduled_at", None)
+
+        item_statuses[task_slug] = task_status
+        agent_state["item_statuses"] = item_statuses
+
+        await self.pool.execute(
+            "UPDATE agents.document_collections SET agent_state = $1, updated_at = now() WHERE id = $2",
+            json.dumps(agent_state) if isinstance(agent_state, dict) else agent_state,
+            collection_id,
+        )
 
     async def start_collection(
         self, workspace_id: UUID, user_id: UUID,
@@ -768,6 +864,7 @@ class DocumentCollectionService:
             vacancy_title=row.get("vacancy_title"),
             application_id=str(row["application_id"]) if row["application_id"] else None,
             candidacy_stage=row.get("candidacy_stage"),
+            goal=row.get("goal", "collect_basic"),
             candidate_name=row["candidate_name"],
             candidate_phone=row.get("candidate_phone"),
             status=row["status"],
@@ -811,6 +908,7 @@ class DocumentCollectionService:
             vacancy_title=row.get("vacancy_title"),
             application_id=str(row["application_id"]) if row["application_id"] else None,
             candidacy_stage=row.get("candidacy_stage"),
+            goal=row.get("goal", "collect_basic"),
             candidate_name=row["candidate_name"],
             candidate_phone=row.get("candidate_phone"),
             status=row["status"],

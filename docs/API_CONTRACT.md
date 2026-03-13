@@ -4,6 +4,9 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-13** — Added `vacancies` and `candidates` fields to `NavigationCountsResponse` (`GET /agents/counts`). Endpoint now reads from denormalized `ats.navigation_counts` table kept in sync by DB triggers for Supabase Realtime support
+- **2026-03-13** — Added `"task"` as third `CollectionItemStatusResponse.type` value. Tasks (e.g. medical screening, contract signing) are sourced from `plan.agent_managed_tasks` and tracked in `agent_state.item_statuses` like documents and attributes
+- **2026-03-13** — Added `goal` field to `DocumentCollectionResponse` (and all derived responses). Values: `"collect_basic"` (standard onboarding docs & info), `"collect_and_sign"` (collect + Yousign contract), `"document_renewal"` (re-collect expired document). Defaults to `"collect_basic"`. Stored as column on `agents.document_collections`
 - **2026-03-13** — Restructured `DocumentCollectionFullDetailResponse`: replaced `plan` (full agent script) + `document_statuses` (docs only) with `summary`/`deadline_note` (plan header fields) + `collection_items` (unified checklist of documents AND attributes with status). Renamed `CollectionDocumentStatusResponse` → `CollectionItemStatusResponse` with new fields: `type` (`"document"` | `"attribute"`), `value` (collected attribute value). Removed `CollectionPlanResponse`, `CollectionPlanDocumentResponse`, `CollectionPlanStepResponse` from public API (internal agent detail)
 - **2026-03-13** — Added `candidacy_stage` field to `DocumentCollectionResponse` (and all derived detail responses). Joined from `ats.candidacies` via `candidacy_id` — shows current pipeline stage (`new`, `pre_screening`, `qualified`, ..., `placed`, `rejected`, `withdrawn`). Null when no candidacy is linked
 - **2026-03-13** — Added `GET /workspaces/{workspace_id}/document-collection/collections/{collection_id}/detail` endpoint returning `DocumentCollectionFullDetailResponse` with enriched collection detail, unified `collection_items` checklist, `workflow_steps` progress bar, and `candidacy_id`/`candidate_id` links. New types: `CollectionItemStatusResponse`, `WorkflowStepResponse`, `DocumentCollectionFullDetailResponse`
@@ -1233,6 +1236,7 @@ interface NavigationCountsResponse {
   prescreening: {
     new: number;
     generated: number;
+    published: number;
     archived: number;
   };
   preonboarding: {
@@ -1242,16 +1246,27 @@ interface NavigationCountsResponse {
   };
   activities: {
     active: number;   // Active workflows (not stuck)
-    stuck: number;    // Workflows with no update for > 1 hour
+    stuck: number;    // Workflows with SLA breached (next_action_at <= now)
+  };
+  vacancies: {
+    active: number;   // Non-closed/filled vacancies
+    archived: number; // Closed/filled vacancies
+  };
+  candidates: {
+    total: number;    // All candidates
+    archived: number; // Inactive/placed candidates
   };
 }
 ```
 
+Counts are read from the denormalized `ats.navigation_counts` table, which is kept in sync by PostgreSQL triggers on `ats.vacancies`, `agents.pre_screenings`, `agents.workflows`, and `ats.candidates`. The table is included in the Supabase Realtime publication for instant frontend updates.
+
 ```json
 {
   "prescreening": {
-    "new": 7,
+    "new": 0,
     "generated": 3,
+    "published": 8,
     "archived": 2
   },
   "preonboarding": {
@@ -1262,6 +1277,14 @@ interface NavigationCountsResponse {
   "activities": {
     "active": 5,
     "stuck": 2
+  },
+  "vacancies": {
+    "active": 8,
+    "archived": 0
+  },
+  "candidates": {
+    "total": 25,
+    "archived": 0
   }
 }
 ```
@@ -3009,6 +3032,7 @@ interface DocumentCollectionResponse {
   vacancy_title?: string;            // Vacancy title (joined from vacancies table)
   application_id?: string;
   candidacy_stage?: string;          // Pipeline stage: "new" | "pre_screening" | "qualified" | "interview_planned" | "interview_done" | "offer" | "placed" | "rejected" | "withdrawn"
+  goal: string;                    // "collect_basic" | "collect_and_sign" | "document_renewal"
   candidate_name: string;
   candidate_phone?: string;
   status: string;                // "active" | "completed" | "needs_review" | "abandoned"
@@ -3045,7 +3069,7 @@ interface DocumentCollectionFullDetailResponse extends DocumentCollectionRespons
 interface CollectionItemStatusResponse {
   slug: string;                  // e.g. "id_card", "iban", "address_city"
   name: string;                  // e.g. "ID-kaart", "IBAN", "Woonplaats"
-  type: string;                  // "document" | "attribute"
+  type: string;                  // "document" | "attribute" | "task"
   priority: string;              // "required" | "recommended"
   status: string;                // "pending" | "asked" | "received" | "verified" | "failed" | "skipped"
   value?: string;                // For attributes: the collected value (e.g. "BE68 5390 0754 7034")

@@ -35,6 +35,7 @@ class DocumentCollectionPlannerService:
         vacancy_id: uuid.UUID,
         workspace_id: uuid.UUID = DEFAULT_WORKSPACE_ID,
         triggered_by: str = "system",
+        candidacy_stage: str = "offer",
     ) -> Optional[uuid.UUID]:
         """
         Generate a collection plan and store it as a document_collection record.
@@ -63,6 +64,27 @@ class DocumentCollectionPlannerService:
         candidate_name = candidate["full_name"] or "Onbekend"
         candidate_phone = candidate["phone"]
 
+        # Look up placement for this candidacy (regime, start_date, create_contract)
+        placement = await self.pool.fetchrow(
+            """
+            SELECT start_date, regime, contract_id
+            FROM ats.placements
+            WHERE candidate_id = $1 AND vacancy_id = $2
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            candidate_id, vacancy_id,
+        )
+
+        start_date = placement["start_date"] if placement else None
+        regime = placement["regime"] if placement else None
+        # Goal depends on candidacy stage:
+        # - offer stage + placement → collect_and_sign (docs + contract)
+        # - earlier stages → collect_basic (just docs, to win time)
+        if candidacy_stage == "offer" and placement:
+            goal = "collect_and_sign"
+        else:
+            goal = "collect_basic"
+
         # Check if there's already an active collection for this candidacy
         existing = await self.pool.fetchrow(
             """
@@ -75,26 +97,15 @@ class DocumentCollectionPlannerService:
             logger.info(f"Active collection already exists for candidacy {candidacy_id}: {existing['id']}")
             return existing["id"]
 
-        # Generate the plan via LLM
-        try:
-            plan = await generate_collection_plan(
-                pool=self.pool,
-                vacancy_id=vacancy_id,
-                candidate_id=candidate_id,
-                workspace_id=workspace_id,
-            )
-        except Exception as e:
-            logger.error(f"Failed to generate collection plan for candidacy {candidacy_id}: {e}")
-            return None
-
-        # Store the plan as a new document_collection record
+        # ── Step 1: Create collection row + workflow IMMEDIATELY ─────────
+        # This makes the collection visible in the UI right away,
+        # before the LLM generates the plan (which takes 30-60s).
         row = await self.pool.fetchrow(
             """
             INSERT INTO agents.document_collections
                 (workspace_id, vacancy_id, candidate_id, candidacy_id,
-                 candidate_name, candidate_phone, status, channel,
-                 collection_plan, documents_required)
-            VALUES ($1, $2, $3, $4, $5, $6, 'active', 'whatsapp', $7::jsonb, $8::jsonb)
+                 candidate_name, candidate_phone, status, channel, goal)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', 'whatsapp', $7)
             RETURNING id
             """,
             workspace_id,
@@ -103,11 +114,92 @@ class DocumentCollectionPlannerService:
             candidacy_id,
             candidate_name,
             candidate_phone,
-            json.dumps(plan),
-            json.dumps(plan.get("documents_to_collect", [])),
+            goal,
         )
 
         collection_id = row["id"]
+
+        logger.info(
+            f"Collection row created (plan pending): collection={collection_id}, "
+            f"candidacy={candidacy_id}, candidate={candidate_name}"
+        )
+
+        # Create workflow immediately so it's visible in the UI
+        try:
+            from src.workflows import get_orchestrator
+
+            vacancy_row = await self.pool.fetchrow(
+                "SELECT title FROM ats.vacancies WHERE id = $1", vacancy_id
+            )
+            vacancy_title = vacancy_row["title"] if vacancy_row else "Onbekend"
+
+            orchestrator = await get_orchestrator()
+            workflow_id = await orchestrator.create_workflow(
+                workflow_type="document_collection",
+                context={
+                    "collection_id": str(collection_id),
+                    "candidacy_id": str(candidacy_id),
+                    "candidate_id": str(candidate_id),
+                    "candidate_name": candidate_name,
+                    "candidate_phone": candidate_phone,
+                    "vacancy_id": str(vacancy_id),
+                    "vacancy_title": vacancy_title,
+                    "triggered_by": triggered_by,
+                },
+                initial_step="generating_plan",
+                timeout_seconds=7 * 24 * 3600,  # 7 day SLA for document collection
+            )
+            logger.info(f"Created workflow {workflow_id} for document collection {collection_id}")
+        except Exception as e:
+            logger.error(f"Failed to create workflow for collection {collection_id}: {e}")
+
+        # ── Step 2: Generate plan via LLM (slow, 30-60s) ────────────────
+        try:
+            plan = await generate_collection_plan(
+                pool=self.pool,
+                vacancy_id=vacancy_id,
+                candidate_id=candidate_id,
+                workspace_id=workspace_id,
+                start_date=start_date,
+                regime=regime,
+            )
+        except Exception as e:
+            logger.error(f"Failed to generate collection plan for candidacy {candidacy_id}: {e}")
+            # Collection row exists but has no plan — recruiter sees it as "pending"
+            return collection_id
+
+        # ── Step 3: Update collection with the generated plan ────────────
+        # Build initial item_statuses for tasks with known schedules
+        initial_item_statuses = {}
+        for task in plan.get("agent_managed_tasks", []):
+            task_slug = task.get("slug", "") if isinstance(task, dict) else str(task)
+            if task_slug == "contract_signing_day" and start_date:
+                # Day contracts are scheduled at 8:00 AM Brussels time on the start date
+                from datetime import datetime, time, timezone
+                from zoneinfo import ZoneInfo
+                cet = ZoneInfo("Europe/Brussels")
+                scheduled_dt = datetime.combine(start_date, time(8, 0), tzinfo=cet).astimezone(timezone.utc)
+                initial_item_statuses[task_slug] = {
+                    "status": "pending",
+                    "scheduled_at": scheduled_dt.isoformat(),
+                }
+
+        agent_state = {"item_statuses": initial_item_statuses} if initial_item_statuses else None
+
+        await self.pool.execute(
+            """
+            UPDATE agents.document_collections
+            SET collection_plan = $1::jsonb,
+                documents_required = $2::jsonb,
+                agent_state = COALESCE($4::jsonb, agent_state)
+            WHERE id = $3
+            """,
+            json.dumps(plan),
+            json.dumps(plan.get("documents_to_collect", [])),
+            collection_id,
+            json.dumps(agent_state) if agent_state else None,
+        )
+
         summary = plan.get("summary", "Verzamelplan gegenereerd")
 
         logger.info(
@@ -135,33 +227,13 @@ class DocumentCollectionPlannerService:
         except Exception as e:
             logger.error(f"Failed to log activity for collection plan: {e}")
 
-        # Create workflow to track the document collection
+        # Advance workflow from generating_plan → plan_generated
         try:
-            from src.workflows import get_orchestrator
-
-            vacancy_row = await self.pool.fetchrow(
-                "SELECT title FROM ats.vacancies WHERE id = $1", vacancy_id
-            )
-            vacancy_title = vacancy_row["title"] if vacancy_row else "Onbekend"
-
             orchestrator = await get_orchestrator()
-            workflow_id = await orchestrator.create_workflow(
-                workflow_type="document_collection",
-                context={
-                    "collection_id": str(collection_id),
-                    "candidacy_id": str(candidacy_id),
-                    "candidate_id": str(candidate_id),
-                    "candidate_name": candidate_name,
-                    "candidate_phone": candidate_phone,
-                    "vacancy_id": str(vacancy_id),
-                    "vacancy_title": vacancy_title,
-                    "triggered_by": triggered_by,
-                },
-                initial_step="plan_generated",
-                timeout_seconds=7 * 24 * 3600,  # 7 day SLA for document collection
-            )
-            logger.info(f"Created workflow {workflow_id} for document collection {collection_id}")
+            wf = await orchestrator.find_by_context("collection_id", str(collection_id))
+            if wf:
+                await orchestrator.service.update_step(wf["id"], "plan_generated")
         except Exception as e:
-            logger.error(f"Failed to create workflow for collection {collection_id}: {e}")
+            logger.error(f"Failed to advance workflow for collection {collection_id}: {e}")
 
         return collection_id

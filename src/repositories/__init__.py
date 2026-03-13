@@ -19,6 +19,7 @@ from .short_link_repo import ShortLinkRepository
 from .candidacy_repo import CandidacyRepository
 from .candidate_attribute_type_repo import CandidateAttributeTypeRepository
 from .candidate_attribute_repo import CandidateAttributeRepository
+from .placement_repo import PlacementRepository
 
 __all__ = [
     "VacancyRepository",
@@ -39,4 +40,5 @@ __all__ = [
     "CandidacyRepository",
     "CandidateAttributeTypeRepository",
     "CandidateAttributeRepository",
+    "PlacementRepository",
 ]

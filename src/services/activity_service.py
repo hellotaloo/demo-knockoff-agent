@@ -162,6 +162,8 @@ class ActivityService:
         actor_type: Optional[ActorType] = None,
         event_types: Optional[list[ActivityEventType]] = None,
         channel: Optional[ActivityChannel] = None,
+        candidate_id: Optional[str] = None,
+        vacancy_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> GlobalActivitiesResponse:
@@ -172,6 +174,8 @@ class ActivityService:
             actor_type: Optional filter by actor type (agent, recruiter, candidate, system)
             event_types: Optional filter for specific event types
             channel: Optional filter by channel (voice, whatsapp, cv, web)
+            candidate_id: Optional filter by candidate UUID
+            vacancy_id: Optional filter by vacancy UUID
             limit: Max number of activities to return
             offset: Pagination offset
 
@@ -184,6 +188,8 @@ class ActivityService:
             actor_type=actor_type.value if actor_type else None,
             event_types=type_values,
             channel=channel.value if channel else None,
+            candidate_id=candidate_id,
+            vacancy_id=vacancy_id,
             limit=limit,
             offset=offset
         )

@@ -117,10 +117,12 @@ class DashboardStatsResponse(BaseModel):
 
 
 class NavigationCountsResponse(BaseModel):
-    """Lightweight counts for navigation sidebar."""
+    """Lightweight counts for navigation sidebar and view tabs."""
     prescreening: dict[str, int]  # {"new": 7, "generated": 3, "archived": 2}
     preonboarding: dict[str, int]  # {"new": 7, "generated": 0, "archived": 2}
     activities: dict[str, int]  # {"active": 5, "stuck": 2}
+    vacancies: dict[str, int] = {}  # {"active": 8, "archived": 0}
+    candidates: dict[str, int] = {}  # {"total": 25, "archived": 0}
 
 
 class VacancyDetailResponse(VacancyResponse):

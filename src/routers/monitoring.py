@@ -24,6 +24,8 @@ async def list_activities(
     actor_type: Optional[ActorType] = Query(None, description="Filter by actor type: agent, recruiter, candidate, system"),
     event_type: Optional[list[ActivityEventType]] = Query(None, description="Filter by event type(s)"),
     channel: Optional[ActivityChannel] = Query(None, description="Filter by channel: voice, whatsapp, cv, web"),
+    candidate_id: Optional[str] = Query(None, description="Filter by candidate ID"),
+    vacancy_id: Optional[str] = Query(None, description="Filter by vacancy ID"),
     limit: int = Query(50, ge=1, le=100, description="Number of activities to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ):
@@ -40,6 +42,8 @@ async def list_activities(
         actor_type=actor_type,
         event_types=event_type,
         channel=channel,
+        candidate_id=candidate_id,
+        vacancy_id=vacancy_id,
         limit=limit,
         offset=offset
     )

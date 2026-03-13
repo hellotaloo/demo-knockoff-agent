@@ -199,7 +199,12 @@
       "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend -type f \\\\\\(-name *const* -o -name *config* \\\\\\) ! -path */node_modules/* ! -path */.next/* ! -path */.git/*)",
       "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\) -path */document-collection* ! -path */.next/* ! -path */node_modules/*)",
       "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
-      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/)"
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/)",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend -maxdepth 2 -type f \\\\\\(-name .env* -o -name *.env \\\\\\))",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/views/vacancies/[id]/pipeline -type f)",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/pre-screening/)",
+      "Bash(gtimeout 8 uvicorn app:app --port 8099)",
+      "Bash(sqlite3)"
     ],
     "defaultMode": "acceptEdits"
   },

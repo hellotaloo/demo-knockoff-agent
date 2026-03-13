@@ -353,3 +353,107 @@ async def get_dashboard_stats():
             "cv": row["cv_count"]
         }
     )
+
+
+# ─── Workstation Sheets (Werkpostfiches) ─────────────────────────────────────
+
+
+@router.get("/vacancies/{vacancy_id}/workstation-sheet")
+async def get_workstation_sheet(vacancy_id: str):
+    """Get workstation sheet parameters for a vacancy."""
+    vid = parse_uuid(vacancy_id, "vacancy_id")
+    pool = await get_db_pool()
+
+    rows = await pool.fetch(
+        """
+        SELECT param_key, param_value, notes, updated_at
+        FROM ats.workstation_sheets
+        WHERE vacancy_id = $1
+        ORDER BY param_key
+        """,
+        vid,
+    )
+
+    return [
+        {
+            "param_key": r["param_key"],
+            "param_value": r["param_value"],
+            "notes": r["notes"],
+            "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+        }
+        for r in rows
+    ]
+
+
+@router.put("/vacancies/{vacancy_id}/workstation-sheet/{param_key}")
+async def set_workstation_sheet_param(vacancy_id: str, param_key: str, body: dict):
+    """Set a workstation sheet parameter for a vacancy."""
+    vid = parse_uuid(vacancy_id, "vacancy_id")
+    pool = await get_db_pool()
+
+    param_value = body.get("param_value", "yes")
+    notes = body.get("notes")
+
+    await pool.execute(
+        """
+        INSERT INTO ats.workstation_sheets (vacancy_id, param_key, param_value, notes)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (vacancy_id, param_key)
+        DO UPDATE SET param_value = $3, notes = $4, updated_at = NOW()
+        """,
+        vid, param_key, param_value, notes,
+    )
+
+    return {"param_key": param_key, "param_value": param_value, "notes": notes}
+
+
+@router.delete("/vacancies/{vacancy_id}/workstation-sheet/{param_key}")
+async def delete_workstation_sheet_param(vacancy_id: str, param_key: str):
+    """Remove a workstation sheet parameter from a vacancy."""
+    vid = parse_uuid(vacancy_id, "vacancy_id")
+    pool = await get_db_pool()
+
+    await pool.execute(
+        "DELETE FROM ats.workstation_sheets WHERE vacancy_id = $1 AND param_key = $2",
+        vid, param_key,
+    )
+
+    return {"deleted": True}
+
+
+# ─── Werkpostfiche reference data ─────────────────────────────────────────────
+
+
+MEDICAL_RISKS_PARENT_ID = "39e4c112-4856-4745-a23c-ab021faf7ab3"
+
+
+@router.get("/werkpostfiche/medical-risks")
+async def list_medical_risks(search: Optional[str] = Query(None, description="Search by name")):
+    """List available medical risk options from types_documents."""
+    pool = await get_db_pool()
+
+    if search:
+        rows = await pool.fetch(
+            """
+            SELECT id, name
+            FROM ats.types_documents
+            WHERE parent_id = $1 AND name ILIKE $2
+            ORDER BY name
+            LIMIT 50
+            """,
+            uuid.UUID(MEDICAL_RISKS_PARENT_ID),
+            f"%{search}%",
+        )
+    else:
+        rows = await pool.fetch(
+            """
+            SELECT id, name
+            FROM ats.types_documents
+            WHERE parent_id = $1
+            ORDER BY name
+            LIMIT 50
+            """,
+            uuid.UUID(MEDICAL_RISKS_PARENT_ID),
+        )
+
+    return [{"id": str(r["id"]), "name": r["name"]} for r in rows]

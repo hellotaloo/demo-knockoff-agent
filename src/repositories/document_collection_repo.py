@@ -54,7 +54,7 @@ class DocumentCollectionRepository:
             f"""
             SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
                    dc.candidate_id, dc.candidacy_id, dc.session_id, dc.candidate_name, dc.candidate_phone,
-                   dc.status, dc.channel, dc.retry_count, dc.message_count,
+                   dc.status, dc.goal, dc.channel, dc.retry_count, dc.message_count,
                    dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
                    c.stage AS candidacy_stage,
@@ -82,7 +82,7 @@ class DocumentCollectionRepository:
             SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
                    dc.candidate_id, dc.candidacy_id, dc.session_id,
                    dc.candidate_name, dc.candidate_phone,
-                   dc.status, dc.channel, dc.retry_count, dc.message_count,
+                   dc.status, dc.goal, dc.channel, dc.retry_count, dc.message_count,
                    dc.documents_required, dc.collection_plan, dc.agent_state,
                    dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,

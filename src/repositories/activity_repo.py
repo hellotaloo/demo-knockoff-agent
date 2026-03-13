@@ -208,6 +208,8 @@ class ActivityRepository:
         actor_type: Optional[str] = None,
         event_types: Optional[list[str]] = None,
         channel: Optional[str] = None,
+        candidate_id: Optional[str] = None,
+        vacancy_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
@@ -235,6 +237,16 @@ class ActivityRepository:
         if channel:
             conditions.append(f"a.channel = ${param_idx}")
             params.append(channel)
+            param_idx += 1
+
+        if candidate_id:
+            conditions.append(f"a.candidate_id = ${param_idx}::uuid")
+            params.append(candidate_id)
+            param_idx += 1
+
+        if vacancy_id:
+            conditions.append(f"a.vacancy_id = ${param_idx}::uuid")
+            params.append(vacancy_id)
             param_idx += 1
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"

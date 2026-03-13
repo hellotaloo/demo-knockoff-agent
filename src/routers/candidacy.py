@@ -9,7 +9,7 @@ import uuid
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from src.database import get_db_pool
 from src.exceptions import InvalidTransitionError, NotFoundError
@@ -25,6 +25,8 @@ from src.models.candidacy import (
     CandidacyVacancyLink,
     CandidacyApplicationSummary,
 )
+from src.models.placement import PlacementCreate, PlacementResponse
+from src.repositories.placement_repo import PlacementRepository
 from src.services.candidacy_transition_service import CandidacyStageTransitionService
 
 logger = logging.getLogger(__name__)
@@ -170,13 +172,37 @@ async def create_candidacy(
 async def update_stage(
     candidacy_id: uuid.UUID,
     stage: CandidacyStage = Query(..., description="New stage value"),
+    placement: Optional[PlacementCreate] = Body(None),
 ):
     """
     Move a candidacy to a different stage (drag-and-drop or dropdown).
     Validates the transition against the state machine, resets stage_updated_at,
     logs an activity, and fires any configured stage-entry agent triggers.
+
+    When transitioning to 'offer', an optional placement body can be included
+    to create the placement record in the same call.
     """
     pool = await get_db_pool()
+
+    # Create placement BEFORE transition so the background planner can read it
+    if stage == CandidacyStage.OFFER and placement:
+        repo = CandidacyRepository(pool)
+        full_row = await repo.get_by_id(candidacy_id)
+        if not full_row:
+            raise HTTPException(status_code=404, detail="Candidacy not found")
+
+        placement_repo = PlacementRepository(pool)
+        await placement_repo.create(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            candidate_id=uuid.UUID(placement.candidate_id),
+            vacancy_id=uuid.UUID(placement.vacancy_id),
+            application_id=full_row["app_id"] if full_row["app_id"] else None,
+            client_id=uuid.UUID(placement.client_id) if placement.client_id else None,
+            start_date=placement.start_date,
+            regime=placement.regime.value if placement.regime else None,
+            contract_id=placement.contract_id,
+        )
+
     transition_service = CandidacyStageTransitionService(pool)
 
     try:
@@ -192,4 +218,5 @@ async def update_stage(
 
     repo = CandidacyRepository(pool)
     full_row = await repo.get_by_id(candidacy_id)
+
     return _build_response(full_row)

@@ -169,6 +169,7 @@ class DocumentCollectionResponse(BaseModel):
     vacancy_title: Optional[str] = None
     application_id: Optional[str] = None
     candidacy_stage: Optional[str] = None
+    goal: str = "collect_basic"  # collect_basic | collect_and_sign | document_renewal
     candidate_name: str
     candidate_phone: Optional[str] = None
     status: str
@@ -241,16 +242,17 @@ class CollectionPlanResponse(BaseModel):
 
 
 class CollectionItemStatusResponse(BaseModel):
-    """Unified status for a collected item (document or attribute)."""
+    """Unified status for a collected item (document, attribute, or task)."""
     slug: str
     name: str
-    type: str  # "document" | "attribute"
+    type: str  # "document" | "attribute" | "task"
     priority: str  # "required" | "recommended"
-    status: str  # pending | asked | received | verified | failed | skipped
+    status: str  # pending | asked | received | verified | failed | skipped | scheduled
     value: Optional[str] = None  # For attributes: the collected value
     upload_id: Optional[str] = None
     verification_passed: Optional[bool] = None
     uploaded_at: Optional[datetime] = None
+    scheduled_at: Optional[datetime] = None  # For tasks: when the task is scheduled to execute
 
 
 class WorkflowStepResponse(BaseModel):

@@ -206,6 +206,7 @@ class CandidacyStageTransitionService:
             candidate_id=candidate_id,
             vacancy_id=vacancy_id,
             triggered_by=f"stage_trigger:{triggered_by}",
+            candidacy_stage="offer",
         )
 
         if collection_id:

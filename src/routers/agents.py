@@ -17,7 +17,6 @@ from src.models.vacancy import (
 )
 from src.repositories.agent_vacancy_repo import AgentVacancyRepository
 from src.database import get_db_pool
-from src.services.workflow_service import WorkflowService
 
 logger = logging.getLogger(__name__)
 
@@ -31,32 +30,51 @@ async def get_agent_vacancy_repo() -> AgentVacancyRepository:
 
 
 @router.get("/counts", response_model=NavigationCountsResponse)
-async def get_navigation_counts(
-    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo)
-):
+async def get_navigation_counts():
     """
     Get lightweight counts for navigation sidebar.
-    Returns vacancy counts by agent status without fetching full vacancy data.
+    Reads from denormalized ats.navigation_counts table (kept in sync by DB triggers).
     """
     pool = await get_db_pool()
-    workflow_service = WorkflowService(pool)
 
-    row = await repo.get_counts()
-    activities = await workflow_service.get_counts()
+    row = await pool.fetchrow("""
+        SELECT * FROM ats.navigation_counts
+        WHERE workspace_id = '00000000-0000-0000-0000-000000000001'
+    """)
+
+    if not row:
+        return NavigationCountsResponse(
+            prescreening={"new": 0, "generated": 0, "published": 0, "archived": 0},
+            preonboarding={"new": 0, "generated": 0, "archived": 0},
+            activities={"active": 0, "stuck": 0},
+            vacancies={"active": 0, "archived": 0},
+            candidates={"total": 0, "archived": 0},
+        )
 
     return NavigationCountsResponse(
         prescreening={
             "new": row["prescreening_new"],
             "generated": row["prescreening_generated"],
             "published": row["prescreening_published"],
-            "archived": row["prescreening_archived"]
+            "archived": row["prescreening_archived"],
         },
         preonboarding={
             "new": row["preonboarding_new"],
             "generated": row["preonboarding_generated"],
-            "archived": row["preonboarding_archived"]
+            "archived": row["preonboarding_archived"],
         },
-        activities=activities
+        activities={
+            "active": row["activities_active"],
+            "stuck": row["activities_stuck"],
+        },
+        vacancies={
+            "active": row["vacancies_active"],
+            "archived": row["vacancies_archived"],
+        },
+        candidates={
+            "total": row["candidates_total"],
+            "archived": row["candidates_archived"],
+        },
     )
 
 

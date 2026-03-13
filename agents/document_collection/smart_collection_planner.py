@@ -58,7 +58,7 @@ Vaste volgorde:
    - Adresgegevens (straat + postcode + woonplaats mogen samen — het is 1 onderwerp)
    - IBAN apart — leg kort uit waarom je dit vraagt (loonuitbetaling)
    - Noodcontact apart — leg kort uit waarom (veiligheid op het werk)
-   - Afspraken (medisch onderzoek) apart met tijdsloten
+   - Afspraken (medisch onderzoek) ALLEEN als de functie dit vereist (zie regels hieronder)
    - Aanbevolen documenten (diploma, CV) apart
    - Vervoer / overige vragen apart
 4. LAATSTE STAP — Contract ondertekening via Yousign
@@ -80,7 +80,7 @@ BELANGRIJKE REGELS:
    Voor afspraken: stel 3 tijdsloten voor aan de KANDIDAAT via WhatsApp zodat zij een moment kunnen kiezen.
    Deze afspraak-keuze komt als conversation_group (want de kandidaat moet een slot kiezen).
 6. De recruiter krijgt een STATUS UPDATE van jou, zoals een junior recruiter zijn manager informeert:
-   "Hey, ik heb de documenten opgevraagd bij [naam], ik plan de medische schifting in, enz."
+   "Hey, ik heb de documenten opgevraagd bij [naam], [status van items]."
    NIET een takenlijst — jij doet het werk, de recruiter hoeft alleen op de hoogte te zijn.
 7. Alle message_hints moeten WhatsApp-geschikt zijn: kort, informeel, 1 onderwerp per bericht
 8. Antwoord ALTIJD in valid JSON"""
@@ -109,6 +109,13 @@ Startdatum: {start_date} (nog {days_remaining} dagen)
 
 ### Kandidaat info:
 Naam: {candidate_name}
+
+### Plaatsing:
+Regime: {regime_label}
+{contract_note}
+
+### Werkpostfiche:
+{werkpostfiche_section}
 
 ### Opdracht:
 Analyseer de vacature en maak een verzamelplan. BELANGRIJK: elke conversation_group is 1 WhatsApp-bericht over 1 onderwerp.
@@ -157,20 +164,28 @@ Richtlijnen:
 - VCA bij bouw/industrie/logistiek
 - Wees selectief: niet elk document/attribuut is voor elke vacature nodig
 
+MEDISCH ONDERZOEK (arbeidsgeneeskundig onderzoek / medische schifting):
+- Dit wordt NIET door de AI beslist. De werkpostfiche bepaalt of medisch onderzoek nodig is.
+- Als de werkpostfiche medical_check=yes bevat: voeg medisch onderzoek toe als agent_managed_task met tijdsloten.
+- Als de werkpostfiche medical_risks bevat: vermeld de specifieke risico's in het bericht aan de kandidaat.
+- Als de werkpostfiche GEEN medical_check bevat: voeg GEEN medisch onderzoek toe. Nooit zelf beslissen.
+- Dit is een harde regel — de recruiter beheert dit via de werkpostfiche op de vacature.
+
 CONVERSATIE-FLOW (conversation_steps):
 - Elke stap = 1 WhatsApp-bericht = 1 onderwerp. De agent WACHT op antwoord voor het volgende bericht.
 - Stap 1 is ALTIJD de ID-scan (foto voor- en achterkant). Nooit gecombineerd met andere vragen.
 - Adresgegevens (straat, postcode, woonplaats) mogen samen in 1 bericht — het is 1 onderwerp.
 - IBAN is een apart bericht — leg kort uit waarom (loonuitbetaling).
 - Noodcontact is een apart bericht — leg kort uit waarom (veiligheid op het werk).
-- Afspraken (medisch onderzoek) zijn een apart bericht met tijdsloten.
+- Afspraken (medisch onderzoek), INDIEN van toepassing, zijn een apart bericht met tijdsloten.
 - Aanbevolen documenten (diploma, CV) mogen samen in 1 bericht.
 - Elk bericht is kort, warm en stelt maximaal 1 vraag. Denk WhatsApp, niet e-mail.
 
 - agent_managed_tasks bevat wat de agent ZELF doet achter de schermen (boeken, invullen, opvolgen)
   De kandidaat wordt enkel geïnformeerd als ze ergens naartoe moeten (bv. afspraak arbeidsgeneesheer)
+  Laat agent_managed_tasks LEEG als er geen taken zijn die de agent zelf regelt.
 - recruiter_notification: schrijf een INFORMEEL status update bericht (voor Teams) alsof je een collega bijpraat
-  Toon: "Hey team, voor [naam] ([functie], start [datum]): ik heb de documenten opgevraagd, de medische schifting staat ingepland op [datum], [status van andere items]."
+  Toon: "Hey team, voor [naam] ([functie], start [datum]): ik heb de documenten opgevraagd, [status van andere items]."
   NIET: "□ doe dit □ doe dat" — de agent doet het werk, de recruiter wordt alleen geïnformeerd
 - Eindig altijd met contract ondertekening via Yousign (final_step)
 - Alle berichten in een warme, behulpzame toon — je bent er om het makkelijk te maken!
@@ -234,6 +249,41 @@ def build_existing_attrs(attrs: list) -> str:
         if len(value) > 50:
             value = value[:47] + "..."
         lines.append(f"- {a['type_slug']}: {a['type_name']} = \"{value}\" {verified}")
+    return "\n".join(lines)
+
+
+def build_werkpostfiche_section(params: list) -> str:
+    """Build werkpostfiche context for the LLM prompt."""
+    if not params:
+        return "Geen werkpostfiche ingesteld. Voeg GEEN medisch onderzoek toe."
+
+    lines = []
+    medical_check = False
+    medical_risks = []
+
+    for p in params:
+        key = p.get("param_key", "")
+        value = p.get("param_value", "")
+
+        if key == "medical_check" and value == "yes":
+            medical_check = True
+        elif key == "medical_risks":
+            try:
+                medical_risks = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    if medical_check:
+        lines.append("- Medisch onderzoek: VEREIST (verplicht gezondheidstoezicht)")
+        if medical_risks:
+            risk_names = [r.get("name", "?") for r in medical_risks]
+            lines.append(f"- Risico's: {', '.join(risk_names)}")
+            lines.append("  Vermeld deze risico's in het bericht aan de kandidaat zodat ze weten waarvoor het onderzoek dient.")
+        else:
+            lines.append("- Risico's: niet gespecificeerd")
+    else:
+        lines.append("- Medisch onderzoek: NIET vereist. Voeg GEEN medisch onderzoek toe.")
+
     return "\n".join(lines)
 
 
@@ -364,6 +414,7 @@ async def generate_collection_plan(
     candidate_id: uuid.UUID,
     workspace_id: uuid.UUID = DEFAULT_WORKSPACE_ID,
     start_date: date | None = None,
+    regime: str | None = None,
 ) -> dict:
     """
     Generate a smart collection plan for a candidate + vacancy.
@@ -417,20 +468,48 @@ async def generate_collection_plan(
     logger.info(f"Generating collection plan: {candidate_name} × {vacancy['title']} ({vacancy['company']})")
 
     # Fetch all context in parallel
-    doc_type_rows, attr_type_rows, existing_attr_rows, existing_doc_rows = await asyncio.gather(
+    doc_type_rows, attr_type_rows, existing_attr_rows, existing_doc_rows, werkpostfiche_rows = await asyncio.gather(
         doc_type_repo.list_for_workspace(workspace_id, parents_only=True),
         attr_type_repo.list_for_workspace(workspace_id),
         attr_repo.list_for_candidate(candidate_id),
         candidate_repo.get_documents(candidate_id),
+        pool.fetch(
+            "SELECT param_key, param_value FROM ats.workstation_sheets WHERE vacancy_id = $1",
+            vacancy_id,
+        ),
     )
 
     doc_types = [dict(r) for r in doc_type_rows]
     attr_types = [dict(r) for r in attr_type_rows]
     existing_attrs = [dict(r) for r in existing_attr_rows]
     existing_docs = [dict(r) for r in existing_doc_rows]
+    werkpostfiche_params = [dict(r) for r in werkpostfiche_rows]
 
     logger.info(f"Context: {len(doc_types)} doc types, {len(attr_types)} attr types, "
-                f"candidate has {len(existing_docs)} docs + {len(existing_attrs)} attrs")
+                f"candidate has {len(existing_docs)} docs + {len(existing_attrs)} attrs, "
+                f"werkpostfiche has {len(werkpostfiche_params)} params")
+
+    # Build regime context
+    regime_labels = {"full": "Voltijds", "flex": "Flex", "day": "Dagcontract"}
+    regime_label = regime_labels.get(regime, "Onbekend") if regime else "Niet opgegeven"
+
+    if not regime:
+        contract_note = (
+            "GEEN PLAATSING: De kandidaat zit nog niet in de aanbod-fase. "
+            "Verzamel enkel documenten om het dossier voor te bereiden. "
+            "Geen contract ondertekening — laat final_step leeg (null)."
+        )
+    elif regime == "day":
+        contract_note = (
+            "DAGCONTRACT: Het contract wordt automatisch gegenereerd en 15 minuten voor aanvang "
+            "ter ondertekening verstuurd via Yousign. Dit is een vast proces — geen LLM-planning nodig. "
+            "Voeg dit toe als agent_managed_task met slug 'contract_signing_day'."
+        )
+    else:
+        contract_note = (
+            "CONTRACT: Na het verzamelen van alle documenten wordt het contract gegenereerd "
+            "en via Yousign ter ondertekening verstuurd. Voeg dit toe als final_step."
+        )
 
     # Build prompt
     prompt = PROMPT_TEMPLATE.format(
@@ -441,6 +520,9 @@ async def generate_collection_plan(
         start_date=start_date.isoformat(),
         days_remaining=days_remaining,
         candidate_name=candidate_name,
+        regime_label=regime_label,
+        contract_note=contract_note,
+        werkpostfiche_section=build_werkpostfiche_section(werkpostfiche_params),
         doc_types_list=build_doc_types_list(doc_types),
         attr_types_list=build_attr_types_list(attr_types),
         existing_docs=build_existing_docs(existing_docs),
