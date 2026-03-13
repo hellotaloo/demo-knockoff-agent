@@ -171,7 +171,7 @@ class DocumentCollectionConfigRepository:
                 dt.sort_order AS dt_sort_order,
                 dt.created_at AS dt_created_at, dt.updated_at AS dt_updated_at
             FROM agents.document_collection_requirements r
-            JOIN ats.document_types dt ON dt.id = r.document_type_id
+            JOIN ats.types_documents dt ON dt.id = r.document_type_id
             WHERE r.config_id = $1
             ORDER BY r.position
             """,

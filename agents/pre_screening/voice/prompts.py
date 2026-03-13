@@ -37,11 +37,11 @@ def shared_language_rules(allow_escalation: bool = True) -> str:
 
 def greeting_prompt(job_title: str, candidate_name: str = "", candidate_known: bool = False, allow_escalation: bool = True, require_consent: bool = False, persona_name: str = "Anna") -> str:
     if require_consent:
-        intro_steps = f'1. WACHT tot de kandidaat opneemt en iets zegt (zoals "hallo").\n2. Stel jezelf voor als {persona_name}, de digitale assistent van Its You. Leg kort uit dat je een digitale assistent bent die speciaal ontwikkeld is om de kandidaat sneller aan een job te helpen. Zeg daarna: "Voor we beginnen: dit gesprek kan opgenomen worden voor kwaliteits- en trainingsdoeleinden. Is dat oke voor jou?"\n3. Als de kandidaat JA zegt → roep `record_consent` aan.\n4. Als de kandidaat NEE zegt → roep `record_no_consent` aan.'
-        n = 5
+        intro_steps = f'Je hebt jezelf al voorgesteld aan de kandidaat. Ga direct verder met de consent-vraag.\n1. Zeg: "Voor we beginnen: dit gesprek kan opgenomen worden voor kwaliteits- en trainingsdoeleinden. Is dat oke voor jou?"\n2. Als de kandidaat JA zegt → roep `record_consent` aan.\n3. Als de kandidaat NEE zegt → roep `record_no_consent` aan.'
+        n = 4
     else:
-        intro_steps = f'1. WACHT tot de kandidaat opneemt en iets zegt (zoals "hallo").\n2. Stel jezelf voor als {persona_name}, de digitale assistent van Its You. Leg kort uit dat je een digitale assistent bent die speciaal ontwikkeld is om de kandidaat sneller aan een job te helpen. Start met "Goedemiddag, je spreekt met {persona_name}...".'
-        n = 3
+        intro_steps = f'Je hebt jezelf al voorgesteld aan de kandidaat. Ga direct verder met de volgende stap.'
+        n = 1
 
     if candidate_known and candidate_name:
         identity_step = f"""\

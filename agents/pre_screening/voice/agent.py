@@ -113,6 +113,10 @@ async def entrypoint(ctx: agents.JobContext):
         vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
         turn_detection=MultilingualModel(),  # session default, overridden per-agent where needed
         user_away_timeout=4.0,  # trigger fallback prompt after 4s of silence
+        aec_warmup_duration=3.0,  # suppress VAD interruptions for 3s after agent speaks (AEC calibration)
+        resume_false_interruption=True,  # resume agent speech after false interruptions from background noise
+        false_interruption_timeout=1.0,  # wait 1s before declaring a false interruption
+        min_interruption_duration=0.5,  # require 0.5s of speech before allowing interruption
         stt=inference_stt.STT(
             "deepgram/nova-3",
             language="nl",

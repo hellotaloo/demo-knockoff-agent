@@ -30,6 +30,7 @@ from src.models.document_collection_v2 import (
     StartCollectionResponse,
     DocumentCollectionResponse,
     DocumentCollectionDetailResponse,
+    DocumentCollectionFullDetailResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -312,6 +313,19 @@ async def get_collection(
     ws_uuid = parse_uuid(workspace_id, field="workspace_id")
     coll_uuid = parse_uuid(collection_id, field="collection_id")
     return await service.get_collection(ws_uuid, user.id, coll_uuid)
+
+
+@router.get("/collections/{collection_id}/detail", response_model=DocumentCollectionFullDetailResponse)
+async def get_collection_full_detail(
+    workspace_id: str = Path(...),
+    collection_id: str = Path(...),
+    user: UserProfile = Depends(get_current_user),
+    service: DocumentCollectionService = Depends(get_dc_service),
+):
+    """Get enriched collection detail with plan, document statuses, and workflow progress."""
+    ws_uuid = parse_uuid(workspace_id, field="workspace_id")
+    coll_uuid = parse_uuid(collection_id, field="collection_id")
+    return await service.get_collection_full_detail(ws_uuid, user.id, coll_uuid)
 
 
 @router.post("/collections/{collection_id}/abandon")

@@ -53,10 +53,11 @@ class DocumentCollectionRepository:
         rows = await self.pool.fetch(
             f"""
             SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
-                   dc.candidate_id, dc.session_id, dc.candidate_name, dc.candidate_phone,
+                   dc.candidate_id, dc.candidacy_id, dc.session_id, dc.candidate_name, dc.candidate_phone,
                    dc.status, dc.channel, dc.retry_count, dc.message_count,
                    dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
+                   c.stage AS candidacy_stage,
                    COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
                    COALESCE((SELECT COUNT(*) FROM agents.document_collection_uploads u
                              WHERE u.collection_id = dc.id AND u.status = 'verified'), 0) AS documents_collected,
@@ -64,6 +65,7 @@ class DocumentCollectionRepository:
                              WHERE m.collection_id = dc.id AND m.role = 'user'), 0) AS user_message_count
             FROM agents.document_collections dc
             LEFT JOIN ats.vacancies v ON dc.vacancy_id = v.id
+            LEFT JOIN ats.candidacies c ON dc.candidacy_id = c.id
             WHERE {where}
             ORDER BY dc.started_at DESC
             LIMIT ${idx} OFFSET ${idx + 1}
@@ -78,10 +80,13 @@ class DocumentCollectionRepository:
         return await self.pool.fetchrow(
             """
             SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
-                   dc.candidate_id, dc.session_id, dc.candidate_name, dc.candidate_phone,
+                   dc.candidate_id, dc.candidacy_id, dc.session_id,
+                   dc.candidate_name, dc.candidate_phone,
                    dc.status, dc.channel, dc.retry_count, dc.message_count,
-                   dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
+                   dc.documents_required, dc.collection_plan, dc.agent_state,
+                   dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
+                   c.stage AS candidacy_stage,
                    COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
                    COALESCE((SELECT COUNT(*) FROM agents.document_collection_uploads u
                              WHERE u.collection_id = dc.id AND u.status = 'verified'), 0) AS documents_collected,
@@ -89,6 +94,7 @@ class DocumentCollectionRepository:
                              WHERE m.collection_id = dc.id AND m.role = 'user'), 0) AS user_message_count
             FROM agents.document_collections dc
             LEFT JOIN ats.vacancies v ON dc.vacancy_id = v.id
+            LEFT JOIN ats.candidacies c ON dc.candidacy_id = c.id
             WHERE dc.id = $1
             """,
             collection_id,

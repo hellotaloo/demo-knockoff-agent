@@ -87,6 +87,10 @@ class SessionInput:
     is_playground: bool = False
     persona_name: str = "Anna"
 
+    # Scheduling (loaded from DB agent_config)
+    schedule_days_ahead: int = 3
+    schedule_start_offset: int = 1
+
     def to_dict(self) -> dict:
         return {
             "call_id": self.call_id,
@@ -117,6 +121,8 @@ class SessionInput:
             "require_consent": self.require_consent,
             "is_playground": self.is_playground,
             "persona_name": self.persona_name,
+            "schedule_days_ahead": self.schedule_days_ahead,
+            "schedule_start_offset": self.schedule_start_offset,
         }
 
     @classmethod
@@ -159,6 +165,8 @@ class SessionInput:
             require_consent=data.get("require_consent", True),
             is_playground=data.get("is_playground", False),
             persona_name=data.get("persona_name", "Anna"),
+            schedule_days_ahead=data.get("schedule_days_ahead", 3),
+            schedule_start_offset=data.get("schedule_start_offset", 1),
         )
 
 

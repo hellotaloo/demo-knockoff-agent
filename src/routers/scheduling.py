@@ -510,24 +510,19 @@ async def save_time_slot(raw_request: Request):
         logger.info(f"[scheduling/save-slot] response: {response.model_dump()}")
 
         # Log activity: interview scheduled
-        if result.get("success") and result.get("application_id"):
-            app_row = await pool.fetchrow(
-                "SELECT candidate_id FROM ats.applications WHERE id = $1",
-                uuid.UUID(result["application_id"])
+        if result.get("success") and result.get("candidate_id"):
+            activity_service = ActivityService(pool)
+            slot_text = request.selected_slot_text or f"{request.selected_date} om {request.selected_time}"
+            await activity_service.log(
+                candidate_id=result["candidate_id"],
+                event_type=ActivityEventType.INTERVIEW_SCHEDULED,
+                application_id=result.get("application_id"),
+                vacancy_id=result["vacancy_id"],
+                channel=ActivityChannel.VOICE,
+                actor_type=ActorType.CANDIDATE,
+                metadata={"date": request.selected_date, "time": request.selected_time},
+                summary=f"Interview ingepland op {slot_text}"
             )
-            if app_row and app_row["candidate_id"]:
-                activity_service = ActivityService(pool)
-                slot_text = request.selected_slot_text or f"{request.selected_date} om {request.selected_time}"
-                await activity_service.log(
-                    candidate_id=str(app_row["candidate_id"]),
-                    event_type=ActivityEventType.INTERVIEW_SCHEDULED,
-                    application_id=result["application_id"],
-                    vacancy_id=result["vacancy_id"],
-                    channel=ActivityChannel.VOICE,
-                    actor_type=ActorType.CANDIDATE,
-                    metadata={"date": request.selected_date, "time": request.selected_time},
-                    summary=f"Interview ingepland op {slot_text}"
-                )
 
         # Return in VAPI format if this was a VAPI tool-call request
         if is_vapi_format:

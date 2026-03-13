@@ -19,10 +19,12 @@ from .screening_notes_integration_service import (
     trigger_screening_notes_integration,
 )
 from .call_result_processor import process_call_results
+from .attribute_extraction_service import extract_and_save_attributes
 from .teams_service import TeamsService, get_teams_service
 from .ats_import_service import ATSImportService
 from .short_link_service import ShortLinkService
 from .candidacy_transition_service import CandidacyStageTransitionService
+from .document_collection_planner_service import DocumentCollectionPlannerService
 
 __all__ = [
     "SessionManager",
@@ -50,4 +52,6 @@ __all__ = [
     "ATSImportService",
     "ShortLinkService",
     "CandidacyStageTransitionService",
+    "extract_and_save_attributes",
+    "DocumentCollectionPlannerService",
 ]

@@ -40,12 +40,12 @@ def _format_slot(d: date, spoken_time: str, today: date) -> str:
     return f"{prefix}{day_name} {d.day} {month_name} om {spoken_time}"
 
 
-def _build_fallback_slots() -> list[str]:
+def _build_fallback_slots(offset_days: int = 1) -> list[str]:
     """Build 3 hardcoded slots (fallback when Google Calendar is not configured)."""
     today = date.today()
     slots: list[str] = []
 
-    d = today + timedelta(days=SLOT_OFFSET_DAYS)
+    d = today + timedelta(days=offset_days)
     while len(slots) < 3:
         if d.weekday() < 5:  # mon-fri
             times = _TIME_SLOTS.get(d.weekday(), [])
@@ -97,14 +97,18 @@ class SchedulingAgent(BaseAgent):
     @function_tool()
     async def get_available_timeslots(self, context: RunContext) -> str:
         """Haal de beschikbare tijdsloten op voor een sollicitatiegesprek."""
+        userdata: CandidateData = self.session.userdata
+        offset = userdata.input.schedule_start_offset
+        num_days = userdata.input.schedule_days_ahead
+
         if self._use_calendar:
-            result = await get_initial_slots(start_offset_days=SLOT_OFFSET_DAYS)
+            result = await get_initial_slots(start_offset_days=offset, num_days=num_days)
             if result["has_availability"]:
                 return f"Beschikbare momenten:\n{result['formatted']}"
             logger.warning("Calendar returned no availability, falling back to hardcoded slots")
 
         # Fallback: hardcoded slots (dev mode or no calendar availability)
-        slots = _build_fallback_slots()
+        slots = _build_fallback_slots(offset)
         slots_text = "\n".join(f"- {s}" for s in slots)
         return f"Beschikbare momenten:\n{slots_text}"
 

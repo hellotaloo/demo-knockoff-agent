@@ -188,7 +188,18 @@
       "Bash(gtimeout 8 uvicorn app:app --port 8080)",
       "Bash(python -c \":*)",
       "Bash(sqlite3 /tmp/schema.db \".schema ats_applications 2>/dev/null\")",
-      "Bash(psql --version)"
+      "Bash(psql --version)",
+      "Bash(cat \"/Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\(dashboard\\)/views/vacancies/[id]/pipeline/page.tsx\")",
+      "Bash(/Users/lunar/Desktop/sites/taloo-workspace/taloo-backend/agents/pre_screening/voice/.venv/bin/pip list:*)",
+      "Bash(uv lock:*)",
+      "Bash(brew info:*)",
+      "Bash(brew upgrade:*)",
+      "Bash(lk agent:*)",
+      "Bash(lk cloud:*)",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend -type f \\\\\\(-name *const* -o -name *config* \\\\\\) ! -path */node_modules/* ! -path */.next/* ! -path */.git/*)",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\) -path */document-collection* ! -path */.next/* ! -path */node_modules/*)",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app -type f \\\\\\(-name *.tsx -o -name *.ts \\\\\\))",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/)"
     ],
     "defaultMode": "acceptEdits"
   },

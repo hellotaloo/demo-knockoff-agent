@@ -13,6 +13,7 @@ _LATEST_APP_LATERAL = """
         SELECT
             a.id,
             a.channel,
+            a.status,
             a.qualified,
             a.completed_at,
             (
@@ -29,11 +30,21 @@ _LATEST_APP_LATERAL = """
                 SELECT AVG(score)::int
                 FROM agents.pre_screening_answers
                 WHERE application_id = a.id AND passed IS NULL AND score IS NOT NULL
-            ) AS open_questions_score
+            ) AS open_questions_score,
+            (
+                SELECT si.selected_date
+                       + make_time(regexp_replace(si.selected_time, '[^0-9]', '', 'g')::int, 0, 0)
+                    AS interview_scheduled_at
+                FROM ats.scheduled_interviews si
+                WHERE (si.application_id = a.id OR si.candidate_id = c.candidate_id)
+                  AND si.status NOT IN ('cancelled', 'rescheduled')
+                ORDER BY si.selected_date ASC, si.selected_time ASC
+                LIMIT 1
+            ) AS interview_scheduled_at
         FROM ats.applications a
         WHERE a.candidacy_id = c.id
-          AND a.status = 'completed'
-        ORDER BY a.completed_at DESC
+          AND a.status IN ('active', 'completed', 'abandoned')
+        ORDER BY a.completed_at DESC NULLS LAST
         LIMIT 1
     ) app ON true
 """
@@ -76,11 +87,13 @@ _SELECT_COLS = """
 
     app.id                   AS app_id,
     app.channel              AS app_channel,
+    app.status               AS app_status,
     app.qualified            AS app_qualified,
     app.open_questions_score AS app_score,
     app.knockout_passed      AS app_ko_passed,
     app.knockout_total       AS app_ko_total,
     app.completed_at         AS app_completed_at,
+    app.interview_scheduled_at AS app_interview_scheduled_at,
 
     lv.linked_vacancies
 """
@@ -209,6 +222,22 @@ class CandidacyRepository:
             """,
             candidate_id,
             vacancy_id,
+        )
+
+    async def reassign_vacancy(
+        self, candidacy_id: uuid.UUID, new_vacancy_id: uuid.UUID
+    ) -> Optional[asyncpg.Record]:
+        """Move a candidacy to a different vacancy. Returns None if not found."""
+        return await self.pool.fetchrow(
+            """
+            UPDATE ats.candidacies
+            SET vacancy_id = $1, updated_at = NOW()
+            WHERE id = $2
+            RETURNING id, vacancy_id, candidate_id, stage, source,
+                      stage_updated_at, created_at, updated_at
+            """,
+            new_vacancy_id,
+            candidacy_id,
         )
 
     async def exists_for_vacancy(

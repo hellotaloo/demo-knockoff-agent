@@ -15,9 +15,9 @@ from src.services import ActivityService
 from src.database import get_db_pool
 from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
 from src.services.whatsapp_service import send_whatsapp_message, send_whatsapp_template
-from src.services.livekit_service import get_livekit_service
+from src.services.livekit_service import get_livekit_service, fetch_scheduling_config
 from src.workflows import get_orchestrator
-from agents.pre_screening.whatsapp import create_simple_agent
+from agents.pre_screening.whatsapp import create_simple_agent, AgentConfig
 
 router = APIRouter(tags=["Outbound Screening"])
 
@@ -104,7 +104,7 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     # Get vacancy and pre-screening
     row = await pool.fetchrow(
         """
-        SELECT v.id as vacancy_id, v.title as vacancy_title,
+        SELECT v.id as vacancy_id, v.title as vacancy_title, v.workspace_id,
                ps.id as pre_screening_id, ps.elevenlabs_agent_id, ps.whatsapp_agent_id,
                ps.is_online, ps.published_at, ps.intro
         FROM ats.vacancies v
@@ -146,7 +146,8 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
         phone=phone_normalized,
         first_name=request.first_name,
         last_name=request.last_name,
-        is_test=request.is_test
+        is_test=request.is_test,
+        workspace_id=row["workspace_id"],
     )
     logger.info(f"👤 Using candidate {candidate_id} for {candidate_name} (is_test={request.is_test})")
 
@@ -236,6 +237,7 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
             intro=row["intro"],
             is_test=request.is_test,
             application_id=str(application_id),
+            candidate_id=str(candidate_id),
         )
         response.application_id = str(application_id)
         return response
@@ -402,6 +404,7 @@ async def _initiate_whatsapp_screening(
     intro: Optional[str],
     is_test: bool = False,
     application_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
 ) -> OutboundScreeningResponse:
     """Initiate a WhatsApp screening conversation using pre_screening_whatsapp_agent."""
 
@@ -465,6 +468,13 @@ async def _initiate_whatsapp_screening(
             office_location = loc_row["name"] or ""
             office_address = loc_row["address"] or ""
 
+        # Load scheduling config from DB
+        sched_cfg = await fetch_scheduling_config()
+        config = AgentConfig(
+            schedule_days_ahead=sched_cfg["schedule_days_ahead"],
+            schedule_start_offset=sched_cfg["schedule_start_offset"],
+        )
+
         # Create the agent
         agent = create_simple_agent(
             candidate_name=candidate_name or "daar",
@@ -475,6 +485,7 @@ async def _initiate_whatsapp_screening(
             is_test=is_test,
             office_location=office_location,
             office_address=office_address,
+            config=config,
         )
 
         # Send opening message — use Twilio content template if configured, else LLM-generated
@@ -509,15 +520,6 @@ async def _initiate_whatsapp_screening(
         # Create conversation record with agent state
         # Generate a session_id for database compatibility (we use JSON state, not ADK sessions)
         session_id = str(uuid.uuid4())
-        # Get candidate_id from the application record
-        candidate_id_for_session = None
-        if application_id:
-            app_row_lookup = await pool.fetchrow(
-                "SELECT candidate_id FROM ats.applications WHERE id = $1",
-                uuid.UUID(application_id)
-            )
-            if app_row_lookup:
-                candidate_id_for_session = app_row_lookup["candidate_id"]
 
         conv_row = await pool.fetchrow(
             """
@@ -534,7 +536,7 @@ async def _initiate_whatsapp_screening(
             is_test,
             json.dumps(agent.state.to_dict()),
             uuid.UUID(application_id) if application_id else None,
-            candidate_id_for_session,
+            uuid.UUID(candidate_id) if candidate_id else None,
         )
 
         conversation_id = conv_row["id"]

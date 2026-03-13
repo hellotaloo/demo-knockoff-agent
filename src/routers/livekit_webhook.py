@@ -233,7 +233,7 @@ async def livekit_call_result(
             channel=ActivityChannel.VOICE,
             actor_type=ActorType.AGENT,
             metadata={"agent_status": payload.status},
-            summary=f"Pre-screening {'geslaagd' if qualified else 'niet geslaagd'}"
+            summary=f"Pre-screening afgerond — {'geslaagd' if qualified else 'niet geslaagd'}"
         )
 
     # Trigger post-processor as background task (scoring + summary + downstream)

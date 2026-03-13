@@ -21,6 +21,7 @@ class ScheduledInterviewRepository:
         selected_time: str,
         selected_slot_text: Optional[str] = None,
         application_id: Optional[uuid.UUID] = None,
+        candidate_id: Optional[uuid.UUID] = None,
         candidate_name: Optional[str] = None,
         candidate_phone: Optional[str] = None,
         channel: str = "voice",
@@ -36,16 +37,17 @@ class ScheduledInterviewRepository:
         result = await self.pool.fetchval(
             """
             INSERT INTO ats.scheduled_interviews (
-                vacancy_id, application_id, conversation_id,
+                vacancy_id, application_id, candidate_id, conversation_id,
                 candidate_name, candidate_phone,
                 selected_date, selected_time, selected_slot_text,
                 channel, notes, calendar_event_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING id
             """,
             vacancy_id,
             application_id,
+            candidate_id,
             conversation_id,
             candidate_name,
             candidate_phone,
@@ -201,7 +203,8 @@ class ScheduledInterviewRepository:
         """
         return await self.pool.fetchrow(
             """
-            SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone,
+            SELECT sc.vacancy_id, sc.candidate_id, sc.application_id,
+                   sc.candidate_name, sc.candidate_phone,
                    v.title as vacancy_title
             FROM agents.pre_screening_sessions sc
             JOIN ats.vacancies v ON v.id = sc.vacancy_id

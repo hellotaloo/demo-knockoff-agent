@@ -133,3 +133,18 @@ class OntologyOverviewResponse(BaseModel):
     """Overview of all available ontology types."""
 
     types: List[OntologyTypeInfo]
+
+
+class OntologyStatCard(BaseModel):
+    """A single stat card for the overview dashboard."""
+
+    key: str
+    label: str
+    value: int
+    icon: Optional[str] = None
+
+
+class OntologyOverviewStatsResponse(BaseModel):
+    """Rich overview stats for the ontology dashboard."""
+
+    stats: List[OntologyStatCard]

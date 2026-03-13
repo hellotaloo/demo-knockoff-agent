@@ -54,7 +54,7 @@ Stijl:
 
     # Scheduling
     schedule_days_ahead: int = 3  # How many days of slots to show
-    schedule_start_offset: int = 3  # Start from X days in the future
+    schedule_start_offset: int = 1  # Start from X days in the future (loaded from DB agent_config)
 
     # Alternate intake (when knockout fails)
     alternate_questions: list[str] = field(default_factory=lambda: [
@@ -777,7 +777,7 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
             slot_data = await get_time_slots_for_whatsapp(
                 days_ahead=self.config.schedule_days_ahead,
                 start_offset_days=self.config.schedule_start_offset,
-                skip_calendar=self.state.is_test,
+                skip_calendar=False,
             )
             self.state.available_slots = [s.model_dump() for s in slot_data.slots]
             prompt = OPEN_RECORD_DONE_PROMPT.format(
@@ -804,7 +804,7 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
         slot_data = await get_time_slots_for_whatsapp(
             days_ahead=self.config.schedule_days_ahead,
             start_offset_days=self.config.schedule_start_offset,
-            skip_calendar=self.state.is_test,
+            skip_calendar=False,
         )
         self.state.available_slots = [s.model_dump() for s in slot_data.slots]
 
@@ -885,9 +885,8 @@ Geef EEN antwoord, geen alternatieven. Max 2 zinnen."""
                 break
 
         # Double-check availability before booking (prevents conflicts if candidate took hours to respond)
-        # Skip real calendar lookups in test mode
         recruiter_email = os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
-        if recruiter_email and date and os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE") and not self.state.is_test:
+        if recruiter_email and date and os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE"):
             try:
                 from src.services.google_calendar_service import calendar_service
 
@@ -1001,7 +1000,7 @@ Vraag welke doordeweekse dag zou passen. Max 2 zinnen."""
         slot_data = await get_time_slots_for_whatsapp(
             days_ahead=1,
             start_offset_days=days_until,
-            skip_calendar=self.state.is_test,
+            skip_calendar=False,
         )
 
         if slot_data.slots:
@@ -1058,7 +1057,7 @@ Houd het kort en vriendelijk (2-3 zinnen)."""
         slot_data = await get_time_slots_for_whatsapp(
             days_ahead=self.config.schedule_days_ahead,
             start_offset_days=7,  # Start from 1 week later
-            skip_calendar=self.state.is_test,
+            skip_calendar=False,
         )
 
         if slot_data.slots:
@@ -1555,36 +1554,31 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
     async def _generate(self, prompt: str) -> str:
         """Generate text using LLM with system instruction for consistent tone."""
         import time
-        from google import genai
-        from google.genai import types
+        from src.utils.llm import generate
 
         t0 = time.perf_counter()
-        client = genai.Client()
-        response = await client.aio.models.generate_content(
+        result = await generate(
+            prompt=prompt,
             model=self.config.model_generate,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=self.config.system_instruction,
-            ),
+            system_instruction=self.config.system_instruction,
         )
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(f"⏱️ _generate ({self.config.model_generate}): {elapsed:.0f}ms")
-        return response.text
+        return result
 
     async def _evaluate(self, prompt: str) -> str:
         """Fast evaluation using lightweight model for JSON responses."""
         import time
-        from google import genai
+        from src.utils.llm import generate
 
         t0 = time.perf_counter()
-        client = genai.Client()
-        response = await client.aio.models.generate_content(
+        result = await generate(
+            prompt=prompt,
             model=self.config.model_evaluate,
-            contents=prompt,
         )
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(f"⏱️ _evaluate ({self.config.model_evaluate}): {elapsed:.0f}ms")
-        return response.text
+        return result
 
 
 # =============================================================================

@@ -4,11 +4,14 @@ Activities Router - Table view of all active agent tasks.
 Shows a unified table of what agents are working on, with stuck detection.
 """
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
 
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from src.database import get_db_pool
 from src.services.workflow_service import WorkflowService
@@ -297,22 +300,22 @@ def _get_workflow_steps(workflow_type: str, current_step: str, status: str, cont
     # Define step sequences for each workflow type
     step_sequences = {
         "pre_screening": [
-            ("in_progress", "Gesprek"),
-            ("processing", "Verwerken"),
-            ("processed", "Notificaties"),
+            ("in_progress", "Screening gesprek"),
+            ("processing", "Antwoorden analyseren"),
+            ("processed", "Recruiter notificatie"),
             ("complete", "Afgerond"),
         ],
         "vacancy_setup": [
-            ("generating", "Genereren"),
-            ("analyzing", "Analyseren"),
-            ("awaiting_review", "Review"),
-            ("publishing", "Publiceren"),
+            ("generating", "Vragen genereren"),
+            ("analyzing", "Vacature analyseren"),
+            ("awaiting_review", "Wacht op goedkeuring"),
+            ("publishing", "Kanalen publiceren"),
             ("complete", "Afgerond"),
         ],
         "document_collection": [
-            ("request_sent", "Verzoek"),
-            ("waiting", "Wachten"),
-            ("verifying", "Verifiëren"),
+            ("plan_generated", "Plan opgesteld"),
+            ("collecting", "Documenten verzamelen"),
+            ("reviewing_skipped", "Opvolging"),
             ("complete", "Afgerond"),
         ],
     }
@@ -476,13 +479,13 @@ async def get_tasks(
 @router.post("/tick")
 async def process_timers():
     """
-    Process all pending timer actions (timeout expired workflows).
+    Process all pending timer actions (timeout and auto-triggered workflows).
 
     This endpoint should be called by Cloud Scheduler every minute.
     For local testing, call it manually.
 
     Returns:
-        Dict with processed count and results for each timed-out workflow.
+        Dict with processed count and results for each workflow.
 
     Example:
         curl -X POST localhost:8080/api/activities/tick
@@ -490,6 +493,18 @@ async def process_timers():
     pool = await get_db_pool()
     service = WorkflowService(pool)
     result = await service.process_timers()
+
+    # Dispatch triggers through the orchestrator
+    if result.get("auto_triggers"):
+        from src.workflows.orchestrator import get_orchestrator
+        orchestrator = await get_orchestrator()
+        for trigger in result["auto_triggers"]:
+            try:
+                event = trigger.get("event", "auto")
+                await orchestrator.handle_event(trigger["id"], event, {})
+            except Exception as e:
+                logger.error(f"Failed to dispatch {trigger.get('event')} for workflow {trigger['id']}: {e}")
+
     return result
 
 

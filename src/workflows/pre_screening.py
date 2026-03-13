@@ -127,30 +127,15 @@ async def handle_screening_completed(
     vacancy_id_str = context.get("vacancy_id")
     if candidate_id_str and vacancy_id_str:
         try:
-            from src.database import get_db_pool
-            from src.models.candidacy import CandidacyStage
-            from src.repositories.candidacy_repo import CandidacyRepository
-            from src.services.candidacy_transition_service import CandidacyStageTransitionService
-
-            pool = await get_db_pool()
-            candidacy_repo = CandidacyRepository(pool)
-            candidacy = await candidacy_repo.find_by_candidate_and_vacancy(
-                uuid.UUID(candidate_id_str), uuid.UUID(vacancy_id_str)
+            await _advance_candidacy_after_screening(
+                workflow_id=workflow["id"],
+                candidate_id_str=candidate_id_str,
+                vacancy_id_str=vacancy_id_str,
+                qualified=qualified,
+                interview_slot=interview_slot,
+                application_id=application_id,
+                channel=channel,
             )
-            if candidacy:
-                to_stage = CandidacyStage.QUALIFIED if qualified else CandidacyStage.REJECTED
-                transition_service = CandidacyStageTransitionService(pool)
-                await transition_service.transition(
-                    candidacy_id=candidacy["id"],
-                    to_stage=to_stage,
-                    triggered_by="pre_screening_agent",
-                    metadata={"application_id": application_id, "channel": channel},
-                )
-            else:
-                logger.debug(
-                    f"Workflow {workflow['id']}: no candidacy found for "
-                    f"candidate={candidate_id_str} vacancy={vacancy_id_str}, skipping stage transition"
-                )
         except Exception as e:
             logger.error(f"Workflow {workflow['id']}: failed to advance candidacy stage: {e}")
 
@@ -158,6 +143,159 @@ async def handle_screening_completed(
         "next_step": "processed",
         "qualified": qualified,
         "interview_slot": interview_slot,
+    }
+
+
+async def _advance_candidacy_after_screening(
+    workflow_id: str,
+    candidate_id_str: str,
+    vacancy_id_str: str,
+    qualified: bool,
+    interview_slot: Optional[str],
+    application_id: Optional[str],
+    channel: str,
+) -> None:
+    """
+    Advance candidacy pipeline based on screening outcome.
+
+    Three cases:
+    1. Passed + interview booked  → INTERVIEW_PLANNED on current vacancy
+    2. Passed + no interview slot → QUALIFIED on current vacancy
+    3. Not passed                 → Move candidacy to "Open Sollicitatie" as QUALIFIED
+    """
+    from src.database import get_db_pool
+    from src.models.candidacy import CandidacyStage
+    from src.repositories.candidacy_repo import CandidacyRepository
+    from src.services.candidacy_transition_service import CandidacyStageTransitionService
+
+    pool = await get_db_pool()
+    candidacy_repo = CandidacyRepository(pool)
+    transition_service = CandidacyStageTransitionService(pool)
+
+    candidacy = await candidacy_repo.find_by_candidate_and_vacancy(
+        uuid.UUID(candidate_id_str), uuid.UUID(vacancy_id_str)
+    )
+    if not candidacy:
+        logger.debug(
+            f"Workflow {workflow_id}: no candidacy found for "
+            f"candidate={candidate_id_str} vacancy={vacancy_id_str}, skipping stage transition"
+        )
+        return
+
+    meta = {"application_id": application_id, "channel": channel}
+
+    if qualified and interview_slot:
+        # Case 1: passed + interview booked → INTERVIEW_PLANNED
+        await transition_service.transition(
+            candidacy_id=candidacy["id"],
+            to_stage=CandidacyStage.INTERVIEW_PLANNED,
+            triggered_by="pre_screening_agent",
+            metadata={**meta, "interview_slot": interview_slot},
+        )
+        logger.info(f"Workflow {workflow_id}: candidacy → INTERVIEW_PLANNED")
+
+    elif qualified and not interview_slot:
+        # Case 2: passed but no timeslot match → QUALIFIED (recruiter schedules manually)
+        await transition_service.transition(
+            candidacy_id=candidacy["id"],
+            to_stage=CandidacyStage.QUALIFIED,
+            triggered_by="pre_screening_agent",
+            metadata={**meta, "reason": "no_matching_timeslot"},
+        )
+        logger.info(f"Workflow {workflow_id}: candidacy → QUALIFIED (no timeslot)")
+
+    else:
+        # Case 3: not passed → move to "Open Sollicitatie" as QUALIFIED
+        open_vacancy = await pool.fetchrow(
+            """
+            SELECT id FROM ats.vacancies
+            WHERE workspace_id = $1 AND is_open_application = true
+            LIMIT 1
+            """,
+            candidacy["workspace_id"],
+        )
+        if open_vacancy:
+            # Check if candidate already has a candidacy on Open Sollicitatie
+            existing = await candidacy_repo.exists_for_vacancy(
+                uuid.UUID(candidate_id_str), open_vacancy["id"]
+            )
+            if existing:
+                logger.info(
+                    f"Workflow {workflow_id}: candidate already has Open Sollicitatie candidacy, "
+                    f"transitioning current candidacy to REJECTED"
+                )
+                await transition_service.transition(
+                    candidacy_id=candidacy["id"],
+                    to_stage=CandidacyStage.REJECTED,
+                    triggered_by="pre_screening_agent",
+                    metadata={**meta, "reason": "not_passed_already_in_open_pool"},
+                )
+            else:
+                # Move candidacy to Open Sollicitatie + transition to QUALIFIED
+                await candidacy_repo.reassign_vacancy(candidacy["id"], open_vacancy["id"])
+                await transition_service.transition(
+                    candidacy_id=candidacy["id"],
+                    to_stage=CandidacyStage.QUALIFIED,
+                    triggered_by="pre_screening_agent",
+                    metadata={**meta, "reason": "not_passed_moved_to_open_pool"},
+                )
+                logger.info(f"Workflow {workflow_id}: candidacy → QUALIFIED on Open Sollicitatie")
+        else:
+            # No Open Sollicitatie vacancy found — reject on current vacancy
+            logger.warning(f"Workflow {workflow_id}: no Open Sollicitatie vacancy found, rejecting")
+            await transition_service.transition(
+                candidacy_id=candidacy["id"],
+                to_stage=CandidacyStage.REJECTED,
+                triggered_by="pre_screening_agent",
+                metadata={**meta, "reason": "not_passed_no_open_vacancy"},
+            )
+
+
+async def handle_screening_timeout(
+    orchestrator: "WorkflowOrchestrator",
+    workflow: dict,
+    payload: dict,
+) -> dict:
+    """
+    Handle pre-screening timeout (candidate abandoned or failed to complete).
+
+    Transitions candidacy to REJECTED on the current vacancy.
+    """
+    context = workflow["context"]
+    candidate_id_str = context.get("candidate_id")
+    vacancy_id_str = context.get("vacancy_id")
+    channel = context.get("channel", "unknown")
+
+    logger.info(f"Workflow {workflow['id']}: screening timed out (channel={channel})")
+
+    if candidate_id_str and vacancy_id_str:
+        try:
+            from src.database import get_db_pool
+            from src.models.candidacy import CandidacyStage
+            from src.repositories.candidacy_repo import CandidacyRepository
+            from src.services.candidacy_transition_service import CandidacyStageTransitionService
+
+            pool = await get_db_pool()
+            candidacy_repo = CandidacyRepository(pool)
+            transition_service = CandidacyStageTransitionService(pool)
+
+            candidacy = await candidacy_repo.find_by_candidate_and_vacancy(
+                uuid.UUID(candidate_id_str), uuid.UUID(vacancy_id_str)
+            )
+            if candidacy:
+                await transition_service.transition(
+                    candidacy_id=candidacy["id"],
+                    to_stage=CandidacyStage.WITHDRAWN,
+                    triggered_by="pre_screening_timeout",
+                    metadata={"channel": channel, "reason": "screening_abandoned"},
+                )
+                logger.info(f"Workflow {workflow['id']}: candidacy → WITHDRAWN (timeout)")
+        except Exception as e:
+            logger.error(f"Workflow {workflow['id']}: failed to reject candidacy on timeout: {e}")
+
+    return {
+        "next_step": "timed_out",
+        "new_status": "timed_out",
     }
 
 

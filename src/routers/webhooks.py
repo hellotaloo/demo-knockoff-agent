@@ -20,6 +20,7 @@ from agents.pre_screening.whatsapp import (
     restore_agent_from_state,
     is_conversation_complete,
     get_conversation_outcome,
+    AgentConfig,
     Phase,
 )
 from agents.pre_screening.transcript_processor import process_transcript
@@ -30,6 +31,7 @@ from src.services import ActivityService
 from src.services.call_result_processor import process_call_results
 from src.repositories import ApplicationRepository, CandidacyRepository
 from src.database import get_db_pool
+from src.services.livekit_service import fetch_scheduling_config
 from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
 from src.services.whatsapp_service import send_whatsapp_message
 from src.services.screening_notes_integration_service import trigger_screening_notes_integration
@@ -87,8 +89,10 @@ async def _process_whatsapp_conversation(
     conv_row = await pool.fetchrow(
         """
         SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone, sc.is_test,
-               sc.application_id, sc.pre_screening_id, sc.candidate_id
+               sc.application_id, sc.pre_screening_id, sc.candidate_id,
+               v.workspace_id
         FROM agents.pre_screening_sessions sc
+        JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.id = $1
         """,
         conversation_id
@@ -175,6 +179,7 @@ async def _process_whatsapp_conversation(
             full_name=candidate_name,
             phone=candidate_phone,
             is_test=is_test,
+            workspace_id=conv_row["workspace_id"],
         )
         # Link candidate to session for future lookups
         await pool.execute(
@@ -293,7 +298,7 @@ async def _process_whatsapp_conversation(
             channel=ActivityChannel.WHATSAPP,
             actor_type=ActorType.AGENT,
             metadata={"agent_outcome": outcome.get("outcome", "")},
-            summary=f"Pre-screening {'geslaagd' if qualified else 'niet geslaagd'}"
+            summary=f"Pre-screening afgerond — {'geslaagd' if qualified else 'niet geslaagd'}"
         )
 
     # Trigger shared post-processor (scoring + summary + downstream events)
@@ -345,7 +350,8 @@ async def _save_whatsapp_scheduled_interview(
         # Look up vacancy info from conversation
         conv_info = await pool.fetchrow(
             """
-            SELECT sc.vacancy_id, sc.candidate_name, sc.candidate_phone,
+            SELECT sc.vacancy_id, sc.candidate_id, sc.application_id,
+                   sc.candidate_name, sc.candidate_phone,
                    v.title as vacancy_title
             FROM agents.pre_screening_sessions sc
             JOIN ats.vacancies v ON v.id = sc.vacancy_id
@@ -373,6 +379,8 @@ async def _save_whatsapp_scheduled_interview(
             selected_date=date_obj,
             selected_time=selected_time,
             selected_slot_text=selected_slot_text,
+            application_id=conv_info["application_id"],
+            candidate_id=conv_info["candidate_id"],
             candidate_name=candidate_name or conv_info["candidate_name"],
             candidate_phone=conv_info["candidate_phone"],
             channel="whatsapp",
@@ -543,9 +551,14 @@ async def _webhook_impl_vacancy_specific(
                 logger.error(f"agent_state is not a dict after unwrapping: {type(agent_state)}")
                 return "Er is een fout opgetreden. Probeer het later opnieuw.", False, None
 
-            # Restore agent and cache it
+            # Restore agent with DB config and cache it
+            sched_cfg = await fetch_scheduling_config()
+            config = AgentConfig(
+                schedule_days_ahead=sched_cfg["schedule_days_ahead"],
+                schedule_start_offset=sched_cfg["schedule_start_offset"],
+            )
             state_json = json.dumps(agent_state)
-            agent = restore_agent_from_state(state_json)
+            agent = restore_agent_from_state(state_json, config=config)
             timings["restore_agent"] = (time_module.perf_counter() - t0) * 1000
 
             t0 = time_module.perf_counter()
@@ -1019,7 +1032,7 @@ async def elevenlabs_webhook(request: Request):
     screening_conv = await pool.fetchrow(
         """
         SELECT sc.pre_screening_id, sc.vacancy_id, sc.candidate_phone, sc.candidate_name, sc.is_test,
-               sc.application_id, sc.candidate_id, v.title as vacancy_title
+               sc.application_id, sc.candidate_id, v.title as vacancy_title, v.workspace_id
         FROM agents.pre_screening_sessions sc
         JOIN ats.vacancies v ON v.id = sc.vacancy_id
         WHERE sc.session_id = $1 AND sc.channel = 'voice'
@@ -1321,8 +1334,28 @@ async def elevenlabs_webhook(request: Request):
             channel=ActivityChannel.VOICE,
             actor_type=ActorType.AGENT,
             metadata=activity_metadata,
-            summary=f"Pre-screening {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
+            summary=f"Pre-screening afgerond — {'geslaagd' if result.overall_passed else 'niet geslaagd'}" + (f" (score: {avg_score}%)" if avg_score else "")
         )
+
+    # Extract candidate attributes from voice transcript
+    if candidate_id:
+        try:
+            from src.services.attribute_extraction_service import extract_and_save_attributes
+            transcript_text = "\n".join(
+                f"{m.get('role', 'unknown')}: {m.get('message', '')}" for m in data.transcript
+            )
+            extracted = await extract_and_save_attributes(
+                text=transcript_text,
+                candidate_id=candidate_id,
+                workspace_id=screening_conv["workspace_id"],
+                pool=pool,
+                source="pre_screening",
+                source_session_id=data.conversation_id,
+                collected_by="pre_screening",
+            )
+            logger.info(f"Extracted {len(extracted)} candidate attributes from voice transcript")
+        except Exception as attr_err:
+            logger.error(f"Attribute extraction failed for voice application {application_id}: {attr_err}", exc_info=True)
 
     # Trigger screening notes integration (Google Doc creation + calendar attachment)
     # Runs as background task for qualified candidates with scheduled interviews

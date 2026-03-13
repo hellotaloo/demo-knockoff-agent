@@ -21,6 +21,8 @@ from src.models.ontology import (
     OntologyListResponse,
     OntologyTypeInfo,
     OntologyOverviewResponse,
+    OntologyOverviewStatsResponse,
+    OntologyStatCard,
     DocumentTypeCreateRequest,
     DocumentTypeUpdateRequest,
     VerificationSchema,
@@ -179,6 +181,79 @@ async def get_ontology_overview(
     ]
 
     return OntologyOverviewResponse(types=types)
+
+
+@router.get("/stats", response_model=OntologyOverviewStatsResponse)
+async def get_ontology_stats(
+    workspace_id: uuid.UUID = Query(..., description="Workspace ID"),
+    pool=Depends(get_pool),
+):
+    """
+    Dashboard stats for the ontology overview page.
+
+    Dynamically discovers all ats.types_* tables and computes:
+    - object_types: number of registered object types
+    - categories: total unique categories across all types
+    - total_items: total parent entities across all types
+    - subtypes: total child entities across all types
+    """
+    # Discover all ontology type tables dynamically
+    type_tables = await pool.fetch("""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'ats' AND table_name LIKE 'types_%'
+        ORDER BY table_name
+    """)
+
+    total_items = 0
+    total_subtypes = 0
+    all_categories: set[str] = set()
+
+    for table in type_tables:
+        table_name = table["table_name"]
+
+        # Check if this table has a parent_id column (supports hierarchy)
+        has_parent = await pool.fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'ats' AND table_name = $1 AND column_name = 'parent_id'
+            )
+        """, table_name)
+
+        if has_parent:
+            # Count parents and subtypes separately
+            counts = await pool.fetchrow(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE parent_id IS NULL) AS parents,
+                    COUNT(*) FILTER (WHERE parent_id IS NOT NULL) AS subtypes
+                FROM ats.{table_name}
+                WHERE workspace_id = $1 AND is_active = true
+            """, workspace_id)
+            total_items += counts["parents"]
+            total_subtypes += counts["subtypes"]
+        else:
+            # Flat table — all rows are top-level items
+            count = await pool.fetchval(f"""
+                SELECT COUNT(*) FROM ats.{table_name}
+                WHERE workspace_id = $1 AND is_active = true
+            """, workspace_id)
+            total_items += count
+
+        # Collect categories
+        categories = await pool.fetch(f"""
+            SELECT DISTINCT category FROM ats.{table_name}
+            WHERE workspace_id = $1 AND is_active = true AND category IS NOT NULL
+        """, workspace_id)
+        all_categories.update(r["category"] for r in categories)
+
+    stats = [
+        OntologyStatCard(key="object_types", label="Objecttypes", value=len(type_tables), icon="boxes"),
+        OntologyStatCard(key="total_items", label="Totaal items", value=total_items, icon="layers"),
+        OntologyStatCard(key="subtypes", label="Subtypes", value=total_subtypes, icon="git-branch"),
+        OntologyStatCard(key="categories", label="Categorieën", value=len(all_categories), icon="tags"),
+    ]
+
+    return OntologyOverviewStatsResponse(stats=stats)
 
 
 @router.get("/entities", response_model=OntologyListResponse)

@@ -383,3 +383,283 @@ class CandidateRepository:
             """,
             rating, candidate_id
         )
+
+    async def get_candidacies(self, candidate_id: uuid.UUID) -> List[asyncpg.Record]:
+        """Get all candidacies for a candidate with vacancy info and latest application."""
+        return await self.pool.fetch(
+            """
+            SELECT
+                c.id,
+                c.vacancy_id,
+                c.stage,
+                c.source,
+                c.stage_updated_at,
+                c.created_at,
+                v.title        AS vacancy_title,
+                v.company      AS vacancy_company,
+                v.is_open_application AS is_open_application,
+                app.id                   AS app_id,
+                app.channel              AS app_channel,
+                app.status               AS app_status,
+                app.qualified            AS app_qualified,
+                app.completed_at         AS app_completed_at,
+                (
+                    SELECT COUNT(*)::int
+                    FROM agents.pre_screening_answers
+                    WHERE application_id = app.id AND passed IS NOT NULL
+                ) AS app_ko_total,
+                (
+                    SELECT COUNT(*)::int
+                    FROM agents.pre_screening_answers
+                    WHERE application_id = app.id AND passed = true
+                ) AS app_ko_passed,
+                (
+                    SELECT AVG(score)::int
+                    FROM agents.pre_screening_answers
+                    WHERE application_id = app.id AND passed IS NULL AND score IS NOT NULL
+                ) AS app_score
+            FROM ats.candidacies c
+            LEFT JOIN ats.vacancies v ON v.id = c.vacancy_id
+            LEFT JOIN LATERAL (
+                SELECT a.id, a.channel, a.status, a.qualified, a.completed_at
+                FROM ats.applications a
+                WHERE a.candidacy_id = c.id
+                  AND a.status IN ('active', 'completed')
+                ORDER BY a.completed_at DESC NULLS LAST
+                LIMIT 1
+            ) app ON true
+            WHERE c.candidate_id = $1
+            ORDER BY c.stage_updated_at DESC
+            """,
+            candidate_id,
+        )
+
+    async def get_screening_results(self, application_ids: List[uuid.UUID]) -> dict:
+        """
+        Get full screening results (application details + answers) for a list of application IDs.
+        Returns a dict keyed by application_id.
+        """
+        if not application_ids:
+            return {}
+
+        # Fetch application details
+        apps = await self.pool.fetch(
+            """
+            SELECT id, channel, status, qualified, summary, interaction_seconds,
+                   completed_at
+            FROM ats.applications
+            WHERE id = ANY($1)
+            """,
+            application_ids,
+        )
+        apps_by_id = {row["id"]: row for row in apps}
+
+        # Fetch all answers for these applications
+        answers = await self.pool.fetch(
+            """
+            SELECT application_id, question_id, question_text,
+                   CASE WHEN passed IS NOT NULL THEN 'knockout' ELSE 'qualification' END AS question_type,
+                   answer, passed, score, rating, motivation
+            FROM agents.pre_screening_answers
+            WHERE application_id = ANY($1)
+            ORDER BY application_id, id
+            """,
+            application_ids,
+        )
+
+        # Group answers by application_id
+        answers_by_app: dict[uuid.UUID, list] = {}
+        ko_stats: dict[uuid.UUID, dict] = {}
+        qual_stats: dict[uuid.UUID, dict] = {}
+
+        for a in answers:
+            app_id = a["application_id"]
+            answers_by_app.setdefault(app_id, []).append(a)
+
+            if a["passed"] is not None:
+                stats = ko_stats.setdefault(app_id, {"total": 0, "passed": 0})
+                stats["total"] += 1
+                if a["passed"]:
+                    stats["passed"] += 1
+            elif a["score"] is not None:
+                stats = qual_stats.setdefault(app_id, {"total": 0, "sum": 0})
+                stats["total"] += 1
+                stats["sum"] += a["score"]
+
+        # Build result dict
+        results = {}
+        for app_id, app in apps_by_id.items():
+            ko = ko_stats.get(app_id, {"total": 0, "passed": 0})
+            qual = qual_stats.get(app_id, {"total": 0, "sum": 0})
+            avg_score = int(qual["sum"] / qual["total"]) if qual["total"] > 0 else None
+
+            # Only include answers for completed applications
+            app_answers = answers_by_app.get(app_id, []) if app["status"] == "completed" else []
+
+            results[app_id] = {
+                "application_id": app_id,
+                "channel": app["channel"],
+                "status": app["status"],
+                "qualified": app["qualified"],
+                "summary": app["summary"],
+                "interaction_seconds": app["interaction_seconds"] or 0,
+                "knockout_passed": ko["passed"],
+                "knockout_total": ko["total"],
+                "open_questions_score": avg_score,
+                "open_questions_total": qual["total"],
+                "completed_at": app["completed_at"],
+                "answers": app_answers,
+            }
+
+        return results
+
+    async def get_document_collections_for_candidate(self, candidate_id: uuid.UUID) -> List[asyncpg.Record]:
+        """
+        Get document collections for a candidate with per-document upload status.
+        Returns collections joined with required documents and their upload statuses.
+        """
+        # Get collections for this candidate
+        collections = await self.pool.fetch(
+            """
+            SELECT
+                dc.id,
+                dc.candidate_id,
+                dc.vacancy_id,
+                dc.application_id,
+                dc.status,
+                dc.documents_required,
+                dc.started_at,
+                dc.completed_at,
+                COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM agents.document_collection_uploads u
+                    WHERE u.collection_id = dc.id AND u.status = 'verified'
+                ), 0) AS documents_collected
+            FROM agents.document_collections dc
+            WHERE dc.candidate_id = $1
+            ORDER BY dc.started_at DESC
+            """,
+            candidate_id,
+        )
+
+        if not collections:
+            return []
+
+        # Get uploads for all collections
+        collection_ids = [c["id"] for c in collections]
+        uploads = await self.pool.fetch(
+            """
+            SELECT u.collection_id, u.document_type_id, u.status, u.uploaded_at
+            FROM agents.document_collection_uploads u
+            WHERE u.collection_id = ANY($1)
+            ORDER BY u.uploaded_at
+            """,
+            collection_ids,
+        )
+
+        # Get document type info for all referenced types
+        doc_type_ids = set()
+        for c in collections:
+            if c["documents_required"]:
+                import json as _json
+                docs_req = c["documents_required"] if isinstance(c["documents_required"], list) else _json.loads(c["documents_required"])
+                for doc in docs_req:
+                    if isinstance(doc, dict) and "document_type_id" in doc:
+                        doc_type_ids.add(uuid.UUID(doc["document_type_id"]))
+        for u in uploads:
+            if u["document_type_id"]:
+                doc_type_ids.add(u["document_type_id"])
+
+        doc_types = {}
+        if doc_type_ids:
+            rows = await self.pool.fetch(
+                "SELECT id, name, icon FROM ats.types_documents WHERE id = ANY($1)",
+                list(doc_type_ids),
+            )
+            doc_types = {row["id"]: row for row in rows}
+
+        # Group uploads by (collection_id, document_type_id) — take the latest/best status
+        uploads_by_collection: dict[uuid.UUID, dict[uuid.UUID, dict]] = {}
+        for u in uploads:
+            coll_id = u["collection_id"]
+            dt_id = u["document_type_id"]
+            if dt_id is None:
+                continue
+            uploads_by_collection.setdefault(coll_id, {})
+            existing = uploads_by_collection[coll_id].get(dt_id)
+            # Keep the most relevant upload (verified > needs_review > rejected > pending)
+            status_priority = {"verified": 4, "needs_review": 3, "rejected": 2, "pending": 1}
+            if existing is None or status_priority.get(u["status"], 0) > status_priority.get(existing["status"], 0):
+                uploads_by_collection[coll_id][dt_id] = {"status": u["status"], "uploaded_at": u["uploaded_at"]}
+
+        # Build result
+        result = []
+        for c in collections:
+            import json as _json
+            docs_req = c["documents_required"] if isinstance(c["documents_required"], list) else (_json.loads(c["documents_required"]) if c["documents_required"] else [])
+            coll_uploads = uploads_by_collection.get(c["id"], {})
+
+            documents = []
+            for doc in docs_req:
+                if not isinstance(doc, dict) or "document_type_id" not in doc:
+                    continue
+                dt_id = uuid.UUID(doc["document_type_id"])
+                dt_info = doc_types.get(dt_id, {})
+                upload = coll_uploads.get(dt_id)
+                documents.append({
+                    "document_type_id": str(dt_id),
+                    "document_type_name": dt_info.get("name", doc.get("name", "Onbekend")),
+                    "icon": dt_info.get("icon"),
+                    "status": upload["status"] if upload else "pending",
+                    "uploaded_at": upload["uploaded_at"] if upload else None,
+                })
+
+            # Determine progress
+            collected = int(c["documents_collected"])
+            total = int(c["documents_total"])
+            if collected == 0:
+                progress = "pending"
+            elif collected >= total:
+                progress = "completed"
+            else:
+                progress = "in_progress"
+
+            result.append({
+                "collection_id": c["id"],
+                "vacancy_id": c["vacancy_id"],
+                "application_id": c["application_id"],
+                "candidate_id": c["candidate_id"],
+                "status": c["status"],
+                "progress": progress,
+                "documents_collected": collected,
+                "documents_total": total,
+                "documents": documents,
+            })
+
+        return result
+
+    async def get_documents(self, candidate_id: uuid.UUID) -> List[asyncpg.Record]:
+        """Get all documents for a candidate with document type info."""
+        return await self.pool.fetch(
+            """
+            SELECT
+                cd.id,
+                cd.document_type_id,
+                dt.name         AS document_type_name,
+                dt.slug         AS document_type_slug,
+                cd.document_number,
+                cd.expiration_date,
+                cd.status,
+                cd.verification_passed,
+                cd.storage_path,
+                cd.notes,
+                cd.created_at,
+                cd.updated_at
+            FROM ats.candidate_documents cd
+            JOIN ats.types_documents dt ON dt.id = cd.document_type_id
+            WHERE cd.candidate_id = $1
+            ORDER BY cd.created_at DESC
+            """,
+            candidate_id,
+        )

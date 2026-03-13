@@ -311,11 +311,26 @@ class WorkflowService:
 
             try:
                 if action_type == "timeout":
-                    # SLA breached - do NOT auto-complete. Item stays active and stuck.
-                    # The UI will show it as stuck based on next_action_at being in the past.
-                    logger.info(f"Workflow {workflow_id}: SLA breached (staying stuck until manual resolution)")
-                    results.append({"id": workflow_id, "action": "sla_breached", "status": "stuck"})
-                    # Don't increment processed - we're not changing anything
+                    # Clear timer and return for caller to dispatch through orchestrator
+                    await self.pool.execute(
+                        """
+                        UPDATE agents.workflows
+                        SET next_action_at = NULL,
+                            next_action_type = NULL,
+                            updated_at = NOW()
+                        WHERE id = $1
+                        """,
+                        row["id"],
+                    )
+                    logger.info(f"Workflow {workflow_id}: timeout trigger ready")
+                    auto_triggers.append({
+                        "id": workflow_id,
+                        "workflow_type": row["workflow_type"],
+                        "step": row["current_step"],
+                        "event": "timeout",
+                    })
+                    results.append({"id": workflow_id, "action": "timeout", "step": row["current_step"]})
+                    processed += 1
                     continue
 
                 elif action_type == "auto":
@@ -335,6 +350,7 @@ class WorkflowService:
                         "id": workflow_id,
                         "workflow_type": row["workflow_type"],
                         "step": row["current_step"],
+                        "event": "auto",
                     })
                     results.append({"id": workflow_id, "action": "auto", "step": row["current_step"]})
                     processed += 1

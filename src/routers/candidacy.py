@@ -41,11 +41,13 @@ def _build_response(row) -> CandidacyResponse:
         latest_app = CandidacyApplicationSummary(
             id=str(row["app_id"]),
             channel=row["app_channel"],
+            status=row["app_status"] or "active",
             qualified=row["app_qualified"],
             open_questions_score=row["app_score"],
             knockout_passed=row["app_ko_passed"] or 0,
             knockout_total=row["app_ko_total"] or 0,
             completed_at=row["app_completed_at"],
+            interview_scheduled_at=row["app_interview_scheduled_at"],
         )
 
     linked_vacancies = []

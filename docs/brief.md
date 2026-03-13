@@ -1,47 +1,49 @@
-# Frontend Brief
+# Candidate Attributes — Manual Editing (Candidate Detail Panel)
 
-## Pipeline nav — global candidacies view
+The candidate detail panel allows recruiters to manually add, edit, and remove attributes.
 
-### What changed on the backend
-`GET /candidacies` (no `vacancy_id` param) now returns **all candidacies** workspace-wide — one entry per (candidate × vacancy) application. Previously it only returned talent-pool entries (`vacancy_id IS NULL`).
+## Adding a new attribute
 
-### Why
-The old "Kandidaten" pipeline tab was broken: a candidate linked to multiple vacancies (e.g. Jan Peeters → 3 vacancies in 3 different stages) had to be placed in a single kanban column, which made no sense. Standard ATS practice (Greenhouse, Ashby, Lever) separates two concepts:
+1. Fetch available attribute types: `GET /workspaces/{workspace_id}/candidate-attribute-types?is_active=true`
+2. Show a dropdown/picker with types not yet set on the candidate (filter out types already in `candidate.attributes`)
+3. Render the appropriate input based on `data_type`:
+   - `text` → text input
+   - `boolean` → toggle/switch
+   - `date` → date picker
+   - `number` → number input
+   - `select` → dropdown with options from the type's `options` array (show `label`, store `value`)
+   - `multi_select` → multi-select/checkbox group from `options`
+4. Save: `PUT /candidates/{candidate_id}/attributes` with `source: "manual"`
 
-1. **Kandidaten** — the people database. A list of persons. No kanban.
-2. **Pipeline** — the overview of all active applications by stage. One card per application, not one card per person.
-
-### Required frontend changes
-
-#### 1. Add a new top-level nav item: "Pipeline"
-- Route: `/records/pipeline` (or similar)
-- Calls `GET /candidacies?workspace_id=...` (no vacancy_id)
-- Renders a **kanban grouped by stage** (same columns as today: Nieuw, Pre-screening, Gekwalificeerd, …)
-- Each card shows: **candidate name** + **vacancy title** (the `vacancy.title` field in the response)
-- Jan Peeters will appear as **3 separate cards** in 3 different columns — that's correct
-
-#### 2. Remove the "Pipeline" tab from `/records/candidates`
-- The Kandidaten page keeps only: **Lijst** and **Gearchiveerd** tabs
-- It is now purely a candidate database — no kanban, no stage columns
-
-### API response shape (unchanged)
-Each candidacy card has:
-```json
-{
-  "id": "...",
-  "stage": "pre_screening",
-  "candidate": { "full_name": "Jan Peeters", ... },
-  "vacancy": { "title": "Logistiek Supervisor", ... },
-  "linked_vacancies": [
-    { "vacancy_title": "Customer Service Medewerker", "stage": "qualified" },
-    { "vacancy_title": "Technisch commercieel bin...", "stage": "interview_planned" }
-  ],
-  ...
-}
+```typescript
+// Example: recruiter sets "has own transport" manually
+await fetch(`/candidates/${candidateId}/attributes`, {
+  method: 'PUT',
+  body: JSON.stringify({
+    attribute_type_id: "...",   // the type's UUID
+    value: "true",              // always a string
+    source: "manual",
+  })
+})
 ```
-`linked_vacancies` now excludes the card's own vacancy (backend fix), so it can be shown as "also active in:" chips without duplication.
 
-### No breaking changes
-- `GET /candidacies?vacancy_id=XXX` — unchanged (per-vacancy pipeline, used inside vacancy detail if applicable)
-- `GET /candidacies?candidate_id=XXX` — unchanged (candidate detail panel)
-- Stage transitions (`PATCH /candidacies/{id}/stage`) — unchanged
+## Editing an existing attribute
+
+- Click on the attribute value to make it editable (inline edit)
+- Same input rendering rules as above based on `data_type`
+- Save via the same `PUT /candidates/{candidate_id}/attributes` endpoint (upserts by `attribute_type_id`)
+- The `source` updates to `"manual"` when a recruiter overrides an agent-collected value
+
+## Removing an attribute
+
+- Show a delete/remove action on each attribute row
+- Call: `DELETE /candidates/{candidate_id}/attributes/{attribute_id}`
+- Returns 204 on success
+
+## UI Considerations
+
+- Group attributes by `category` with collapsible sections
+- Show an "Add attribute" button that opens the type picker
+- Show `source` badge to distinguish agent-collected vs manual values
+- Agent-collected values that are manually overridden should show `source: "manual"` (the PUT upsert handles this automatically)
+- Consider showing a confirmation when deleting an agent-collected attribute

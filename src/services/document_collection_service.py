@@ -23,8 +23,14 @@ from src.models.document_collection_v2 import (
     StartCollectionResponse,
     DocumentCollectionResponse,
     DocumentCollectionDetailResponse,
+    DocumentCollectionFullDetailResponse,
     CollectionMessageResponse,
     CollectionUploadResponse,
+    CollectionPlanResponse,
+    CollectionPlanDocumentResponse,
+    CollectionPlanStepResponse,
+    CollectionItemStatusResponse,
+    WorkflowStepResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -371,6 +377,234 @@ class DocumentCollectionService:
 
         return self._build_collection_detail_response(collection, messages, uploads, doc_types)
 
+    async def get_collection_full_detail(
+        self, workspace_id: UUID, user_id: UUID, collection_id: UUID
+    ) -> DocumentCollectionFullDetailResponse:
+        """Get enriched collection detail with plan, document statuses, and workflow progress."""
+        await self._check_read_access(workspace_id, user_id)
+
+        collection = await self.collection_repo.get_by_id(collection_id)
+        if not collection or collection["workspace_id"] != workspace_id:
+            raise NotFoundError("Document collection", str(collection_id))
+
+        messages = await self.collection_repo.get_messages(collection_id)
+        uploads = await self.collection_repo.get_uploads(collection_id)
+
+        # Resolve documents_required to full document types
+        # documents_required can be either ["slug1", "slug2"] or [{"slug": "...", "name": "..."}]
+        raw = collection.get("documents_required") or []
+        doc_slugs_raw = json.loads(raw) if isinstance(raw, str) else raw
+        doc_slugs = []
+        for item in doc_slugs_raw:
+            if isinstance(item, str):
+                doc_slugs.append(item)
+            elif isinstance(item, dict) and "slug" in item:
+                doc_slugs.append(item["slug"])
+        if doc_slugs:
+            doc_type_rows = await self.doc_type_repo.get_by_slugs(workspace_id, doc_slugs)
+            doc_types = [self._build_doc_type_response(r) for r in doc_type_rows]
+        else:
+            doc_types = []
+
+        # Parse collection_plan JSONB
+        plan = self._parse_collection_plan(collection.get("collection_plan"))
+
+        # Build unified collection items (documents + attributes)
+        agent_state = collection.get("agent_state")
+        if agent_state and isinstance(agent_state, str):
+            agent_state = json.loads(agent_state)
+        collection_items = self._build_collection_items(plan, uploads, agent_state)
+
+        # Extract plan summary fields for the header
+        raw_plan = collection.get("collection_plan")
+        plan_dict = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
+        summary = plan_dict.get("summary") if isinstance(plan_dict, dict) else None
+        deadline_note = plan_dict.get("deadline_note") if isinstance(plan_dict, dict) else None
+
+        # Look up workflow progress
+        workflow_steps = await self._get_workflow_steps(str(collection_id))
+
+        return DocumentCollectionFullDetailResponse(
+            id=str(collection["id"]),
+            config_id=str(collection["config_id"]) if collection["config_id"] else "",
+            workspace_id=str(collection["workspace_id"]),
+            vacancy_id=str(collection["vacancy_id"]) if collection["vacancy_id"] else None,
+            vacancy_title=collection.get("vacancy_title"),
+            application_id=str(collection["application_id"]) if collection.get("application_id") else None,
+            candidacy_stage=collection.get("candidacy_stage"),
+            candidate_name=collection["candidate_name"],
+            candidate_phone=collection.get("candidate_phone"),
+            status=collection["status"],
+            progress=self._compute_progress(collection),
+            channel=collection["channel"],
+            retry_count=collection["retry_count"],
+            message_count=collection["message_count"],
+            documents_collected=collection.get("documents_collected", 0),
+            documents_total=collection.get("documents_total", 0),
+            started_at=collection["started_at"],
+            updated_at=collection["updated_at"],
+            completed_at=collection.get("completed_at"),
+            messages=[
+                CollectionMessageResponse(role=m["role"], message=m["message"], created_at=m["created_at"])
+                for m in messages
+            ],
+            uploads=[
+                CollectionUploadResponse(
+                    id=str(u["id"]),
+                    document_type_id=str(u["document_type_id"]) if u["document_type_id"] else None,
+                    document_side=u["document_side"],
+                    verification_passed=u.get("verification_passed"),
+                    status=u["status"],
+                    uploaded_at=u["uploaded_at"],
+                )
+                for u in uploads
+            ],
+            documents_required=doc_types,
+            summary=summary,
+            deadline_note=deadline_note,
+            collection_items=collection_items,
+            candidacy_id=str(collection["candidacy_id"]) if collection.get("candidacy_id") else None,
+            candidate_id=str(collection["candidate_id"]) if collection.get("candidate_id") else None,
+            workflow_steps=workflow_steps,
+        )
+
+    @staticmethod
+    def _parse_collection_plan(raw_plan) -> Optional[CollectionPlanResponse]:
+        """Parse collection_plan JSONB into a structured response."""
+        if not raw_plan:
+            return None
+        plan = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
+        if not isinstance(plan, dict):
+            return None
+        return CollectionPlanResponse(
+            summary=plan.get("summary"),
+            deadline_note=plan.get("deadline_note"),
+            intro_message=plan.get("intro_message"),
+            documents_to_collect=[
+                CollectionPlanDocumentResponse(
+                    slug=d.get("slug", ""),
+                    name=d.get("name", ""),
+                    reason=d.get("reason"),
+                    priority=d.get("priority", "required"),
+                )
+                for d in plan.get("documents_to_collect", [])
+            ],
+            attributes_to_collect=plan.get("attributes_to_collect", []),
+            conversation_steps=[
+                CollectionPlanStepResponse(
+                    step=s.get("step", 0),
+                    topic=s.get("topic", ""),
+                    items=s.get("items", []),
+                    message=s.get("message", ""),
+                )
+                for s in plan.get("conversation_steps", [])
+            ],
+            agent_managed_tasks=plan.get("agent_managed_tasks", []),
+            already_complete=plan.get("already_complete", []),
+            final_step=plan.get("final_step"),
+        )
+
+    @staticmethod
+    def _build_collection_items(
+        plan: Optional[CollectionPlanResponse],
+        upload_rows: list,
+        agent_state: Optional[dict],
+    ) -> list[CollectionItemStatusResponse]:
+        """Build unified checklist of documents + attributes with current status."""
+        if not plan:
+            return []
+
+        # Agent state item_statuses (slug → status string or dict with value)
+        item_statuses = {}
+        if agent_state and isinstance(agent_state, dict):
+            item_statuses = agent_state.get("item_statuses", {})
+
+        items = []
+
+        # Documents from the plan
+        for doc in (plan.documents_to_collect or []):
+            status = item_statuses.get(doc.slug, "pending")
+            # status can be a string or dict {"status": "...", "value": "..."}
+            value = None
+            if isinstance(status, dict):
+                value = status.get("value")
+                status = status.get("status", "pending")
+
+            items.append(CollectionItemStatusResponse(
+                slug=doc.slug,
+                name=doc.name,
+                type="document",
+                priority=doc.priority,
+                status=status,
+                value=value,
+            ))
+
+        # Attributes from the plan
+        for attr in (plan.attributes_to_collect or []):
+            slug = attr.get("slug", "") if isinstance(attr, dict) else str(attr)
+            name = attr.get("name", slug) if isinstance(attr, dict) else slug
+            priority = attr.get("priority", "required") if isinstance(attr, dict) else "required"
+
+            status = item_statuses.get(slug, "pending")
+            value = None
+            if isinstance(status, dict):
+                value = status.get("value")
+                status = status.get("status", "pending")
+
+            items.append(CollectionItemStatusResponse(
+                slug=slug,
+                name=name,
+                type="attribute",
+                priority=priority,
+                status=status,
+                value=value,
+            ))
+
+        return items
+
+    async def _get_workflow_steps(self, collection_id: str) -> list[WorkflowStepResponse]:
+        """Look up workflow progress for a document collection."""
+        # Document collection workflow step sequence
+        step_sequence = [
+            ("plan_generated", "Plan opgesteld"),
+            ("collecting", "Documenten verzamelen"),
+            ("reviewing_skipped", "Opvolging"),
+            ("complete", "Afgerond"),
+        ]
+
+        # Find workflow by context.collection_id
+        row = await self.pool.fetchrow(
+            """
+            SELECT current_step, status FROM agents.workflows
+            WHERE workflow_type = 'document_collection'
+              AND context->>'collection_id' = $1
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            collection_id,
+        )
+
+        current_step = row["current_step"] if row else None
+        workflow_status = row["status"] if row else None
+
+        steps = []
+        found_current = False
+        for step_id, label in step_sequence:
+            if step_id == current_step:
+                found_current = True
+                status = "current"
+            elif not found_current:
+                status = "completed"
+            else:
+                status = "pending"
+
+            # If workflow is completed, all steps are completed
+            if workflow_status == "completed":
+                status = "completed"
+
+            steps.append(WorkflowStepResponse(id=step_id, label=label, status=status))
+
+        return steps
+
     async def abandon_collection(
         self, workspace_id: UUID, user_id: UUID, collection_id: UUID
     ) -> None:
@@ -533,6 +767,7 @@ class DocumentCollectionService:
             vacancy_id=str(row["vacancy_id"]) if row["vacancy_id"] else None,
             vacancy_title=row.get("vacancy_title"),
             application_id=str(row["application_id"]) if row["application_id"] else None,
+            candidacy_stage=row.get("candidacy_stage"),
             candidate_name=row["candidate_name"],
             candidate_phone=row.get("candidate_phone"),
             status=row["status"],
@@ -575,6 +810,7 @@ class DocumentCollectionService:
             vacancy_id=str(row["vacancy_id"]) if row["vacancy_id"] else None,
             vacancy_title=row.get("vacancy_title"),
             application_id=str(row["application_id"]) if row["application_id"] else None,
+            candidacy_stage=row.get("candidacy_stage"),
             candidate_name=row["candidate_name"],
             candidate_phone=row.get("candidate_phone"),
             status=row["status"],

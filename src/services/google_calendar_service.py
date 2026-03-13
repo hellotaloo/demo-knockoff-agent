@@ -170,9 +170,11 @@ class GoogleCalendarService:
         Returns:
             List of available slots with date and time info
         """
-        # Calculate time range
+        # Fetch more business days than requested so we can backfill
+        # days that turn out to be fully booked
+        max_attempts = days_ahead + 10  # Look up to 10 extra days to find enough available ones
         start_date = datetime.now(TIMEZONE) + timedelta(days=start_offset_days - 1)
-        business_days = get_next_business_days(start_date, days_ahead)
+        business_days = get_next_business_days(start_date, max_attempts)
 
         if not business_days:
             return []
@@ -183,10 +185,13 @@ class GoogleCalendarService:
 
         busy_times = await self.get_free_busy(calendar_email, time_min, time_max)
 
-        # Generate available slots
+        # Generate available slots, collecting until we have enough days
         slots = []
 
         for day in business_days:
+            if len(slots) >= days_ahead:
+                break
+
             day_name = DUTCH_DAYS[day.weekday()].capitalize()
             month_name = DUTCH_MONTHS[day.month]
             dutch_date = f"{day_name} {day.day} {month_name}"

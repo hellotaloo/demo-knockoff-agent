@@ -5,6 +5,7 @@ Owns all logic for moving a candidacy through the recruitment pipeline:
   - Validates that the transition is allowed (state machine)
   - Persists the new stage + resets stage_updated_at
   - Logs a STAGE_CHANGED activity event
+  - Fires stage-entry agent triggers (e.g. document collection on OFFER)
 
 Usage:
     service = CandidacyStageTransitionService(pool)
@@ -15,6 +16,7 @@ Usage:
         metadata={"application_id": "..."},
     )
 """
+import asyncio
 import logging
 import uuid
 from typing import Optional
@@ -41,6 +43,7 @@ VALID_TRANSITIONS: dict[CandidacyStage, list[CandidacyStage]] = {
     ],
     CandidacyStage.PRE_SCREENING: [
         CandidacyStage.QUALIFIED,
+        CandidacyStage.INTERVIEW_PLANNED,
         CandidacyStage.REJECTED,
         CandidacyStage.WITHDRAWN,
     ],
@@ -148,4 +151,64 @@ class CandidacyStageTransitionService:
             # Don't fail the transition if activity logging fails
             logger.error(f"Failed to log STAGE_CHANGED activity for candidacy {candidacy_id}: {e}")
 
+        # 5. Fire stage-entry triggers (background — don't block the transition)
+        asyncio.create_task(
+            self._fire_stage_triggers(
+                candidacy_id=candidacy_id,
+                to_stage=to_stage,
+                candidate_id=row["candidate_id"],
+                vacancy_id=row["vacancy_id"],
+                triggered_by=triggered_by,
+            )
+        )
+
         return updated
+
+    async def _fire_stage_triggers(
+        self,
+        candidacy_id: uuid.UUID,
+        to_stage: CandidacyStage,
+        candidate_id: uuid.UUID,
+        vacancy_id: Optional[uuid.UUID],
+        triggered_by: str,
+    ) -> None:
+        """
+        Fire any agent triggers associated with entering a stage.
+
+        Runs as a background task so it doesn't block the stage transition response.
+        """
+        try:
+            if to_stage == CandidacyStage.OFFER and vacancy_id:
+                await self._trigger_document_collection(
+                    candidacy_id=candidacy_id,
+                    candidate_id=candidate_id,
+                    vacancy_id=vacancy_id,
+                    triggered_by=triggered_by,
+                )
+        except Exception as e:
+            logger.error(f"Stage trigger failed for candidacy {candidacy_id} → {to_stage.value}: {e}")
+
+    async def _trigger_document_collection(
+        self,
+        candidacy_id: uuid.UUID,
+        candidate_id: uuid.UUID,
+        vacancy_id: uuid.UUID,
+        triggered_by: str,
+    ) -> None:
+        """Generate a smart collection plan when a candidacy enters OFFER stage."""
+        from src.services.document_collection_planner_service import DocumentCollectionPlannerService
+
+        logger.info(f"Triggering document collection planner for candidacy {candidacy_id}")
+
+        planner = DocumentCollectionPlannerService(self.pool)
+        collection_id = await planner.generate_and_store_plan(
+            candidacy_id=candidacy_id,
+            candidate_id=candidate_id,
+            vacancy_id=vacancy_id,
+            triggered_by=f"stage_trigger:{triggered_by}",
+        )
+
+        if collection_id:
+            logger.info(f"Document collection plan created: {collection_id} for candidacy {candidacy_id}")
+        else:
+            logger.warning(f"Document collection plan generation failed for candidacy {candidacy_id}")

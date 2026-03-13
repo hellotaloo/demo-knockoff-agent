@@ -4,6 +4,11 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-13** — Restructured `DocumentCollectionFullDetailResponse`: replaced `plan` (full agent script) + `document_statuses` (docs only) with `summary`/`deadline_note` (plan header fields) + `collection_items` (unified checklist of documents AND attributes with status). Renamed `CollectionDocumentStatusResponse` → `CollectionItemStatusResponse` with new fields: `type` (`"document"` | `"attribute"`), `value` (collected attribute value). Removed `CollectionPlanResponse`, `CollectionPlanDocumentResponse`, `CollectionPlanStepResponse` from public API (internal agent detail)
+- **2026-03-13** — Added `candidacy_stage` field to `DocumentCollectionResponse` (and all derived detail responses). Joined from `ats.candidacies` via `candidacy_id` — shows current pipeline stage (`new`, `pre_screening`, `qualified`, ..., `placed`, `rejected`, `withdrawn`). Null when no candidacy is linked
+- **2026-03-13** — Added `GET /workspaces/{workspace_id}/document-collection/collections/{collection_id}/detail` endpoint returning `DocumentCollectionFullDetailResponse` with enriched collection detail, unified `collection_items` checklist, `workflow_steps` progress bar, and `candidacy_id`/`candidate_id` links. New types: `CollectionItemStatusResponse`, `WorkflowStepResponse`, `DocumentCollectionFullDetailResponse`
+- **2026-03-12** — Enriched `CandidacySummary` in `GET /candidates/{candidate_id}` with two new optional fields: `screening_result` (full pre-screening Q&A with scores, summary, and answers array — answers only populated for completed screenings) and `document_collection` (collection progress with per-document upload status). New types: `ScreeningResult`, `DocumentCollectionSummary`, `DocumentCollectionItem`.
+- **2026-03-12** — Added Candidate Attributes system: workspace-scoped attribute types catalog (`/workspaces/{workspace_id}/candidate-attribute-types`) with CRUD endpoints, per-candidate attribute values (`/candidates/{candidate_id}/attributes`) with set/bulk-set/delete endpoints, and `attributes` array included in `GET /candidates/{candidate_id}` detail response. 6 default attribute types seeded per workspace (transport, availability, shifts, nationality, national register, emergency contact). Renamed tables for consistency: `document_types` → `types_documents`, `candidate_attribute_types` → `types_attributes`, `candidate_documents` → `candidate_certificates`.
 - **2026-03-12** — Standardized all list endpoint responses to use `PaginatedResponse<T>` envelope (`{ items, total, limit, offset }`). Changed: `GET /candidates` (was bare array → paginated), `GET /vacancies` (`vacancies` key → `items`), `GET /monitoring` (`activities` key → `items`, added `limit`/`offset`). `GET /candidacies` already used `items` key — no change needed. Vacancy `agents` field is always present (never null/missing)
 - **2026-03-11** — Added `custom_field_extraction` (JSONB) field to document type entities for LLM-driven field extraction config (top-level only); added CRUD endpoints `POST /ontology/entities`, `PATCH /ontology/entities/{id}`, `DELETE /ontology/entities/{id}`; updated list sorting: items with children first (A-Z), then leaf items (A-Z); updated `is_verifiable` on Arbeidskaart, Vrijstelling arbeidskaart, VakantieAttest, C3.2 afdruk, Grensarbeider
 - **2026-03-11** — Replaced planned workspace-scoped ontology with implemented `/ontology` endpoints: `GET /ontology` (overview), `GET /ontology/entities?type=document_type` (list with parent-child hierarchy), `GET /ontology/entities/{id}` (single entity). Document types seeded from Prato Flex with 43 parent types and 473 detail types across 4 categories (identity, certificate, financial, other)
@@ -798,7 +803,8 @@ interface CandidatesListResponse {
 
 ### GET /candidates/{candidate_id}
 
-Get a single candidate with applications, skills, and activity timeline.
+Get a single candidate with applications, skills, attributes, candidacies, documents, and activity timeline.
+This is the **primary detail endpoint** — provides everything needed for the candidate detail panel.
 
 **Auth:** None
 
@@ -838,6 +844,98 @@ interface ActivityResponse {
   created_at: string;
 }
 
+interface CandidacyApplicationBrief {
+  id: string;
+  channel: string;
+  status: string;
+  qualified?: boolean;
+  open_questions_score?: number;
+  knockout_passed: number;
+  knockout_total: number;
+  completed_at?: string;
+  interview_scheduled_at?: string;
+}
+
+interface CandidacySummary {
+  id: string;
+  vacancy_id?: string;
+  stage: CandidacyStage;
+  source?: string;
+  stage_updated_at: string;
+  created_at: string;
+  vacancy_title?: string;
+  vacancy_company?: string;
+  is_open_application: boolean;
+  latest_application?: CandidacyApplicationBrief;
+  screening_result?: ScreeningResult | null;
+  document_collection?: DocumentCollectionSummary | null;
+}
+
+/** Full pre-screening result with Q&A */
+interface ScreeningResult {
+  application_id: string;
+  channel: string;                    // "voice" | "whatsapp" | "cv"
+  status: string;                     // "active" | "processing" | "completed" | "abandoned"
+  qualified?: boolean;
+  summary?: string;                   // AI-generated candidate summary
+  interaction_seconds: number;
+  knockout_passed: number;
+  knockout_total: number;
+  open_questions_score?: number;      // 0-100
+  open_questions_total: number;
+  completed_at?: string;
+  answers: QuestionAnswerResponse[];  // Full Q&A (only populated when status = "completed")
+}
+
+/** Lightweight document collection status per candidacy */
+interface DocumentCollectionSummary {
+  collection_id: string;
+  status: string;                     // "active" | "completed" | "needs_review" | "abandoned"
+  progress: string;                   // "pending" | "in_progress" | "completed"
+  documents_collected: number;
+  documents_total: number;
+  documents: DocumentCollectionItem[];
+}
+
+/** Per-document status within a collection */
+interface DocumentCollectionItem {
+  document_type_id: string;
+  document_type_name: string;
+  icon?: string;                      // Lucide icon name
+  status: string;                     // "pending" | "verified" | "rejected" | "needs_review"
+  uploaded_at?: string;               // null if not yet uploaded
+}
+
+interface CandidateDocumentSummary {
+  id: string;
+  document_type_id: string;
+  document_type_name: string;
+  document_type_slug?: string;
+  document_number?: string;
+  expiration_date?: string;
+  status: string;             // pending_review | approved | rejected
+  verification_passed?: boolean;
+  storage_path?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface CandidateAttributeSummary {
+  id: string;
+  attribute_type_id: string;
+  slug: string;
+  name: string;
+  category: string;
+  data_type: string;
+  options?: { value: string; label: string }[];
+  icon?: string;
+  value?: string;
+  source?: string;
+  verified: boolean;
+  created_at: string;
+}
+
 interface CandidateWithApplicationsResponse {
   id: string;
   phone?: string;
@@ -851,11 +949,14 @@ interface CandidateWithApplicationsResponse {
   availability: AvailabilityStatus;
   available_from?: string;
   rating?: number;
-  is_test: boolean;         // Flag for test candidates created during admin testing
+  is_test: boolean;
   created_at: string;
   updated_at: string;
   applications: CandidateApplicationSummary[];
   skills: CandidateSkillResponse[];
+  attributes: CandidateAttributeSummary[];
+  candidacies: CandidacySummary[];
+  documents: CandidateDocumentSummary[];
   timeline: ActivityResponse[];  // Activity timeline, newest first (max 50)
 }
 ```
@@ -2777,6 +2878,7 @@ All endpoints under `/workspaces/{workspace_id}/document-collection/`. Requires 
 | GET | `/resolve` | Resolve which documents are needed |
 | GET | `/collections` | List document collections |
 | GET | `/collections/{id}` | Get collection with messages + uploads |
+| GET | `/collections/{id}/detail` | Get enriched detail with plan, document statuses, workflow |
 | POST | `/collections/{id}/abandon` | Mark collection as abandoned |
 | POST | `/start` | Start a new document collection |
 
@@ -2906,6 +3008,7 @@ interface DocumentCollectionResponse {
   vacancy_id?: string;
   vacancy_title?: string;            // Vacancy title (joined from vacancies table)
   application_id?: string;
+  candidacy_stage?: string;          // Pipeline stage: "new" | "pre_screening" | "qualified" | "interview_planned" | "interview_done" | "offer" | "placed" | "rejected" | "withdrawn"
   candidate_name: string;
   candidate_phone?: string;
   status: string;                // "active" | "completed" | "needs_review" | "abandoned"
@@ -2924,6 +3027,37 @@ interface DocumentCollectionDetailResponse extends DocumentCollectionResponse {
   messages: CollectionMessageResponse[];
   uploads: CollectionUploadResponse[];
   documents_required: DocumentTypeResponse[];  // Full document type objects resolved from stored slugs
+}
+
+// Enriched detail for the collection detail panel
+interface DocumentCollectionFullDetailResponse extends DocumentCollectionResponse {
+  messages: CollectionMessageResponse[];
+  uploads: CollectionUploadResponse[];
+  documents_required: DocumentTypeResponse[];
+  summary?: string;                                // Plan summary for recruiter (Dutch)
+  deadline_note?: string;                          // e.g. "Start op 24 maart"
+  collection_items: CollectionItemStatusResponse[];  // Unified checklist: documents + attributes
+  candidacy_id?: string;
+  candidate_id?: string;
+  workflow_steps: WorkflowStepResponse[];          // Workflow progress bar
+}
+
+interface CollectionItemStatusResponse {
+  slug: string;                  // e.g. "id_card", "iban", "address_city"
+  name: string;                  // e.g. "ID-kaart", "IBAN", "Woonplaats"
+  type: string;                  // "document" | "attribute"
+  priority: string;              // "required" | "recommended"
+  status: string;                // "pending" | "asked" | "received" | "verified" | "failed" | "skipped"
+  value?: string;                // For attributes: the collected value (e.g. "BE68 5390 0754 7034")
+  upload_id?: string;            // For documents: upload reference
+  verification_passed?: boolean; // For documents: verification result
+  uploaded_at?: string;          // For documents: upload timestamp
+}
+
+interface WorkflowStepResponse {
+  id: string;
+  label: string;
+  status: string;                // "completed" | "current" | "pending" | "failed"
 }
 
 interface CollectionMessageResponse {
@@ -3165,6 +3299,25 @@ Get a document collection with its messages and uploads.
 **Auth:** Bearer token
 
 **Response:** `DocumentCollectionDetailResponse`
+
+---
+
+### GET /collections/{collection_id}/detail
+
+Get enriched collection detail for the detail panel. Includes the smart planner output, merged document statuses (plan items + actual upload state), and workflow progress steps.
+
+**Auth:** Bearer token
+
+**Response:** `DocumentCollectionFullDetailResponse`
+
+**Tabs mapping:**
+
+| Tab | Data field |
+|-----|------------|
+| Tijdlijn | `workflow_steps` (progress bar) + activities endpoint (events) |
+| Documenten | `document_statuses` |
+| Plan | `plan.conversation_steps` |
+| Chat | `messages` |
 
 ---
 
@@ -4581,9 +4734,34 @@ Returns `409` if the candidate already has a candidacy for the given vacancy.
 
 ### PATCH /candidacies/{id}/stage
 
-**Query params:** `stage` (required) — new stage value
+Moves a candidacy to a new pipeline stage. Used for drag-and-drop in the Kanban view.
 
-**Response:** Updated `CandidacyResponse`
+**Query params:** `stage` (required) — new stage value (lowercase, e.g. `interview_done`)
+
+**Valid stage transitions:**
+
+| From | Allowed targets |
+|------|----------------|
+| `new` | `pre_screening`, `rejected`, `withdrawn` |
+| `pre_screening` | `qualified`, `interview_planned`, `rejected`, `withdrawn` |
+| `qualified` | `interview_planned`, `rejected`, `withdrawn` |
+| `interview_planned` | `interview_done`, `rejected`, `withdrawn` |
+| `interview_done` | `offer`, `rejected`, `withdrawn` |
+| `offer` | `placed`, `rejected`, `withdrawn` |
+| `placed` | _(terminal)_ |
+| `rejected` | _(terminal)_ |
+| `withdrawn` | _(terminal)_ |
+
+**Manual drag-and-drop stages** (recruiter-driven, no automation):
+- `interview_planned` → `interview_done`
+- `interview_done` → `offer`
+- `offer` → `placed`
+
+**Response:** `200` — Updated `CandidacyResponse`
+
+**Errors:**
+- `404` — Candidacy not found
+- `400` — Invalid transition (stage move not allowed by state machine)
 
 ---
 
@@ -4617,10 +4795,183 @@ Returns `409` if the candidate already has a candidacy for the given vacancy.
     "open_questions_score": "integer (0-100) | null",
     "knockout_passed": "integer",
     "knockout_total": "integer",
-    "completed_at": "datetime | null"
+    "completed_at": "datetime | null",
+    "interview_scheduled_at": "datetime | null"
   } | null
 }
 ```
 
 `vacancy` is `null` when `vacancy_id` is null (talent pool entry).
 `latest_application` is `null` when no completed screening exists yet (e.g. manually added candidates).
+
+---
+
+## Candidate Attribute Types
+
+Workspace-scoped catalog of attribute types that agents can collect from candidates.
+
+### GET /workspaces/{workspace_id}/candidate-attribute-types
+
+List all attribute types for a workspace.
+
+**Query Parameters:**
+- `category` (string, optional): Filter by category (`legal`, `transport`, `availability`, `financial`, `personal`, `general`)
+- `collected_by` (string, optional): Filter by collecting phase (`pre_screening`, `contract`, `document_collection`)
+- `is_active` (boolean, optional, default: `true`): Filter by active status
+
+**Response:** `AttributeTypeResponse[]`
+
+```json
+[
+  {
+    "id": "uuid",
+    "workspace_id": "uuid",
+    "slug": "work_permit_status",
+    "name": "Werkvergunning status",
+    "description": "Heeft de kandidaat een geldige werkvergunning?",
+    "category": "legal",
+    "data_type": "select",
+    "options": [
+      {"value": "eu_citizen", "label": "EU-burger"},
+      {"value": "has_permit", "label": "Heeft arbeidsvergunning"},
+      {"value": "no_permit", "label": "Geen vergunning"}
+    ],
+    "icon": "file-badge",
+    "is_default": true,
+    "is_active": true,
+    "sort_order": 0,
+    "collected_by": "pre_screening",
+    "created_at": "datetime",
+    "updated_at": "datetime"
+  }
+]
+```
+
+### POST /workspaces/{workspace_id}/candidate-attribute-types
+
+Create a new attribute type.
+
+**Request:**
+- `slug` (string, required): Unique slug (lowercase, alphanumeric, underscores)
+- `name` (string, required): Display name
+- `description` (string, optional): Description
+- `category` (string, default: `"general"`): Category grouping
+- `data_type` (string, default: `"text"`): One of `text`, `boolean`, `date`, `select`, `multi_select`, `number`
+- `options` (array, optional): For select/multi_select: `[{value, label}]`
+- `icon` (string, optional): Lucide icon name
+- `is_default` (boolean, default: `false`)
+- `sort_order` (integer, default: `0`)
+- `collected_by` (string, optional): Which agent phase collects this
+
+**Response:** `AttributeTypeResponse` (201)
+
+### PATCH /workspaces/{workspace_id}/candidate-attribute-types/{attr_type_id}
+
+Update an attribute type. All fields optional.
+
+**Response:** `AttributeTypeResponse`
+
+### DELETE /workspaces/{workspace_id}/candidate-attribute-types/{attr_type_id}
+
+Soft-delete an attribute type (sets `is_active = false`).
+
+**Response:** 204 No Content
+
+---
+
+## Candidate Attributes
+
+Actual attribute values stored per candidate.
+
+### GET /candidates/{candidate_id}/attributes
+
+Get all attribute values for a candidate (joined with type info).
+
+**Query Parameters:**
+- `category` (string, optional): Filter by attribute category
+- `source` (string, optional): Filter by source (`pre_screening`, `contract`, `manual`, `cv_analysis`)
+
+**Response:** `CandidateAttributeResponse[]`
+
+```json
+[
+  {
+    "id": "uuid",
+    "candidate_id": "uuid",
+    "attribute_type_id": "uuid",
+    "attribute_type": { "...AttributeTypeResponse" },
+    "value": "eu_citizen",
+    "source": "pre_screening",
+    "source_session_id": "session_abc123",
+    "verified": false,
+    "created_at": "datetime",
+    "updated_at": "datetime"
+  }
+]
+```
+
+### PUT /candidates/{candidate_id}/attributes
+
+Set (create or update) a single attribute value for a candidate. Upserts on `(candidate_id, attribute_type_id)`.
+
+**Request:**
+- `attribute_type_id` (string, required): The attribute type ID
+- `value` (string, optional): The value (interpreted by data_type)
+- `source` (string, optional): Source identifier
+- `source_session_id` (string, optional): ADK session ID
+- `verified` (boolean, default: `false`)
+
+**Response:** `CandidateAttributeResponse`
+
+### PUT /candidates/{candidate_id}/attributes/bulk
+
+Bulk set multiple attribute values.
+
+**Request:**
+```json
+{
+  "attributes": [
+    {
+      "attribute_type_id": "uuid",
+      "value": "true",
+      "source": "pre_screening"
+    }
+  ]
+}
+```
+
+**Response:** `CandidateAttributeResponse[]`
+
+### DELETE /candidates/{candidate_id}/attributes/{attribute_id}
+
+Remove an attribute value from a candidate.
+
+**Response:** 204 No Content
+
+---
+
+### GET /candidates/{candidate_id} (updated)
+
+Now includes `attributes` array in the response:
+
+```json
+{
+  "...existing fields...",
+  "attributes": [
+    {
+      "id": "uuid",
+      "attribute_type_id": "uuid",
+      "slug": "work_permit_status",
+      "name": "Werkvergunning status",
+      "category": "legal",
+      "data_type": "select",
+      "options": [{"value": "eu_citizen", "label": "EU-burger"}],
+      "icon": "file-badge",
+      "value": "eu_citizen",
+      "source": "pre_screening",
+      "verified": false,
+      "created_at": "datetime"
+    }
+  ]
+}
+```

@@ -101,10 +101,108 @@ class CandidateListResponse(CandidateResponse):
     last_activity: Optional[datetime] = None
 
 
+class CandidateAttributeSummary(BaseModel):
+    """Summary of a candidate attribute value (for candidate detail)."""
+    id: str
+    attribute_type_id: str
+    slug: str
+    name: str
+    category: str
+    data_type: str
+    options: Optional[List[dict]] = None
+    icon: Optional[str] = None
+    value: Optional[str] = None
+    source: Optional[str] = None
+    verified: bool = False
+    created_at: datetime
+
+
+class CandidateDocumentSummary(BaseModel):
+    """Summary of a candidate document (for candidate detail)."""
+    id: str
+    document_type_id: str
+    document_type_name: str
+    document_type_slug: Optional[str] = None
+    document_number: Optional[str] = None
+    expiration_date: Optional[date] = None
+    status: str = "pending_review"
+    verification_passed: Optional[bool] = None
+    storage_path: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CandidacySummary(BaseModel):
+    """Candidacy summary embedded in candidate detail."""
+    id: str
+    vacancy_id: Optional[str] = None
+    stage: str
+    source: Optional[str] = None
+    stage_updated_at: datetime
+    created_at: datetime
+    vacancy_title: Optional[str] = None
+    vacancy_company: Optional[str] = None
+    is_open_application: bool = False
+    latest_application: Optional["CandidacyApplicationBrief"] = None
+    screening_result: Optional["ScreeningResult"] = None
+    document_collection: Optional["DocumentCollectionSummary"] = None
+
+
+class CandidacyApplicationBrief(BaseModel):
+    """Brief application info nested in candidacy summary."""
+    id: str
+    channel: str
+    status: str = "active"
+    qualified: Optional[bool] = None
+    open_questions_score: Optional[int] = None
+    knockout_passed: int = 0
+    knockout_total: int = 0
+    completed_at: Optional[datetime] = None
+
+
+class ScreeningResult(BaseModel):
+    """Full pre-screening result with Q&A, embedded in candidacy summary."""
+    application_id: str
+    channel: str
+    status: str
+    qualified: Optional[bool] = None
+    summary: Optional[str] = None
+    interaction_seconds: int = 0
+    knockout_passed: int = 0
+    knockout_total: int = 0
+    open_questions_score: Optional[int] = None
+    open_questions_total: int = 0
+    completed_at: Optional[datetime] = None
+    answers: List["QuestionAnswerResponse"] = []
+
+
+class DocumentCollectionItem(BaseModel):
+    """Per-document status within a collection."""
+    document_type_id: str
+    document_type_name: str
+    icon: Optional[str] = None
+    status: str = "pending"
+    uploaded_at: Optional[datetime] = None
+
+
+class DocumentCollectionSummary(BaseModel):
+    """Lightweight document collection status per candidacy."""
+    collection_id: str
+    status: str
+    progress: str
+    documents_collected: int = 0
+    documents_total: int = 0
+    documents: List[DocumentCollectionItem] = []
+
+
 class CandidateWithApplicationsResponse(CandidateResponse):
     """Response model for a candidate with their applications."""
     applications: List["CandidateApplicationSummary"] = []
     skills: List[CandidateSkillResponse] = []
+    attributes: List[CandidateAttributeSummary] = []
+    candidacies: List[CandidacySummary] = []
+    documents: List[CandidateDocumentSummary] = []
     timeline: List["ActivityResponse"] = []
 
 
@@ -136,8 +234,11 @@ class CandidateSkillBulkCreate(BaseModel):
     skills: List[CandidateSkillCreate]
 
 
-# Import ActivityResponse for type hints (imported here to avoid circular imports)
+# Import for forward references (avoid circular imports)
 from src.models.activity import ActivityResponse
+from src.models.application import QuestionAnswerResponse
 
 # Rebuild models to resolve forward references
+ScreeningResult.model_rebuild()
+CandidacySummary.model_rebuild()
 CandidateWithApplicationsResponse.model_rebuild()

@@ -1,6 +1,7 @@
 """
 Candidates router - handles candidate listing and management.
 """
+import json
 import uuid
 import logging
 from typing import Optional
@@ -9,6 +10,7 @@ from fastapi import APIRouter, Query, HTTPException
 
 from src.database import get_db_pool
 from src.repositories import CandidateRepository
+from src.repositories.candidate_attribute_repo import CandidateAttributeRepository
 from src.services import ActivityService
 from src.models.common import PaginatedResponse
 from src.models.candidate import (
@@ -19,7 +21,15 @@ from src.models.candidate import (
     CandidateVacancyLink,
     CandidateWithApplicationsResponse,
     CandidateApplicationSummary,
+    CandidateAttributeSummary,
+    CandidacySummary,
+    CandidacyApplicationBrief,
+    CandidateDocumentSummary,
+    ScreeningResult,
+    DocumentCollectionSummary,
+    DocumentCollectionItem,
 )
+from src.models.application import QuestionAnswerResponse
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +143,119 @@ async def get_candidate(candidate_id: uuid.UUID):
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
-    # Get applications, skills, and timeline
+    # Get applications, skills, attributes, candidacies, documents, and timeline
     applications = await repo.get_applications(candidate_id)
     skills = await repo.get_skills(candidate_id)
+    candidacies = await repo.get_candidacies(candidate_id)
+    documents = await repo.get_documents(candidate_id)
+
+    attr_repo = CandidateAttributeRepository(pool)
+    attributes = await attr_repo.list_for_candidate(candidate_id)
 
     # Get activity timeline
     activity_service = ActivityService(pool)
     timeline_response = await activity_service.get_candidate_timeline(str(candidate_id), limit=50)
+
+    # Fetch screening results for all candidacies that have an application
+    app_ids = [c["app_id"] for c in candidacies if c["app_id"]]
+    screening_results = await repo.get_screening_results(app_ids) if app_ids else {}
+
+    # Fetch document collections for this candidate
+    doc_collections = await repo.get_document_collections_for_candidate(candidate_id)
+    # Index by (vacancy_id, candidate_id) or application_id for matching to candidacies
+    collections_by_vacancy = {}
+    collections_by_app = {}
+    for dc in doc_collections:
+        if dc["vacancy_id"]:
+            collections_by_vacancy[dc["vacancy_id"]] = dc
+        if dc["application_id"]:
+            collections_by_app[dc["application_id"]] = dc
+
+    # Build candidacy summaries with enriched data
+    candidacy_summaries = []
+    for c in candidacies:
+        app_id = c["app_id"]
+
+        # Build screening_result
+        screening_result = None
+        if app_id and app_id in screening_results:
+            sr = screening_results[app_id]
+            screening_result = ScreeningResult(
+                application_id=str(sr["application_id"]),
+                channel=sr["channel"],
+                status=sr["status"],
+                qualified=sr["qualified"],
+                summary=sr["summary"],
+                interaction_seconds=sr["interaction_seconds"],
+                knockout_passed=sr["knockout_passed"],
+                knockout_total=sr["knockout_total"],
+                open_questions_score=sr["open_questions_score"],
+                open_questions_total=sr["open_questions_total"],
+                completed_at=sr["completed_at"],
+                answers=[
+                    QuestionAnswerResponse(
+                        question_id=a["question_id"],
+                        question_text=a["question_text"],
+                        question_type=a["question_type"],
+                        answer=a["answer"],
+                        passed=a["passed"],
+                        score=a["score"],
+                        rating=a["rating"],
+                        motivation=a["motivation"],
+                    )
+                    for a in sr["answers"]
+                ],
+            )
+
+        # Build document_collection — match by application_id first, then vacancy_id
+        doc_collection = None
+        dc_data = collections_by_app.get(app_id) if app_id else None
+        if dc_data is None and c["vacancy_id"]:
+            dc_data = collections_by_vacancy.get(c["vacancy_id"])
+        if dc_data:
+            doc_collection = DocumentCollectionSummary(
+                collection_id=str(dc_data["collection_id"]),
+                status=dc_data["status"],
+                progress=dc_data["progress"],
+                documents_collected=dc_data["documents_collected"],
+                documents_total=dc_data["documents_total"],
+                documents=[
+                    DocumentCollectionItem(
+                        document_type_id=d["document_type_id"],
+                        document_type_name=d["document_type_name"],
+                        icon=d["icon"],
+                        status=d["status"],
+                        uploaded_at=d["uploaded_at"],
+                    )
+                    for d in dc_data["documents"]
+                ],
+            )
+
+        candidacy_summaries.append(
+            CandidacySummary(
+                id=str(c["id"]),
+                vacancy_id=str(c["vacancy_id"]) if c["vacancy_id"] else None,
+                stage=c["stage"],
+                source=c["source"],
+                stage_updated_at=c["stage_updated_at"],
+                created_at=c["created_at"],
+                vacancy_title=c["vacancy_title"],
+                vacancy_company=c["vacancy_company"],
+                is_open_application=c["is_open_application"] or False,
+                latest_application=CandidacyApplicationBrief(
+                    id=str(c["app_id"]),
+                    channel=c["app_channel"],
+                    status=c["app_status"] or "active",
+                    qualified=c["app_qualified"],
+                    open_questions_score=c["app_score"],
+                    knockout_passed=c["app_ko_passed"] or 0,
+                    knockout_total=c["app_ko_total"] or 0,
+                    completed_at=c["app_completed_at"],
+                ) if c["app_id"] else None,
+                screening_result=screening_result,
+                document_collection=doc_collection,
+            )
+        )
 
     return CandidateWithApplicationsResponse(
         id=str(candidate["id"]),
@@ -183,6 +299,41 @@ async def get_candidate(candidate_id: uuid.UUID):
                 created_at=s["created_at"],
             )
             for s in skills
+        ],
+        attributes=[
+            CandidateAttributeSummary(
+                id=str(a["id"]),
+                attribute_type_id=str(a["attribute_type_id"]),
+                slug=a["type_slug"],
+                name=a["type_name"],
+                category=a["type_category"],
+                data_type=a["type_data_type"],
+                options=json.loads(a["type_options"]) if isinstance(a["type_options"], str) else a["type_options"],
+                icon=a["type_icon"],
+                value=a["value"],
+                source=a["source"],
+                verified=a["verified"],
+                created_at=a["created_at"],
+            )
+            for a in attributes
+        ],
+        candidacies=candidacy_summaries,
+        documents=[
+            CandidateDocumentSummary(
+                id=str(d["id"]),
+                document_type_id=str(d["document_type_id"]),
+                document_type_name=d["document_type_name"],
+                document_type_slug=d["document_type_slug"],
+                document_number=d["document_number"],
+                expiration_date=d["expiration_date"],
+                status=d["status"],
+                verification_passed=d["verification_passed"],
+                storage_path=d["storage_path"],
+                notes=d["notes"],
+                created_at=d["created_at"],
+                updated_at=d["updated_at"],
+            )
+            for d in documents
         ],
         timeline=timeline_response.activities,
     )

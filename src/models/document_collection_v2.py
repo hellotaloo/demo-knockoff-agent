@@ -168,6 +168,7 @@ class DocumentCollectionResponse(BaseModel):
     vacancy_id: Optional[str] = None
     vacancy_title: Optional[str] = None
     application_id: Optional[str] = None
+    candidacy_stage: Optional[str] = None
     candidate_name: str
     candidate_phone: Optional[str] = None
     status: str
@@ -204,6 +205,76 @@ class DocumentCollectionDetailResponse(DocumentCollectionResponse):
     messages: List[CollectionMessageResponse] = Field(default_factory=list)
     uploads: List[CollectionUploadResponse] = Field(default_factory=list)
     documents_required: List[DocumentTypeResponse] = Field(default_factory=list)
+
+
+# =============================================================================
+# Full Detail (enriched view for detail panel)
+# =============================================================================
+
+class CollectionPlanDocumentResponse(BaseModel):
+    """A document from the collection plan."""
+    slug: str
+    name: str
+    reason: Optional[str] = None
+    priority: str = "required"
+
+
+class CollectionPlanStepResponse(BaseModel):
+    """A single conversation step from the collection plan."""
+    step: int
+    topic: str
+    items: List[str] = Field(default_factory=list)
+    message: str
+
+
+class CollectionPlanResponse(BaseModel):
+    """Structured planner output for the frontend."""
+    summary: Optional[str] = None
+    deadline_note: Optional[str] = None
+    intro_message: Optional[str] = None
+    documents_to_collect: List[CollectionPlanDocumentResponse] = Field(default_factory=list)
+    attributes_to_collect: List[dict] = Field(default_factory=list)
+    conversation_steps: List[CollectionPlanStepResponse] = Field(default_factory=list)
+    agent_managed_tasks: List[dict] = Field(default_factory=list)
+    already_complete: List[str] = Field(default_factory=list)
+    final_step: Optional[dict] = None
+
+
+class CollectionItemStatusResponse(BaseModel):
+    """Unified status for a collected item (document or attribute)."""
+    slug: str
+    name: str
+    type: str  # "document" | "attribute"
+    priority: str  # "required" | "recommended"
+    status: str  # pending | asked | received | verified | failed | skipped
+    value: Optional[str] = None  # For attributes: the collected value
+    upload_id: Optional[str] = None
+    verification_passed: Optional[bool] = None
+    uploaded_at: Optional[datetime] = None
+
+
+class WorkflowStepResponse(BaseModel):
+    """A single step in a workflow progress bar."""
+    id: str
+    label: str
+    status: str  # completed | current | pending | failed
+
+
+class DocumentCollectionFullDetailResponse(DocumentCollectionResponse):
+    """Enriched detail for the collection detail panel."""
+    messages: List[CollectionMessageResponse] = Field(default_factory=list)
+    uploads: List[CollectionUploadResponse] = Field(default_factory=list)
+    documents_required: List[DocumentTypeResponse] = Field(default_factory=list)
+    # Plan summary (recruiter-facing, not the full agent script)
+    summary: Optional[str] = None
+    deadline_note: Optional[str] = None
+    # Unified checklist: documents + attributes with current status
+    collection_items: List[CollectionItemStatusResponse] = Field(default_factory=list)
+    # Links
+    candidacy_id: Optional[str] = None
+    candidate_id: Optional[str] = None
+    # Workflow progress
+    workflow_steps: List[WorkflowStepResponse] = Field(default_factory=list)
 
 
 # =============================================================================

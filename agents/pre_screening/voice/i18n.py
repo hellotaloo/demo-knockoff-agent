@@ -48,6 +48,7 @@ def msg(userdata, key: str, **kwargs) -> str:
 #   voicemail_without_name   — voicemail message (no name)
 #   proxy_detected           — caller is not the candidate
 #   candidate_not_available  — candidate has no time
+#   agent_greeting           — hardcoded intro line ({persona_name})
 # ---------------------------------------------------------------------------
 
 MESSAGES: dict[str, dict[str, str]] = {
@@ -75,6 +76,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Hallo, je spreekt met {persona_name} van Its You. We belden je in verband met je sollicitatie. Bel ons gerust terug wanneer het je past. Nog een fijne dag.",
         "proxy_detected": "Ah oke, geen probleem. Dit gesprek is bedoeld voor de kandidaat persoonlijk. Zou je kunnen vragen of zij of hij ons terugbelt wanneer het past? Bedankt en nog een fijne dag.",
         "candidate_not_available": "Helemaal oke. Neem gerust contact op als je even tijd hebt. Nog een fijne dag.",
+        "agent_greeting": "Goedemiddag, je spreekt met {persona_name}, de digitale assistent van Its You. Ik ben speciaal ontwikkeld om jou sneller aan een job te helpen.",
     },
     # ── English ──────────────────────────────────────────────────────────
     "en": {
@@ -100,6 +102,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Hello, this is {persona_name} from Its You. We called you regarding your application. Feel free to call us back when it suits you. Have a nice day.",
         "proxy_detected": "Ah okay, no problem. This conversation is meant for the candidate personally. Could you ask them to call us back when it suits them? Thanks and have a nice day.",
         "candidate_not_available": "Totally fine. Feel free to get in touch when you have a moment. Have a nice day.",
+        "agent_greeting": "Good afternoon, you're speaking with {persona_name}, the digital assistant from Its You. I've been specially developed to help you find a job faster.",
     },
     # ── French ───────────────────────────────────────────────────────────
     "fr": {
@@ -125,6 +128,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Bonjour, c'est {persona_name} de Its You. Nous vous avons appelé au sujet de votre candidature. N'hésitez pas à nous rappeler quand cela vous convient. Bonne journée.",
         "proxy_detected": "Ah d'accord, pas de problème. Cette conversation est destinée au candidat personnellement. Pourriez-vous lui demander de nous rappeler quand cela lui convient ? Merci et bonne journée.",
         "candidate_not_available": "Tout à fait. N'hésitez pas à nous contacter quand vous avez un moment. Bonne journée.",
+        "agent_greeting": "Bonjour, vous parlez avec {persona_name}, l'assistant digital de Its You. J'ai été spécialement conçu pour vous aider à trouver un emploi plus rapidement.",
     },
     # ── German ───────────────────────────────────────────────────────────
     "de": {
@@ -150,6 +154,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Hallo, hier spricht {persona_name} von Its You. Wir haben Sie wegen Ihrer Bewerbung angerufen. Rufen Sie uns gerne zurück, wenn es Ihnen passt. Einen schönen Tag noch.",
         "proxy_detected": "Ah okay, kein Problem. Dieses Gespräch ist für den Kandidaten persönlich gedacht. Könnten Sie ihn oder sie bitten, uns zurückzurufen, wenn es passt? Danke und einen schönen Tag noch.",
         "candidate_not_available": "Völlig in Ordnung. Melden Sie sich gerne, wenn Sie einen Moment Zeit haben. Einen schönen Tag noch.",
+        "agent_greeting": "Guten Tag, Sie sprechen mit {persona_name}, dem digitalen Assistenten von Its You. Ich wurde speziell entwickelt, um Ihnen schneller zu einem Job zu verhelfen.",
     },
     # ── Spanish ──────────────────────────────────────────────────────────
     "es": {
@@ -175,6 +180,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Hola, soy {persona_name} de Its You. Te llamamos respecto a tu solicitud. No dudes en devolvernos la llamada cuando te venga bien. Que tengas un buen día.",
         "proxy_detected": "Ah vale, no hay problema. Esta conversación es para el candidato personalmente. ¿Podrías pedirle que nos devuelva la llamada cuando le venga bien? Gracias y que tengas un buen día.",
         "candidate_not_available": "Totalmente bien. No dudes en contactarnos cuando tengas un momento. Que tengas un buen día.",
+        "agent_greeting": "Buenas tardes, estás hablando con {persona_name}, el asistente digital de Its You. He sido desarrollado especialmente para ayudarte a encontrar trabajo más rápido.",
     },
     # ── Italian ──────────────────────────────────────────────────────────
     "it": {
@@ -200,6 +206,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Ciao, sono {persona_name} di Its You. Ti abbiamo chiamato riguardo alla tua candidatura. Non esitare a richiamarci quando ti fa comodo. Buona giornata.",
         "proxy_detected": "Ah ok, nessun problema. Questa conversazione è destinata al candidato personalmente. Potresti chiedergli di richiamarci quando gli fa comodo? Grazie e buona giornata.",
         "candidate_not_available": "Va benissimo. Non esitare a contattarci quando hai un momento. Buona giornata.",
+        "agent_greeting": "Buon pomeriggio, stai parlando con {persona_name}, l'assistente digitale di Its You. Sono stato sviluppato appositamente per aiutarti a trovare lavoro più velocemente.",
     },
     # ── Portuguese ───────────────────────────────────────────────────────
     "pt": {
@@ -225,6 +232,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Olá, fala {persona_name} da Its You. Ligámos por causa da sua candidatura. Não hesite em ligar-nos de volta quando lhe for conveniente. Tenha um bom dia.",
         "proxy_detected": "Ah ok, sem problema. Esta conversa é destinada ao candidato pessoalmente. Poderia pedir-lhe para nos ligar de volta quando lhe for conveniente? Obrigado e tenha um bom dia.",
         "candidate_not_available": "Tudo bem. Não hesite em contactar-nos quando tiver um momento. Tenha um bom dia.",
+        "agent_greeting": "Boa tarde, está a falar com {persona_name}, o assistente digital da Its You. Fui especialmente desenvolvido para o ajudar a encontrar emprego mais rapidamente.",
     },
     # ── Polish ───────────────────────────────────────────────────────────
     "pl": {
@@ -250,6 +258,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Cześć, tu {persona_name} z Its You. Dzwoniliśmy w sprawie twojej aplikacji. Śmiało oddzwoń, kiedy ci będzie pasować. Miłego dnia.",
         "proxy_detected": "Ah ok, nie ma problemu. Ta rozmowa jest przeznaczona dla kandydata osobiście. Czy możesz poprosić go lub ją o oddzwonienie, kiedy mu lub jej będzie pasować? Dziękuję i miłego dnia.",
         "candidate_not_available": "W porządku. Śmiało skontaktuj się z nami, kiedy będziesz mieć chwilę. Miłego dnia.",
+        "agent_greeting": "Dzień dobry, rozmawiasz z {persona_name}, cyfrowym asystentem Its You. Zostałem specjalnie stworzony, aby pomóc ci szybciej znaleźć pracę.",
     },
     # ── Turkish ──────────────────────────────────────────────────────────
     "tr": {
@@ -275,6 +284,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "Merhaba, ben Its You'dan {persona_name}. Başvurunuzla ilgili sizi aradık. Size uygun olduğunda bizi geri aramaktan çekinmeyin. İyi günler.",
         "proxy_detected": "Ah tamam, sorun değil. Bu görüşme aday için kişisel olarak yapılmaktadır. Kendisine uygun olduğunda bizi geri aramasını isteyebilir misiniz? Teşekkürler ve iyi günler.",
         "candidate_not_available": "Tamam. Bir dakikanız olduğunda bizimle iletişime geçmekten çekinmeyin. İyi günler.",
+        "agent_greeting": "İyi günler, Its You'nun dijital asistanı {persona_name} ile konuşuyorsunuz. Size daha hızlı iş bulmanıza yardımcı olmak için özel olarak geliştirildum.",
     },
     # ── Arabic ───────────────────────────────────────────────────────────
     "ar": {
@@ -300,6 +310,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "voicemail_without_name": "مرحباً، أنا {persona_name} من Its You. اتصلنا بك بخصوص طلبك. لا تتردد في معاودة الاتصال بنا عندما يناسبك. أتمنى لك يوماً سعيداً.",
         "proxy_detected": "آه حسناً، لا مشكلة. هذه المحادثة مخصصة للمرشح شخصياً. هل يمكنك أن تطلب منه أو منها معاودة الاتصال بنا عندما يناسبه؟ شكراً وأتمنى لك يوماً سعيداً.",
         "candidate_not_available": "لا بأس. لا تتردد في التواصل معنا عندما يكون لديك وقت. أتمنى لك يوماً سعيداً.",
+        "agent_greeting": "مساء الخير، أنت تتحدث مع {persona_name}، المساعد الرقمي من Its You. تم تطويري خصيصاً لمساعدتك في العثور على وظيفة بشكل أسرع.",
     },
 }
 
@@ -356,6 +367,7 @@ for _code, (_name, _hello, _goodbye, _yes, _no) in _REMAINING.items():
         "voicemail_without_name": f"{_hello}, this is {{persona_name}} from Its You. We called you regarding your application. Feel free to call us back when it suits you. {_goodbye}",
         "proxy_detected": f"{MESSAGES['en']['proxy_detected'].replace('Have a nice day.', _goodbye)}",
         "candidate_not_available": f"{MESSAGES['en']['candidate_not_available'].replace('Have a nice day.', _goodbye)}",
+        "agent_greeting": MESSAGES["en"]["agent_greeting"],
     }
 
 # All supported language codes

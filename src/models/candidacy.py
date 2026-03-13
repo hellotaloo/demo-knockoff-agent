@@ -48,11 +48,13 @@ class CandidacyVacancyLink(BaseModel):
 class CandidacyApplicationSummary(BaseModel):
     id: str
     channel: str                              # voice | whatsapp | cv
+    status: str = "active"                    # active | completed
     qualified: Optional[bool] = None
     open_questions_score: Optional[int] = None  # 0–100
     knockout_passed: int = 0
     knockout_total: int = 0
     completed_at: Optional[datetime] = None
+    interview_scheduled_at: Optional[datetime] = None
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from agents.pre_screening.whatsapp import (
     create_simple_agent,
+    AgentConfig,
     Phase,
     is_conversation_complete,
 )
@@ -18,6 +19,7 @@ from src.utils.random_candidate import generate_random_candidate
 from src.models.screening import ScreeningChatRequest, SimulateInterviewRequest
 from src.repositories import ConversationRepository, CandidateRepository, ApplicationRepository, CandidacyRepository
 from src.database import get_db_pool
+from src.services.livekit_service import fetch_scheduling_config
 from src.config import logger
 
 router = APIRouter(tags=["Screening"])
@@ -49,7 +51,7 @@ async def stream_screening_chat(
 
     # Get vacancy
     vacancy = await pool.fetchrow(
-        "SELECT id, title FROM ats.vacancies WHERE id = $1",
+        "SELECT id, title, workspace_id FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
     if not vacancy:
@@ -127,6 +129,7 @@ async def stream_screening_chat(
             candidate_id = await candidate_repo.find_or_create(
                 full_name=candidate_name,
                 is_test=True,
+                workspace_id=vacancy["workspace_id"],
             )
             app_repo = ApplicationRepository(pool)
             application_id = await app_repo.create(
@@ -138,6 +141,13 @@ async def stream_screening_chat(
                 is_test=True,
             )
 
+        # Load scheduling config from DB
+        sched_cfg = await fetch_scheduling_config()
+        config = AgentConfig(
+            schedule_days_ahead=sched_cfg["schedule_days_ahead"],
+            schedule_start_offset=sched_cfg["schedule_start_offset"],
+        )
+
         # Create new agent
         agent = create_simple_agent(
             candidate_name=candidate_name,
@@ -148,6 +158,7 @@ async def stream_screening_chat(
             is_test=is_test,
             office_location=office_location,
             office_address=office_address,
+            config=config,
         )
 
         # Cache it for this session
@@ -309,6 +320,12 @@ async def complete_screening_conversation(conversation_id: str, qualified: bool 
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Get workspace_id from vacancy
+    vacancy_row = await pool.fetchrow(
+        "SELECT workspace_id FROM ats.vacancies WHERE id = $1", conv["vacancy_id"]
+    )
+    workspace_id = vacancy_row["workspace_id"] if vacancy_row else None
+
     # Ensure candidate record exists
     candidate_id = conv["candidate_id"] if "candidate_id" in conv.keys() else None
     if not candidate_id:
@@ -317,6 +334,7 @@ async def complete_screening_conversation(conversation_id: str, qualified: bool 
             full_name=conv["candidate_name"],
             phone=conv["candidate_phone"] if "candidate_phone" in conv.keys() else None,
             is_test=conv["is_test"] or False if "is_test" in conv.keys() else False,
+            workspace_id=workspace_id,
         )
 
     is_test = conv["is_test"] or False if "is_test" in conv.keys() else False
@@ -552,7 +570,7 @@ async def _simulate_candidate_response(
     Returns:
         str: Simulated candidate response based on the actual question
     """
-    from google import genai
+    from src.utils.llm import generate
 
     # Build conversation context for the simulator
     # Include recent history so simulator knows what's been discussed
@@ -577,13 +595,12 @@ Geef je antwoord als kandidaat. Volg je persona-instructies. MAX 1-2 zinnen!"""
     # Combine persona instruction with conversation prompt
     full_prompt = f"{simulator_instruction}\n\n{prompt}"
 
-    client = genai.Client()
-    response = await client.aio.models.generate_content(
-        model="gemini-2.0-flash-lite",  # Fast model for simulation
-        contents=full_prompt,
+    result = await generate(
+        prompt=full_prompt,
+        model="gemini-2.0-flash-lite",
     )
 
-    return response.text.strip() if response.text else "Ja, dat klopt."
+    return result.strip() if result else "Ja, dat klopt."
 
 
 @router.post("/vacancies/{vacancy_id}/simulate")

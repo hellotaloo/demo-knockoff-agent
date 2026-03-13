@@ -30,7 +30,6 @@
 | 30 | Uitbetaling overuur |
 | 101 | Verblijfsdocument - vrijstelling arbeidskaart |
 | 102 | Verblijfsdocument - bijkomstige voorwaarden |
-| 103 | Arbeidskaart |
 | 800 | RSZ-verminderingen |
 | 801 | Horeca@Work |
 | 802 | Gelegenheidsformulier landbouw |

@@ -17,6 +17,8 @@ from .agent_config_repo import AgentConfigRepository
 from .document_type_repo import DocumentTypeRepository
 from .short_link_repo import ShortLinkRepository
 from .candidacy_repo import CandidacyRepository
+from .candidate_attribute_type_repo import CandidateAttributeTypeRepository
+from .candidate_attribute_repo import CandidateAttributeRepository
 
 __all__ = [
     "VacancyRepository",
@@ -35,4 +37,6 @@ __all__ = [
     "DocumentTypeRepository",
     "ShortLinkRepository",
     "CandidacyRepository",
+    "CandidateAttributeTypeRepository",
+    "CandidateAttributeRepository",
 ]

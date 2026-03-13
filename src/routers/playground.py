@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from src.config import LIVEKIT_URL
 from src.database import get_db_pool
-from src.services.livekit_service import get_livekit_service, fetch_voice_config
+from src.services.livekit_service import get_livekit_service, fetch_voice_config, fetch_scheduling_config
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,11 @@ async def start_playground_session(request: PlaygroundStartRequest):
         known_answers=request.known_answers,
         existing_booking_date=request.existing_booking_date,
     )
+
+    # Inject scheduling config from DB
+    scheduling_config = await fetch_scheduling_config()
+    session_input["schedule_days_ahead"] = scheduling_config["schedule_days_ahead"]
+    session_input["schedule_start_offset"] = scheduling_config["schedule_start_offset"]
 
     # Apply playground overrides — zero side effects
     session_input["is_playground"] = True

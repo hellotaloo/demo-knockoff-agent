@@ -70,6 +70,16 @@ async def fetch_pre_screening_config() -> dict:
     }
 
 
+async def fetch_scheduling_config() -> dict:
+    """Fetch scheduling config (planning group) from agents.agent_config."""
+    settings = await fetch_agent_config("pre_screening")
+    planning = settings.get("planning", {})
+    return {
+        "schedule_days_ahead": planning.get("schedule_days_ahead", 3),
+        "schedule_start_offset": planning.get("schedule_start_offset", 1),
+    }
+
+
 class LiveKitService:
     """
     Service for dispatching voice screening calls via LiveKit.
@@ -191,6 +201,7 @@ class LiveKitService:
 
         voice_config = await fetch_voice_config()
         screening_config = await fetch_pre_screening_config()
+        scheduling_config = await fetch_scheduling_config()
 
         session_input = self._build_session_input(
             call_id=room_name,
@@ -204,6 +215,8 @@ class LiveKitService:
             require_consent=screening_config["require_consent"],
             allow_escalation=screening_config["allow_escalation"],
         )
+        session_input["schedule_days_ahead"] = scheduling_config["schedule_days_ahead"]
+        session_input["schedule_start_offset"] = scheduling_config["schedule_start_offset"]
 
         logger.info(
             f"Dispatching LiveKit call: room={room_name}, agent={self.agent_name}, "

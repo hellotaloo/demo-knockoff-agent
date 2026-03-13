@@ -181,8 +181,11 @@ class _CalendarService:
         start_offset_days: int = 1,
         slot_duration_minutes: int = DEFAULT_INTERVIEW_DURATION_MINUTES,
     ) -> list[dict]:
+        # Fetch more business days than requested so we can backfill
+        # days that turn out to be fully booked
+        max_attempts = days_ahead + 10
         start_date = datetime.now(TIMEZONE) + timedelta(days=start_offset_days - 1)
-        business_days = _get_next_business_days(start_date, days_ahead)
+        business_days = _get_next_business_days(start_date, max_attempts)
         if not business_days:
             return []
 
@@ -190,8 +193,12 @@ class _CalendarService:
         time_max = datetime.combine(business_days[-1], datetime.max.time(), tzinfo=TIMEZONE)
         busy_times = await self.get_free_busy(calendar_email, time_min, time_max)
 
+        # Collect until we have enough days with availability
         slots = []
         for day in business_days:
+            if len(slots) >= days_ahead:
+                break
+
             day_name = DUTCH_DAYS[day.weekday()]
             month_name = DUTCH_MONTHS[day.month]
             dutch_date = _dutch_date_label(day, day_name, month_name)

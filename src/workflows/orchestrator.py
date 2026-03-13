@@ -59,6 +59,7 @@ class WorkflowOrchestrator:
         from src.workflows.pre_screening import (
             STEP_CONFIG as PRE_SCREENING_STEP_CONFIG,
             handle_screening_completed,
+            handle_screening_timeout,
             handle_send_notifications,
         )
         from src.workflows.vacancy_setup import (
@@ -73,6 +74,7 @@ class WorkflowOrchestrator:
         # Pre-screening workflow handlers
         # Both voice and WhatsApp use the same handlers - channel is in context
         self.handlers[("pre_screening", "in_progress", "screening_completed")] = handle_screening_completed
+        self.handlers[("pre_screening", "in_progress", "timeout")] = handle_screening_timeout
 
         # Auto-triggered after screening_completed advances to "processed"
         self.handlers[("pre_screening", "processed", "auto")] = handle_send_notifications

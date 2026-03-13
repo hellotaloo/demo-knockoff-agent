@@ -431,7 +431,7 @@ class ATSImportService:
 
                 # Get default document types
                 dt_rows = await conn.fetch(
-                    "SELECT id, slug FROM ats.document_types WHERE workspace_id = $1 AND is_default = true AND is_active = true",
+                    "SELECT id, slug FROM ats.types_documents WHERE workspace_id = $1 AND is_default = true AND is_active = true",
                     workspace_id,
                 )
                 default_dt_ids = [r["id"] for r in dt_rows]

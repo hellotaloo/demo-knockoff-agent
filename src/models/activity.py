@@ -49,8 +49,14 @@ class ActivityEventType(str, Enum):
     APPLICATION_VIEWED = "application_viewed"
     CANDIDATE_CONTACTED = "candidate_contacted"
 
+    # Candidate attributes
+    ATTRIBUTE_EXTRACTED = "attribute_extracted"
+
     # System events
     APPLICATION_SYNCED = "application_synced"
+
+    # Document collection
+    COLLECTION_PLAN_GENERATED = "collection_plan_generated"
 
     # Pipeline stage transitions
     STAGE_CHANGED = "stage_changed"

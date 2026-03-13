@@ -1,6 +1,6 @@
 import asyncio
 
-from livekit.agents import RunContext, function_tool
+from livekit.agents import RunContext, function_tool, llm
 
 from agents.base import BaseAgent
 from i18n import msg
@@ -14,6 +14,20 @@ class GreetingAgent(BaseAgent):
             turn_detection=None,  # disable semantic turn detection for simple yes/no
             allow_escalation=allow_escalation,
         )
+        self._persona_name = persona_name
+        self._greeted = False
+
+    async def on_user_turn_completed(self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage) -> None:
+        """Intercept the first user message and respond with a hardcoded intro to avoid LLM latency."""
+        if not self._greeted:
+            self._greeted = True
+            userdata = self.session.userdata
+            greeting = msg(userdata, "agent_greeting", persona_name=self._persona_name)
+            userdata.suppress_silence = True
+            await self.session.say(greeting, allow_interruptions=False)
+            userdata.suppress_silence = False
+            return
+        # Subsequent turns (consent, identity, readiness) go to the LLM normally
 
     @function_tool()
     async def record_consent(self, context: RunContext):

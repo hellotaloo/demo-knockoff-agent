@@ -283,39 +283,16 @@ async def process_call_results(
         prompt, id_map = _build_prompt(transcript, knockout_questions, qualification_questions, existing_answers_list)
         logger.info(f"Prompt built: {len(id_map)} question IDs mapped ({', '.join(id_map.keys())})")
 
-        from google import genai
-        from google.genai import types
+        from src.utils.llm import generate
 
-        client = genai.Client()
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Content(role="user", parts=[types.Part(text=SCORING_INSTRUCTION)]),
-                types.Content(role="user", parts=[types.Part(text=prompt)]),
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                max_output_tokens=4096,
-                thinking_config=types.ThinkingConfig(
-                    include_thoughts=True,
-                    thinking_budget=1024,
-                ),
-            ),
+        response_text = await generate(
+            prompt=f"{SCORING_INSTRUCTION}\n\n{prompt}",
+            temperature=0.1,
+            max_output_tokens=4096,
+            thinking_budget=1024,
         )
 
-        response_text = ""
-        thinking_text = ""
-        if response and response.candidates:
-            for part in response.candidates[0].content.parts:
-                # Skip thinking parts — they have thought=True and would corrupt JSON parsing
-                if getattr(part, "thought", False):
-                    if hasattr(part, "text") and part.text:
-                        thinking_text += part.text
-                    continue
-                if hasattr(part, "text") and part.text:
-                    response_text += part.text
-
-        logger.info(f"Gemini response: {len(response_text)} chars output, {len(thinking_text)} chars thinking")
+        logger.info(f"LLM response: {len(response_text)} chars output")
 
         # 5. Parse response
         if not response_text:
@@ -394,6 +371,29 @@ async def process_call_results(
                     )
 
         logger.info(f"Post-processing complete for application {application_id}: {len(qualification_scores)} scores updated")
+
+        # 6b. Extract candidate attributes from transcript
+        try:
+            app_info = await pool.fetchrow(
+                "SELECT a.candidate_id, c.workspace_id FROM ats.applications a "
+                "JOIN ats.candidates c ON c.id = a.candidate_id WHERE a.id = $1",
+                application_id,
+            )
+            if app_info and app_info["candidate_id"]:
+                from src.services.attribute_extraction_service import extract_and_save_attributes
+                transcript_text = "\n".join(f"{m['role']}: {m['message']}" for m in transcript)
+                extracted = await extract_and_save_attributes(
+                    text=transcript_text,
+                    candidate_id=app_info["candidate_id"],
+                    workspace_id=app_info["workspace_id"],
+                    pool=pool,
+                    source="pre_screening",
+                    source_session_id=str(conversation_id),
+                    collected_by="pre_screening",
+                )
+                logger.info(f"Extracted {len(extracted)} candidate attributes from transcript")
+        except Exception as attr_err:
+            logger.error(f"Attribute extraction failed for application {application_id}: {attr_err}", exc_info=True)
 
     except Exception as e:
         logger.error(f"Post-processing failed for application {application_id}: {e}", exc_info=True)

@@ -32,6 +32,7 @@ from .ontology import router as ontology_router
 from .redirect import router as redirect_router
 from .yousign_webhook import router as yousign_webhook_router
 from .candidacy import router as candidacy_router
+from .candidate_attributes import router as candidate_attributes_router
 
 __all__ = [
     "health_router",
@@ -65,4 +66,5 @@ __all__ = [
     "redirect_router",
     "yousign_webhook_router",
     "candidacy_router",
+    "candidate_attributes_router",
 ]

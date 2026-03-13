@@ -279,9 +279,29 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             DROP TABLE IF EXISTS ats.document_collection_conversations CASCADE;
         """)
 
+        # Rename tables for consistency (existing DBs)
+        await pool.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'document_types')
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'types_documents') THEN
+                    ALTER TABLE ats.document_types RENAME TO types_documents;
+                END IF;
+                -- Revert candidate_certificates back to candidate_documents if renamed
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'candidate_certificates')
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'candidate_documents') THEN
+                    ALTER TABLE ats.candidate_certificates RENAME TO candidate_documents;
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'candidate_attribute_types')
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'types_attributes') THEN
+                    ALTER TABLE ats.candidate_attribute_types RENAME TO types_attributes;
+                END IF;
+            END $$;
+        """)
+
         # 1. Document types reference table
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.document_types (
+            CREATE TABLE IF NOT EXISTS ats.types_documents (
                 id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 workspace_id    UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 slug            VARCHAR(50) NOT NULL,
@@ -300,10 +320,10 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             );
         """)
         await pool.execute("""
-            CREATE INDEX IF NOT EXISTS idx_document_types_workspace
-            ON ats.document_types(workspace_id);
-            CREATE INDEX IF NOT EXISTS idx_document_types_workspace_active
-            ON ats.document_types(workspace_id) WHERE is_active = true;
+            CREATE INDEX IF NOT EXISTS idx_types_documents_workspace
+            ON ats.types_documents(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_types_documents_workspace_active
+            ON ats.types_documents(workspace_id) WHERE is_active = true;
         """)
 
         # 2. Document collection configs
@@ -338,7 +358,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             CREATE TABLE IF NOT EXISTS agents.document_collection_requirements (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 config_id           UUID NOT NULL REFERENCES agents.document_collection_configs(id) ON DELETE CASCADE,
-                document_type_id    UUID NOT NULL REFERENCES ats.document_types(id) ON DELETE CASCADE,
+                document_type_id    UUID NOT NULL REFERENCES ats.types_documents(id) ON DELETE CASCADE,
                 position            INTEGER NOT NULL DEFAULT 0,
                 is_required         BOOLEAN NOT NULL DEFAULT true,
                 notes               TEXT,
@@ -401,7 +421,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 collection_id       UUID NOT NULL REFERENCES agents.document_collections(id) ON DELETE CASCADE,
                 application_id      UUID REFERENCES ats.applications(id) ON DELETE SET NULL,
-                document_type_id    UUID REFERENCES ats.document_types(id) ON DELETE SET NULL,
+                document_type_id    UUID REFERENCES ats.types_documents(id) ON DELETE SET NULL,
                 document_side       VARCHAR(20) NOT NULL DEFAULT 'single',
                 image_hash          VARCHAR(64),
                 storage_path        VARCHAR(500),
@@ -422,7 +442,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             CREATE TABLE IF NOT EXISTS ats.candidate_documents (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 candidate_id        UUID NOT NULL REFERENCES ats.candidates(id) ON DELETE CASCADE,
-                document_type_id    UUID NOT NULL REFERENCES ats.document_types(id) ON DELETE CASCADE,
+                document_type_id    UUID NOT NULL REFERENCES ats.types_documents(id) ON DELETE CASCADE,
                 workspace_id        UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 document_number     VARCHAR(100),
                 metadata            JSONB DEFAULT '{}',
@@ -449,15 +469,16 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             CREATE OR REPLACE FUNCTION ats.seed_document_type_defaults(p_workspace_id UUID)
             RETURNS void AS $$
             BEGIN
-                INSERT INTO ats.document_types (workspace_id, slug, name, category, requires_front_back, is_verifiable, icon, is_default, sort_order) VALUES
+                INSERT INTO ats.types_documents (workspace_id, slug, name, category, requires_front_back, is_verifiable, icon, is_default, sort_order) VALUES
                     (p_workspace_id, 'id_card',         'ID-kaart',           'identity',    true,  true,  'credit-card',    true,  0),
                     (p_workspace_id, 'driver_license',   'Rijbewijs',          'certificate', false, true,  'car',            false, 1),
                     (p_workspace_id, 'passport',         'Paspoort',           'identity',    false, true,  'book-open',      false, 2),
                     (p_workspace_id, 'bank_details',     'Bankgegevens',       'financial',   false, false, 'landmark',       false, 3),
                     (p_workspace_id, 'medical_cert',     'Medisch attest',     'certificate', false, true,  'heart-pulse',    false, 4),
                     (p_workspace_id, 'work_permit',      'Arbeidsvergunning',  'certificate', false, true,  'file-badge',     false, 5),
-                    (p_workspace_id, 'diploma',          'Diploma/Certificaat','certificate', false, true,  'graduation-cap', false, 6)
-                ON CONFLICT (workspace_id, slug) DO UPDATE SET icon = EXCLUDED.icon WHERE ats.document_types.icon IS NULL;
+                    (p_workspace_id, 'diploma',          'Diploma/Certificaat','certificate', false, true,  'graduation-cap', false, 6),
+                    (p_workspace_id, 'cv',               'CV / Curriculum Vitae','other',    false, false, 'file-text',      false, 7)
+                ON CONFLICT (workspace_id, slug) DO UPDATE SET icon = EXCLUDED.icon WHERE ats.types_documents.icon IS NULL;
             END;
             $$ LANGUAGE plpgsql;
         """)
@@ -475,6 +496,129 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
 
         logger.info("Document collection v2 tables and seed data initialized")
+
+        # =====================================================================
+        # Attribute Types & Candidate Attributes
+        # =====================================================================
+
+        # 1. Attribute types catalog (workspace-scoped, like types_documents)
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.types_attributes (
+                id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                workspace_id            UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
+                slug                    VARCHAR(50) NOT NULL,
+                name                    VARCHAR(200) NOT NULL,
+                description             TEXT,
+                category                VARCHAR(50) NOT NULL DEFAULT 'general',
+                data_type               VARCHAR(20) NOT NULL DEFAULT 'text',
+                options                 JSONB,
+                icon                    VARCHAR(50),
+                is_default              BOOLEAN NOT NULL DEFAULT false,
+                is_active               BOOLEAN NOT NULL DEFAULT true,
+                sort_order              INTEGER NOT NULL DEFAULT 0,
+                collected_by            VARCHAR(50),
+                created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_attr_type_ws_slug UNIQUE (workspace_id, slug),
+                CONSTRAINT chk_attr_data_type CHECK (data_type IN ('text', 'boolean', 'date', 'select', 'multi_select', 'number'))
+            );
+        """)
+        await pool.execute("""
+            CREATE INDEX IF NOT EXISTS idx_types_attributes_workspace
+            ON ats.types_attributes(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_types_attributes_ws_active
+            ON ats.types_attributes(workspace_id) WHERE is_active = true;
+        """)
+
+        # Drop linked_document_type_slug if it exists (removed in refactor)
+        await pool.execute("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'ats' AND table_name = 'types_attributes'
+                    AND column_name = 'linked_document_type_slug'
+                ) THEN
+                    ALTER TABLE ats.types_attributes DROP COLUMN linked_document_type_slug;
+                END IF;
+            END $$;
+        """)
+
+        # 2. Candidate attributes (actual values per candidate)
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS ats.candidate_attributes (
+                id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                candidate_id        UUID NOT NULL REFERENCES ats.candidates(id) ON DELETE CASCADE,
+                attribute_type_id   UUID NOT NULL REFERENCES ats.types_attributes(id) ON DELETE CASCADE,
+                value               TEXT,
+                source              VARCHAR(50),
+                source_session_id   VARCHAR(200),
+                verified            BOOLEAN NOT NULL DEFAULT false,
+                created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_candidate_attribute UNIQUE (candidate_id, attribute_type_id)
+            );
+        """)
+        await pool.execute("""
+            CREATE INDEX IF NOT EXISTS idx_candidate_attributes_candidate
+            ON ats.candidate_attributes(candidate_id);
+            CREATE INDEX IF NOT EXISTS idx_candidate_attributes_type
+            ON ats.candidate_attributes(attribute_type_id);
+        """)
+
+        # Seed function for default attribute types (pure data facts only)
+        await pool.execute("""
+            CREATE OR REPLACE FUNCTION ats.seed_attribute_type_defaults(p_workspace_id UUID)
+            RETURNS void AS $$
+            BEGIN
+                -- Clean up old slugs from previous seed versions
+                DELETE FROM ats.types_attributes
+                WHERE workspace_id = p_workspace_id
+                  AND slug IN ('work_permit_status', 'has_drivers_license')
+                  AND is_default = true;
+
+                INSERT INTO ats.types_attributes
+                    (workspace_id, slug, name, description, category, data_type, options, icon, is_default, sort_order, collected_by)
+                VALUES
+                    -- personal
+                    (p_workspace_id, 'date_of_birth',       'Geboortedatum',          'Geboortedatum van de kandidaat',                   'personal',     'date',    NULL,  'cake',            true, 0,  'pre_screening'),
+                    (p_workspace_id, 'nationality',         'Nationaliteit',          'Nationaliteit van de kandidaat',                   'personal',     'text',    NULL,  'flag',            true, 1,  'pre_screening'),
+                    (p_workspace_id, 'address_city',        'Woonplaats',             'Stad of gemeente waar de kandidaat woont',         'personal',     'text',    NULL,  'map-pin',         true, 2,  'pre_screening'),
+                    (p_workspace_id, 'address_postal_code', 'Postcode',               'Postcode van de kandidaat',                        'personal',     'text',    NULL,  'hash',            true, 3,  'pre_screening'),
+                    (p_workspace_id, 'marital_status',      'Burgerlijke staat',      'Burgerlijke staat (voor dimona/contract)',          'personal',     'text',    NULL,  'heart',           true, 4,  'contract'),
+                    (p_workspace_id, 'national_register_nr','Rijksregisternummer',    'Belgisch rijksregisternummer',                     'personal',     'text',    NULL,  'fingerprint',     true, 5,  'contract'),
+                    (p_workspace_id, 'emergency_contact',   'Noodcontact',            'Naam en telefoonnummer noodcontact',               'personal',     'text',    NULL,  'phone',           true, 6,  'contract'),
+                    -- legal
+                    (p_workspace_id, 'work_eligibility',    'Arbeidstoegang België',  'Mag de kandidaat wettelijk werken in België? (ja/nee)', 'legal', 'boolean', NULL, 'shield-check', true, 10, 'pre_screening'),
+                    -- transport
+                    (p_workspace_id, 'has_own_transport',   'Eigen vervoer',          'Beschikt de kandidaat over eigen vervoer?',        'transport',    'boolean', NULL,  'car',             true, 20, 'pre_screening'),
+                    (p_workspace_id, 'max_commute_km',      'Max woon-werkafstand',   'Maximale afstand woon-werk in km',                 'transport',    'number',  NULL,  'route',           true, 21, 'pre_screening'),
+                    -- availability
+                    (p_workspace_id, 'available_from',      'Beschikbaar vanaf',      'Wanneer is de kandidaat beschikbaar?',             'availability', 'date',    NULL,  'calendar',        true, 30, 'pre_screening'),
+                    (p_workspace_id, 'notice_period',       'Opzegtermijn',           'Huidige opzegtermijn',                             'availability', 'select',  '[{"value":"immediate","label":"Onmiddellijk"},{"value":"1_week","label":"1 week"},{"value":"2_weeks","label":"2 weken"},{"value":"1_month","label":"1 maand"},{"value":"other","label":"Andere"}]'::jsonb, 'hourglass', true, 31, 'pre_screening'),
+                    (p_workspace_id, 'preferred_shifts',    'Voorkeur shifts',        'Welke shifts heeft de kandidaat voorkeur voor?',   'availability', 'multi_select', '[{"value":"day","label":"Dagshift"},{"value":"evening","label":"Avondshift"},{"value":"night","label":"Nachtshift"},{"value":"weekend","label":"Weekend"}]'::jsonb, 'clock', true, 32, 'pre_screening'),
+                    (p_workspace_id, 'available_days',      'Beschikbare dagen',      'Op welke dagen kan de kandidaat werken?',          'availability', 'multi_select', '[{"value":"mon","label":"Maandag"},{"value":"tue","label":"Dinsdag"},{"value":"wed","label":"Woensdag"},{"value":"thu","label":"Donderdag"},{"value":"fri","label":"Vrijdag"},{"value":"sat","label":"Zaterdag"},{"value":"sun","label":"Zondag"}]'::jsonb, 'calendar-days', true, 33, 'pre_screening'),
+                    (p_workspace_id, 'max_hours_per_week',  'Max uren per week',      'Maximaal gewenst aantal uren per week',            'availability', 'number',  NULL,  'timer',           true, 34, 'pre_screening'),
+                    -- financial
+                    (p_workspace_id, 'iban',                'Bankrekeningnummer',     'IBAN voor loonbetaling',                           'financial',    'text',    NULL,  'landmark',        true, 40, 'contract')
+                ON CONFLICT (workspace_id, slug) DO NOTHING;
+            END;
+            $$ LANGUAGE plpgsql;
+        """)
+
+        # Seed defaults for all existing workspaces
+        await pool.execute("""
+            DO $$
+            DECLARE
+                ws RECORD;
+            BEGIN
+                FOR ws IN SELECT id FROM system.workspaces LOOP
+                    PERFORM ats.seed_attribute_type_defaults(ws.id);
+                END LOOP;
+            END $$;
+        """)
+
+        logger.info("Attribute types and candidate attributes tables initialized")
 
         logger.info("Schema migrations completed")
     except Exception as e:

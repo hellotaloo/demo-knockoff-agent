@@ -703,6 +703,24 @@ async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSe
 # Global pre-screening agent config (agents.agent_config)
 # ---------------------------------------------------------------------------
 
+# Preferred display order for settings sections ("Algemeen" first)
+_SETTINGS_SECTION_ORDER = [
+    "general", "voice", "planning", "interview", "escalation", "publishing",
+]
+
+
+def _order_settings(settings: dict) -> dict:
+    """Return settings dict with keys in the preferred display order."""
+    ordered = {}
+    for key in _SETTINGS_SECTION_ORDER:
+        if key in settings:
+            ordered[key] = settings[key]
+    # Append any unknown sections at the end
+    for key in settings:
+        if key not in ordered:
+            ordered[key] = settings[key]
+    return ordered
+
 
 @router.get("/pre-screening/config", response_model=AgentConfigResponse)
 async def get_pre_screening_config():
@@ -725,7 +743,7 @@ async def get_pre_screening_config():
         id=str(row["id"]),
         config_type=row["config_type"],
         version=row["version"],
-        settings=settings,
+        settings=_order_settings(settings),
     )
 
 
@@ -754,7 +772,7 @@ async def update_pre_screening_config(request: AgentConfigUpdateRequest):
     if current:
         current_settings = current["settings"] if isinstance(current["settings"], dict) else json.loads(current["settings"])
 
-    merged = {**current_settings, **update_data}
+    merged = _order_settings({**current_settings, **update_data})
     row = await repo.save(workspace["id"], "pre_screening", merged)
 
     settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
@@ -762,5 +780,5 @@ async def update_pre_screening_config(request: AgentConfigUpdateRequest):
         id=str(row["id"]),
         config_type=row["config_type"],
         version=row["version"],
-        settings=settings,
+        settings=_order_settings(settings),
     )

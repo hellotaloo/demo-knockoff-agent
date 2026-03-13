@@ -24,6 +24,41 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+async def _get_config_setting(dotted_key: str, default=None):
+    """
+    Read a setting from agents.agent_config (pre_screening config).
+
+    Args:
+        dotted_key: Dot-separated path, e.g. "publishing.require_review"
+        default: Value to return if key is not found
+    """
+    from src.database import get_db_pool
+    from src.repositories.agent_config_repo import AgentConfigRepository
+    import json
+
+    try:
+        pool = await get_db_pool()
+        repo = AgentConfigRepository(pool)
+        row = await repo.get_active(DEFAULT_WORKSPACE_ID, "pre_screening")
+        if not row:
+            return default
+
+        settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
+
+        # Navigate dotted path: "publishing.require_review" → settings["publishing"]["require_review"]
+        for key in dotted_key.split("."):
+            if not isinstance(settings, dict) or key not in settings:
+                return default
+            settings = settings[key]
+        return settings
+    except Exception as e:
+        logger.warning(f"Failed to read config setting '{dotted_key}': {e}")
+        return default
+
+
 # =============================================================================
 # STEP CONFIGURATION
 # =============================================================================
@@ -199,7 +234,10 @@ async def handle_run_analysis(
     })
 
     # Decision: does this need recruiter review?
+    # Check workflow context first, then fall back to agent config setting
     require_review = context.get("require_review", False)
+    if not require_review:
+        require_review = await _get_config_setting("publishing.require_review", default=False)
 
     if verdict == "poor":
         logger.info(f"Workflow {workflow['id']}: verdict=poor → awaiting_review")
@@ -269,11 +307,21 @@ async def handle_auto_publish(
 
     pre_screening_id = ps_row["id"]
 
-    # Publish with all 3 channels enabled
-    published_at = datetime.utcnow()
-    whatsapp_agent_id = vacancy_id  # WhatsApp agent uses vacancy_id as identifier
+    # Get default channels from agent config
+    default_channels = await _get_config_setting("publishing.default_channels", default={
+        "voice": True,
+        "whatsapp": True,
+        "cv": True,
+    })
+    voice_enabled = default_channels.get("voice", True)
+    whatsapp_enabled = default_channels.get("whatsapp", True)
+    cv_enabled = default_channels.get("cv", True)
 
-    logger.info(f"Workflow {workflow['id']}: publishing pre-screening (voice, whatsapp, cv)")
+    published_at = datetime.utcnow()
+    whatsapp_agent_id = vacancy_id if whatsapp_enabled else None
+
+    enabled_channels = [ch for ch, on in [("voice", voice_enabled), ("whatsapp", whatsapp_enabled), ("cv", cv_enabled)] if on]
+    logger.info(f"Workflow {workflow['id']}: publishing pre-screening ({', '.join(enabled_channels)})")
 
     await ps_repo.update_publish_state(
         pre_screening_id,
@@ -281,14 +329,14 @@ async def handle_auto_publish(
         elevenlabs_agent_id=None,  # Voice uses master agent from env
         whatsapp_agent_id=whatsapp_agent_id,
         is_online=True,
-        voice_enabled=True,
-        whatsapp_enabled=True,
-        cv_enabled=True,
+        voice_enabled=voice_enabled,
+        whatsapp_enabled=whatsapp_enabled,
+        cv_enabled=cv_enabled,
     )
 
     await orchestrator.update_context(workflow["id"], {
         "published_at": published_at.isoformat(),
-        "channels": ["voice", "whatsapp", "cv"],
+        "channels": enabled_channels,
     })
 
     logger.info(f"Workflow {workflow['id']}: published successfully → notifying")
@@ -485,12 +533,14 @@ async def handle_send_published_notification(
             logger.warning(f"Workflow {workflow['id']}: failed to load questions for notification: {e}")
 
     # Build and send card
+    channels = context.get("channels", ["voice", "whatsapp", "cv"])
     card = _build_published_card(
         vacancy_title=vacancy_title,
         vacancy_id=vacancy_id,
         source=source,
         knockout_questions=knockout_questions,
         qualification_questions=qualification_questions,
+        channels=channels,
     )
 
     try:
@@ -517,12 +567,19 @@ async def handle_send_published_notification(
     }
 
 
+def _channel_labels(channels: list[str]) -> list[str]:
+    """Map channel keys to Dutch display labels."""
+    labels = {"voice": "Telefoon", "whatsapp": "WhatsApp", "cv": "Smart CV"}
+    return [labels.get(ch, ch) for ch in channels]
+
+
 def _build_published_card(
     vacancy_title: str,
     vacancy_id: str,
     source: str,
     knockout_questions: list[str],
     qualification_questions: list[str],
+    channels: list[str] | None = None,
 ) -> dict:
     """Build an Adaptive Card for the pre-screening published notification."""
     ko_count = len(knockout_questions)
@@ -554,7 +611,7 @@ def _build_published_card(
                 "type": "FactSet",
                 "facts": [
                     {"title": "Vacature", "value": vacancy_title},
-                    {"title": "Kanalen", "value": "WhatsApp, Phone, Smart CV"},
+                    {"title": "Kanalen", "value": ", ".join(_channel_labels(channels or ["voice", "whatsapp", "cv"]))},
                     {"title": "Bron", "value": source_label},
                 ],
                 "spacing": "Medium",

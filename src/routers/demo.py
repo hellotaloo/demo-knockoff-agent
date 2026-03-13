@@ -18,6 +18,7 @@ from src.services import DemoService
 from src.services.ats_import_service import ATSImportService, get_import_progress, clear_import_progress
 from src.services.workflow_service import WorkflowService
 from src.repositories import ConversationRepository, ApplicationRepository
+from scripts.seed_prato_flex_document_types import seed_prato_flex_document_types
 
 logger = logging.getLogger(__name__)
 
@@ -292,7 +293,6 @@ async def reset_demo_data(
                 "agents.document_collections",
                 "agents.document_collection_requirements",
                 "agents.document_collection_configs",
-                "ats.document_types",
             ]:
                 try:
                     async with conn.transaction():
@@ -315,6 +315,13 @@ async def reset_demo_data(
             try:
                 async with conn.transaction():
                     await conn.execute("DELETE FROM ats.candidate_skills")
+            except Exception:
+                pass  # Table may not exist yet
+
+            # Delete candidate attributes (values, not the type catalog)
+            try:
+                async with conn.transaction():
+                    await conn.execute("DELETE FROM ats.candidate_attributes")
             except Exception:
                 pass  # Table may not exist yet
 
@@ -349,10 +356,28 @@ async def reset_demo_data(
                 pass  # Table may not exist yet
 
 
+    # Always re-seed Prato Flex document types after reset
+    try:
+        prato_result = await seed_prato_flex_document_types(pool, DEFAULT_WORKSPACE_ID)
+        logger.info(f"Re-seeded Prato Flex document types: {prato_result}")
+    except Exception as e:
+        logger.warning(f"Failed to seed Prato Flex document types: {e}")
+        prato_result = None
+
+    # Always re-seed attribute type defaults after reset
+    try:
+        await pool.execute("SELECT ats.seed_attribute_type_defaults($1)", DEFAULT_WORKSPACE_ID)
+        logger.info("Re-seeded attribute type defaults")
+    except Exception as e:
+        logger.warning(f"Failed to seed attribute type defaults: {e}")
+
     result = {
         "status": "success",
         "message": "All demo data cleared",
     }
+
+    if prato_result:
+        result["document_types"] = prato_result
 
     # Optionally reseed
     if reseed:

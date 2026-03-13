@@ -120,6 +120,7 @@ from src.routers import (
     redirect_router,
     yousign_webhook_router,
     candidacy_router,
+    candidate_attributes_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -186,8 +187,9 @@ async def _workflow_ticker_loop():
                 orchestrator = await get_orchestrator()
                 for trigger in result["auto_triggers"]:
                     try:
-                        logger.info(f"🤖 AUTO-TRIGGER (delayed): {trigger['workflow_type']} | step={trigger['step']} | id={trigger['id'][:8]}")
-                        await orchestrator.handle_event(trigger["id"], "auto", {})
+                        event = trigger.get("event", "auto")
+                        logger.info(f"🤖 AUTO-TRIGGER (delayed): {trigger['workflow_type']} | step={trigger['step']} | event={event} | id={trigger['id'][:8]}")
+                        await orchestrator.handle_event(trigger["id"], event, {})
                     except Exception as e:
                         logger.error(f"🕐 Failed to trigger auto event for {trigger['id']}: {e}")
 
@@ -323,6 +325,7 @@ app.include_router(ontology_router)
 app.include_router(redirect_router)
 app.include_router(yousign_webhook_router)
 app.include_router(candidacy_router)
+app.include_router(candidate_attributes_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
