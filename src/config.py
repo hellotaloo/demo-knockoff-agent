@@ -42,6 +42,7 @@ ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
 # Yousign Configuration
 YOUSIGN_API_KEY = os.environ.get("YOUSIGN_API_KEY", "")
 YOUSIGN_WEBHOOK_SECRET = os.environ.get("YOUSIGN_WEBHOOK_SECRET", "")
+YOUSIGN_CUSTOM_EXPERIENCE_ID = os.environ.get("YOUSIGN_CUSTOM_EXPERIENCE_ID", "")
 ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")  # Master voice agent ID
 
 # VAPI Configuration

@@ -22,6 +22,7 @@ from src.models.pre_screening import (
     AgentConfigUpdateRequest,
 )
 from src.repositories import PreScreeningRepository, AgentConfigRepository, VacancyRepository
+from src.repositories.vacancy_agent_repo import VacancyAgentRepository
 from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)
@@ -494,6 +495,10 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
         cv_enabled=request.enable_cv
     )
 
+    # Sync is_online to vacancy_agents (canonical source for all agent types)
+    va_repo = VacancyAgentRepository(pool)
+    await va_repo.ensure_registered(uuid.UUID(vacancy_id), "prescreening", is_online=True)
+
     return {
         "status": "success",
         "published_at": published_at.isoformat(),
@@ -619,17 +624,25 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     effective_is_online = updated_row["is_online"]
     auto_status_message = ""
 
+    va_repo = VacancyAgentRepository(pool)
+
     # Auto-set is_online = TRUE if any channel is enabled and agent was offline
     if any_channel_on and not updated_row["is_online"] and ps_row["published_at"]:
         await ps_repo.update_online_status(pre_screening_id, True)
+        await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=True)
         effective_is_online = True
         auto_status_message = " (auto-online: channel enabled)"
 
     # Auto-set is_online = FALSE if all channels are disabled
     elif all_channels_off and updated_row["is_online"]:
         await ps_repo.update_online_status(pre_screening_id, False)
+        await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=False)
         effective_is_online = False
         auto_status_message = " (auto-offline: no channels enabled)"
+
+    # Explicit is_online toggle
+    elif request.is_online is not None:
+        await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=request.is_online)
 
     return {
         "status": "success",

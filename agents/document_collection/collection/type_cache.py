@@ -76,6 +76,15 @@ class TypeCache:
     def get_attr_type(self, slug: str) -> Optional[dict]:
         return self._attr_types.get(slug)
 
+    def get_doc_types_summary(self, slugs: list[str]) -> list[dict]:
+        """Return [{slug, name}] for the given slugs — used as classification hints."""
+        result = []
+        for slug in slugs:
+            dt = self._doc_types.get(slug)
+            if dt:
+                result.append({"slug": dt["slug"], "name": dt["name"]})
+        return result
+
 
 class MockTypeCache:
     """For offline testing (chat.py) with hardcoded type definitions."""
@@ -305,3 +314,12 @@ class MockTypeCache:
 
     def get_attr_type(self, slug: str) -> Optional[dict]:
         return self._attr_types.get(slug)
+
+    def get_doc_types_summary(self, slugs: list[str]) -> list[dict]:
+        """Return [{slug, name}] for the given slugs — used as classification hints."""
+        result = []
+        for slug in slugs:
+            dt = self._doc_types.get(slug)
+            if dt:
+                result.append({"slug": dt["slug"], "name": dt["name"]})
+        return result

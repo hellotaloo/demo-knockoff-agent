@@ -334,6 +334,11 @@ async def handle_auto_publish(
         cv_enabled=cv_enabled,
     )
 
+    # Register prescreening agent in vacancy_agents table
+    from src.repositories.vacancy_agent_repo import VacancyAgentRepository
+    va_repo = VacancyAgentRepository(pool)
+    await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=True)
+
     await orchestrator.update_context(workflow["id"], {
         "published_at": published_at.isoformat(),
         "channels": enabled_channels,

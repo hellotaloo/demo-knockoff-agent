@@ -60,7 +60,7 @@ async def run_single_test(test_id: int, verbose: bool = False) -> dict:
         agent = create_simple_agent(
             candidate_name=f"Kandidaat{test_id}",
             vacancy_title="Magazijnmedewerker",
-            company_name="ITZU",
+            company_name="Go4Jobs",
             knockout_questions=TEST_KNOCKOUT_QUESTIONS,
             open_questions=TEST_OPEN_QUESTIONS,
         )

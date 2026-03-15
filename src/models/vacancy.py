@@ -92,6 +92,43 @@ class VacancyResponse(BaseModel):
     last_activity_at: Optional[datetime] = None  # Most recent application activity
 
 
+# ---------------------------------------------------------------------------
+# Unified agent overview models
+# ---------------------------------------------------------------------------
+
+
+class AgentStatItem(BaseModel):
+    """A single stat metric — used in both vacancy rows and dashboard cards."""
+    key: str                          # programmatic id (e.g. "candidates_count", "active")
+    label: str                        # display label (e.g. "Kandidaten", "Actief")
+    value: int = 0                    # numeric value
+    description: Optional[str] = None  # sublabel (e.g. "Lopend", "Alle collecties")
+    variant: Optional[str] = None     # color variant for dashboard cards (blue/dark/lime/pink)
+    icon: Optional[str] = None        # icon name (e.g. "users", "file-check")
+    suffix: Optional[str] = None      # e.g. "%" for rates
+
+
+class AgentVacancyResponse(BaseModel):
+    """Unified vacancy response for all agent overview pages."""
+    id: str
+    title: str
+    company: str
+    location: Optional[str] = None
+    status: str                                     # vacancy status (open/closed/filled)
+    created_at: datetime
+    agent_status: str = "new"                       # "new", "generated", "published", "archived"
+    agent_online: Optional[bool] = None             # from vacancy_agents.is_online
+    stats: list[AgentStatItem] = []
+    last_activity_at: Optional[datetime] = None
+    recruiter: Optional[RecruiterSummary] = None
+    client: Optional[ClientSummary] = None
+
+
+class AgentDashboardStatsResponse(BaseModel):
+    """Unified dashboard stats for all agent pages."""
+    metrics: list[AgentStatItem] = []
+
+
 class VacancyStatsResponse(BaseModel):
     vacancy_id: str
     total_applications: int

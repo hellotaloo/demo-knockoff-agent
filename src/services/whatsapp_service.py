@@ -7,6 +7,7 @@ send the response message via Twilio's REST API in the background.
 """
 import asyncio
 import logging
+import re
 from functools import lru_cache
 
 from twilio.rest import Client
@@ -47,6 +48,9 @@ async def send_whatsapp_message(to_phone: str, message: str) -> Optional[str]:
 
         # Convert Markdown bold (**text**) to WhatsApp bold (*text*)
         message = message.replace("**", "*")
+
+        # Convert Markdown links [text](url) to "text: url" for WhatsApp
+        message = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1: \2", message)
 
         # Run the blocking Twilio call in a thread pool
         # Use Messaging Service SID if available (required for WhatsApp Business)

@@ -14,3 +14,6 @@ class PlaygroundChatRequest(BaseModel):
     vacancy_id: Optional[str] = None  # Required for pre_screening
     collection_id: Optional[str] = None  # Required for document_collection
     candidate_name: Optional[str] = None  # Optional — random if missing
+    # Image upload (base64-encoded)
+    image_base64: Optional[str] = None
+    image_mime_type: Optional[str] = None

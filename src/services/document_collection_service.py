@@ -240,6 +240,11 @@ class DocumentCollectionService:
             agent_state = json.loads(agent_state)
         collection_items = await self._build_collection_items(plan, uploads, agent_state, workspace_id)
 
+        # Compute document counts from collection items (not legacy documents_required)
+        doc_items = [item for item in collection_items if item.type == "document"]
+        documents_total = len(doc_items)
+        documents_collected = sum(1 for item in doc_items if item.status == "verified")
+
         # Extract plan summary fields for the header
         raw_plan = collection.get("collection_plan")
         plan_dict = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
@@ -268,8 +273,8 @@ class DocumentCollectionService:
             channel=collection["channel"],
             retry_count=collection["retry_count"],
             message_count=collection["message_count"],
-            documents_collected=collection.get("documents_collected", 0),
-            documents_total=collection.get("documents_total", 0),
+            documents_collected=documents_collected,
+            documents_total=documents_total,
             started_at=collection["started_at"],
             updated_at=collection["updated_at"],
             completed_at=collection.get("completed_at"),

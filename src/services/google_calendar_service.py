@@ -15,11 +15,11 @@ from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from src.utils.dutch_dates import DUTCH_DAYS, DUTCH_MONTHS, get_next_business_days
+from src.utils.google_credentials import get_service_account_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -59,23 +59,11 @@ class GoogleCalendarService:
         Returns:
             google.oauth2.service_account.Credentials
         """
-        service_account_file = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
-        if not service_account_file:
-            raise RuntimeError(
-                "GOOGLE_SERVICE_ACCOUNT_FILE environment variable is required. "
-                "Set it to the path of your service account JSON key file."
-            )
-
         subject = impersonate_email or os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
-
-        credentials = service_account.Credentials.from_service_account_file(
-            service_account_file,
+        return get_service_account_credentials(
             scopes=["https://www.googleapis.com/auth/calendar"],
             subject=subject,
         )
-
-        logger.info(f"Created Google Calendar credentials (impersonating: {subject or 'none'})")
-        return credentials
 
     def _get_service(self, impersonate_email: Optional[str] = None):
         """

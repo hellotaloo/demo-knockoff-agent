@@ -1,0 +1,5 @@
+[
+  { "candidate_idx": 1, "vacancy_idx": 0, "status": "proposed", "regime": "flex", "notes": "Beschikbaar vanaf volgende week" },
+  { "candidate_idx": 2, "vacancy_idx": 1, "status": "proposed", "regime": "full", "notes": null },
+  { "candidate_idx": 5, "vacancy_idx": 3, "status": "proposed", "regime": "day",  "notes": "Voorkeur dagshift" }
+]

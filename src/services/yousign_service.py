@@ -10,12 +10,12 @@ from typing import Optional
 
 import httpx
 
-from src.config import YOUSIGN_API_KEY
+from src.config import ENVIRONMENT, YOUSIGN_API_KEY, YOUSIGN_CUSTOM_EXPERIENCE_ID
 
 logger = logging.getLogger(__name__)
 
-# Sandbox vs production base URL
-BASE_URL = "https://api-sandbox.yousign.app/v3" if "sandbox" in (YOUSIGN_API_KEY or "") else "https://api.yousign.app/v3"
+# Sandbox for local/staging, production only for production environment
+BASE_URL = "https://api.yousign.app/v3" if ENVIRONMENT == "production" else "https://api-sandbox.yousign.app/v3"
 
 
 @dataclass
@@ -71,10 +71,13 @@ class YousignService:
         try:
             async with httpx.AsyncClient(headers=self.headers, base_url=BASE_URL, timeout=30) as client:
                 # 1. Create signature request
-                r = await client.post("/signature_requests", json={
+                request_body = {
                     "name": request_name,
                     "delivery_mode": "none",
-                })
+                }
+                if YOUSIGN_CUSTOM_EXPERIENCE_ID:
+                    request_body["custom_experience_id"] = YOUSIGN_CUSTOM_EXPERIENCE_ID
+                r = await client.post("/signature_requests", json=request_body)
                 r.raise_for_status()
                 request_id = r.json()["id"]
                 logger.info(f"[YOUSIGN] Created request: {request_id}")

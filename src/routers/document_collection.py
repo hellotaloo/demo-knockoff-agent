@@ -471,11 +471,19 @@ async def document_webhook(
     type_cache = TypeCache(pool, conv_row["workspace_id"])
     await type_cache.ensure_loaded()
 
+    # Ensure candidate_phone is available (E.164 format)
+    candidate_phone_e164 = f"+{phone_normalized}" if not phone_normalized.startswith("+") else phone_normalized
+
     # Restore or create agent
     if agent_state_json and isinstance(agent_state_json, str):
         agent = restore_collection_agent(agent_state_json, type_cache=type_cache)
+        # Ensure candidate_phone is in context (may be missing from older sessions)
+        if "candidate_phone" not in agent.state.context:
+            agent.state.context["candidate_phone"] = candidate_phone_e164
     elif agent_state_json and isinstance(agent_state_json, dict):
         agent = restore_collection_agent(json.dumps(agent_state_json), type_cache=type_cache)
+        if "candidate_phone" not in agent.state.context:
+            agent.state.context["candidate_phone"] = candidate_phone_e164
     else:
         # First message — create agent from plan
         plan = conv_row["collection_plan"]
@@ -500,7 +508,7 @@ async def document_webhook(
         # Inject candidate phone into plan context for Yousign integration
         if "context" not in plan:
             plan["context"] = {}
-        plan["context"]["candidate_phone"] = f"+{phone_normalized}" if not phone_normalized.startswith("+") else phone_normalized
+        plan["context"]["candidate_phone"] = candidate_phone_e164
 
         agent = create_collection_agent(
             plan=plan,
@@ -536,7 +544,16 @@ async def document_webhook(
 
     # Process message through agent
     has_image = NumMedia > 0
+    if has_image and MediaUrl0:
+        try:
+            agent.pending_image_data = await download_twilio_media(MediaUrl0)
+            logger.info(f"Downloaded image: {len(agent.pending_image_data) / 1024:.1f} KB")
+        except Exception as e:
+            logger.error(f"Failed to download media: {e}")
+            agent.pending_image_data = None
+
     response_text = await agent.process_message(Body, has_image=has_image)
+    agent.pending_image_data = None  # Clear after processing
 
     # Persist updated state
     await pool.execute(

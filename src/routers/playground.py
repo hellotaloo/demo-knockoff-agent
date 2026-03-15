@@ -69,10 +69,12 @@ async def start_playground_session(request: PlaygroundStartRequest):
     row = await pool.fetchrow(
         """
         SELECT v.id as vacancy_id, v.title as vacancy_title,
-               ps.id as pre_screening_id, ps.is_online, ps.published_at,
+               ps.id as pre_screening_id, ps.published_at,
+               COALESCE(va.is_online, ps.is_online) as is_online,
                COALESCE(ol.spoken_name, ol.name) as office_name, ol.address as office_address
         FROM ats.vacancies v
         LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
+        LEFT JOIN ats.vacancy_agents va ON va.vacancy_id = v.id AND va.agent_type = 'prescreening'
         LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
         WHERE v.id = $1
         """,

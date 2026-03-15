@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import uuid as uuid_mod
+from datetime import date, timedelta
 from uuid import UUID
 
 import httpx
@@ -198,6 +199,9 @@ class ATSImportService:
                             "description": vac.description_html or "",
                         })
 
+                        # Auto-activate document_collection agent for new vacancies
+                        await self._register_default_agents(conn, row["id"])
+
         except Exception as e:
             logger.error(f"ATS import failed: {e}")
             _set_progress_error(str(e))
@@ -298,6 +302,8 @@ class ATSImportService:
         # Seed candidacies for existing candidates that don't have one yet.
         # This handles the case where candidates were seeded before vacancies were imported.
         await self._seed_candidacies_from_fixtures(workspace_id)
+        await self._seed_placements_from_fixtures(workspace_id)
+        await self._seed_workstation_sheets_from_fixtures(workspace_id)
 
     async def _seed_candidacies_from_fixtures(self, workspace_id: UUID):
         """Create candidacies from fixture data for candidates that don't have any yet."""
@@ -341,6 +347,93 @@ class ATSImportService:
                         cand_data["stage"], cand_data.get("source"))
 
             logger.info("Seeded candidacies from fixture data after ATS import")
+
+    async def _seed_placements_from_fixtures(self, workspace_id: UUID):
+        """Create placements from fixture data."""
+        from data.fixtures import load_placements
+
+        placements_data = load_placements()
+        if not placements_data:
+            return
+
+        async with self.pool.acquire() as conn:
+            candidates = await conn.fetch(
+                "SELECT id FROM ats.candidates WHERE workspace_id = $1 ORDER BY created_at, id",
+                workspace_id,
+            )
+            vacancies = await conn.fetch(
+                "SELECT id FROM ats.vacancies WHERE workspace_id = $1 ORDER BY created_at, id",
+                workspace_id,
+            )
+            if not candidates or not vacancies:
+                return
+
+            # Calculate start_date: first Monday at least 3 weeks from today
+            today = date.today()
+            three_weeks = today + timedelta(weeks=3)
+            days_until_monday = (7 - three_weeks.weekday()) % 7
+            default_start_date = three_weeks + timedelta(days=days_until_monday)
+
+            count = 0
+            for pl_data in placements_data:
+                candidate_idx = pl_data["candidate_idx"]
+                vacancy_idx = pl_data["vacancy_idx"]
+
+                if candidate_idx >= len(candidates) or vacancy_idx >= len(vacancies):
+                    continue
+
+                candidate_id = candidates[candidate_idx]["id"]
+                vacancy_id = vacancies[vacancy_idx]["id"]
+
+                start_date = default_start_date
+                end_date = None
+                if pl_data.get("end_date"):
+                    end_date = date.fromisoformat(pl_data["end_date"])
+
+                await conn.execute("""
+                    INSERT INTO ats.placements
+                    (workspace_id, candidate_id, vacancy_id, status, regime, start_date, end_date, notes)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                """, workspace_id, candidate_id, vacancy_id,
+                    pl_data.get("status", "proposed"), pl_data.get("regime"),
+                    start_date, end_date, pl_data.get("notes"))
+                count += 1
+
+            logger.info(f"Seeded {count} placements from fixture data after ATS import")
+
+    async def _seed_workstation_sheets_from_fixtures(self, workspace_id: UUID):
+        """Create workstation sheet entries from fixture data."""
+        from data.fixtures import load_workstation_sheets
+
+        ws_data = load_workstation_sheets()
+        if not ws_data:
+            return
+
+        async with self.pool.acquire() as conn:
+            vacancies = await conn.fetch(
+                "SELECT id FROM ats.vacancies WHERE workspace_id = $1 ORDER BY created_at, id",
+                workspace_id,
+            )
+            if not vacancies:
+                return
+
+            count = 0
+            for entry in ws_data:
+                vacancy_idx = entry["vacancy_idx"]
+                if vacancy_idx >= len(vacancies):
+                    continue
+
+                vacancy_id = vacancies[vacancy_idx]["id"]
+
+                await conn.execute("""
+                    INSERT INTO ats.workstation_sheets
+                    (vacancy_id, param_key, param_value, notes)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT DO NOTHING
+                """, vacancy_id, entry["param_key"], entry["param_value"], entry.get("notes"))
+                count += 1
+
+            logger.info(f"Seeded {count} workstation sheet entries from fixture data after ATS import")
 
     async def import_and_setup_documents(self, workspace_id: UUID):
         """
@@ -402,6 +495,9 @@ class ATSImportService:
                             "title": vac.title,
                         })
 
+                        # Auto-activate document_collection agent for new vacancies
+                        await self._register_default_agents(conn, row["id"])
+
         except Exception as e:
             logger.error(f"ATS import failed: {e}")
             _set_progress_error(str(e))
@@ -426,9 +522,6 @@ class ATSImportService:
 
         try:
             async with self.pool.acquire() as conn:
-                # Ensure document type defaults exist
-                await conn.execute("SELECT ats.seed_document_type_defaults($1)", workspace_id)
-
                 # Get default document types
                 dt_rows = await conn.fetch(
                     "SELECT id, slug FROM ats.types_documents WHERE workspace_id = $1 AND is_default = true AND is_active = true",
@@ -858,20 +951,33 @@ class ATSImportService:
                     recruiter_id = recruiter_map.get(vac.recruiter_email) if vac.recruiter_email else None
                     client_id = client_map.get(vac.client_name) if vac.client_name else None
 
-                    await conn.execute("""
+                    row = await conn.fetchrow("""
                         INSERT INTO ats.vacancies
                         (title, company, location, description, status, source, source_id,
                          recruiter_id, client_id, workspace_id, office_location_id)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        RETURNING id
                     """, vac.title, vac.company_name, vac.work_location,
                         vac.description_html, internal_status,
                         "ats_import", vac.external_id,
                         recruiter_id, client_id, workspace_id, office_location_id)
                     result.vacancies_imported += 1
 
+                    # Auto-activate document_collection agent for new vacancies
+                    await self._register_default_agents(conn, row["id"])
+
         except Exception as e:
             logger.error(f"Failed to import vacancies from ATS: {e}")
             result.errors.append(f"Vacancy import failed: {str(e)}")
+
+    @staticmethod
+    async def _register_default_agents(conn, vacancy_id):
+        """Register document_collection agent as online for a newly created vacancy."""
+        await conn.execute("""
+            INSERT INTO ats.vacancy_agents (vacancy_id, agent_type, is_online)
+            VALUES ($1, 'document_collection', true)
+            ON CONFLICT (vacancy_id, agent_type) DO NOTHING
+        """, vacancy_id)
 
     @staticmethod
     def _map_vacancy_status(ats_status: str) -> str:

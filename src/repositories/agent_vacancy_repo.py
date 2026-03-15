@@ -2,9 +2,8 @@
 Agent vacancy repository - handles vacancy listing by agent status.
 """
 import asyncpg
-from typing import Optional, Tuple, Literal
-
-AgentStatus = Literal["new", "generated", "published", "archived"]
+from typing import Tuple
+from uuid import UUID
 
 
 class AgentVacancyRepository:
@@ -15,68 +14,38 @@ class AgentVacancyRepository:
 
     async def list_prescreening_vacancies(
         self,
-        status: AgentStatus,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
         """
-        List vacancies filtered by pre-screening agent status.
+        List all non-archived vacancies with prescreening agent status and stats.
 
-        Status logic:
-        - new: No pre_screening record (questions not generated yet)
-        - generated: Has pre_screening record (questions exist, can be online/offline)
-        - archived: Vacancy status is 'closed' or 'filled'
+        Returns agent_status per vacancy:
+        - new: No pre_screening record
+        - generated: Has pre_screening but not published
+        - published: Pre_screening is published
         """
-        # Build status-specific conditions
-        if status == "archived":
-            status_condition = "v.status IN ('closed', 'filled')"
-        elif status == "published":
-            status_condition = """
-                v.status NOT IN ('closed', 'filled')
-                AND ps.id IS NOT NULL
-                AND ps.published_at IS NOT NULL
-            """
-        elif status == "generated":
-            status_condition = """
-                v.status NOT IN ('closed', 'filled')
-                AND ps.id IS NOT NULL
-                AND ps.published_at IS NULL
-            """
-        else:  # new
-            status_condition = """
-                v.status NOT IN ('closed', 'filled')
-                AND ps.id IS NULL
-            """
-
-        # Count query
-        count_query = f"""
+        count_query = """
             SELECT COUNT(*)
             FROM ats.vacancies v
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
-            WHERE {status_condition}
+            WHERE v.status NOT IN ('closed', 'filled')
         """
         total = await self.pool.fetchval(count_query)
 
-        # Data query with stats
-        query = f"""
+        query = """
             SELECT
-                v.id, v.title, v.company, v.location, v.description, v.status, v.created_at,
-                v.source, v.source_id, v.archived_at,
-                COALESCE(
-                    (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
-                    ARRAY[]::text[]
-                ) as agent_types,
+                v.id, v.title, v.company, v.location, v.status, v.created_at,
+                CASE
+                    WHEN ps.id IS NULL THEN 'new'
+                    WHEN ps.published_at IS NULL THEN 'generated'
+                    ELSE 'published'
+                END as agent_status,
+                COALESCE(va_ps.is_online, ps.is_online, false) as agent_online,
                 v.recruiter_id, v.client_id,
                 r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                 r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
                 c.id as c_id, c.name as c_name, c.location as c_location,
                 c.industry as c_industry, c.logo as c_logo,
-                (ps.id IS NOT NULL) as has_screening,
-                ps.published_at,
-                ps.is_online,
-                COALESCE(ps.voice_enabled, false) as voice_enabled,
-                COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
-                COALESCE(ps.cv_enabled, false) as cv_enabled,
                 COALESCE(app_stats.candidates_count, 0) as candidates_count,
                 COALESCE(app_stats.completed_count, 0) as completed_count,
                 COALESCE(app_stats.qualified_count, 0) as qualified_count,
@@ -85,6 +54,7 @@ class AgentVacancyRepository:
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
             LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN ats.vacancy_agents va_ps ON va_ps.vacancy_id = v.id AND va_ps.agent_type = 'prescreening'
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
@@ -94,7 +64,7 @@ class AgentVacancyRepository:
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
-            WHERE {status_condition}
+            WHERE v.status NOT IN ('closed', 'filled')
             ORDER BY v.created_at DESC
             LIMIT $1 OFFSET $2
         """
@@ -104,86 +74,86 @@ class AgentVacancyRepository:
 
     async def list_preonboarding_vacancies(
         self,
-        status: AgentStatus,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
         """
-        List vacancies filtered by pre-onboarding agent status.
+        List all non-archived vacancies with document collection agent status and stats.
 
-        Status logic:
+        Returns agent_status per vacancy:
         - new: document_collection agent not registered
         - generated: document_collection agent registered
-        - archived: Vacancy status is 'closed' or 'filled'
         """
-        # Build status-specific conditions
-        if status == "archived":
-            status_condition = "v.status IN ('closed', 'filled')"
-        elif status == "generated":
-            status_condition = """
-                v.status NOT IN ('closed', 'filled')
-                AND EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')
-            """
-        else:  # new
-            status_condition = """
-                v.status NOT IN ('closed', 'filled')
-                AND NOT EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')
-            """
-
-        # Count query
-        count_query = f"""
+        count_query = """
             SELECT COUNT(*)
             FROM ats.vacancies v
-            WHERE {status_condition}
+            WHERE v.status NOT IN ('closed', 'filled')
         """
         total = await self.pool.fetchval(count_query)
 
-        # Data query
-        query = f"""
+        query = """
             SELECT
-                v.id, v.title, v.company, v.location, v.description, v.status, v.created_at,
-                v.source, v.source_id, v.archived_at,
-                COALESCE(
-                    (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
-                    ARRAY[]::text[]
-                ) as agent_types,
+                v.id, v.title, v.company, v.location, v.status, v.created_at,
+                CASE
+                    WHEN va_dc.id IS NULL THEN 'new'
+                    ELSE 'generated'
+                END as agent_status,
+                va_dc.is_online as agent_online,
                 v.recruiter_id, v.client_id,
                 r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                 r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
                 c.id as c_id, c.name as c_name, c.location as c_location,
                 c.industry as c_industry, c.logo as c_logo,
-                (ps.id IS NOT NULL) as has_screening,
-                ps.published_at,
-                ps.is_online,
-                COALESCE(ps.voice_enabled, false) as voice_enabled,
-                COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
-                COALESCE(ps.cv_enabled, false) as cv_enabled,
-                COALESCE(app_stats.candidates_count, 0) as candidates_count,
-                COALESCE(app_stats.completed_count, 0) as completed_count,
-                COALESCE(app_stats.qualified_count, 0) as qualified_count,
-                app_stats.last_activity_at,
-                (SELECT va2.is_online FROM ats.vacancy_agents va2
-                 WHERE va2.vacancy_id = v.id AND va2.agent_type = 'document_collection') as doc_collection_online
+                COALESCE(dc_stats.dc_active, 0) as dc_active,
+                COALESCE(dc_stats.dc_completed, 0) as dc_completed,
+                COALESCE(dc_stats.dc_needs_review, 0) as dc_needs_review,
+                dc_stats.dc_last_activity as last_activity_at
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN ats.vacancy_agents va_dc ON va_dc.vacancy_id = v.id AND va_dc.agent_type = 'document_collection'
             LEFT JOIN LATERAL (
                 SELECT
-                    COUNT(*) as candidates_count,
-                    COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                    COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                    MAX(COALESCE(completed_at, started_at)) as last_activity_at
-                FROM ats.applications a
-                WHERE a.vacancy_id = v.id
-            ) app_stats ON true
-            WHERE {status_condition}
+                    COUNT(*) FILTER (WHERE dc.status = 'active') as dc_active,
+                    COUNT(*) FILTER (WHERE dc.status = 'completed') as dc_completed,
+                    COUNT(*) FILTER (WHERE dc.status = 'needs_review') as dc_needs_review,
+                    MAX(COALESCE(dc.completed_at, dc.updated_at)) as dc_last_activity
+                FROM agents.document_collections dc
+                WHERE dc.vacancy_id = v.id
+            ) dc_stats ON true
+            WHERE v.status NOT IN ('closed', 'filled')
             ORDER BY v.created_at DESC
             LIMIT $1 OFFSET $2
         """
 
         rows = await self.pool.fetch(query, limit, offset)
         return rows, total
+
+    async def get_prescreening_dashboard_stats(self) -> asyncpg.Record:
+        """Get aggregate prescreening stats for the dashboard."""
+        query = """
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE started_at >= date_trunc('week', NOW())) as this_week,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
+                COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
+                COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count
+            FROM ats.applications
+        """
+        return await self.pool.fetchrow(query)
+
+    async def get_preonboarding_dashboard_stats(self) -> asyncpg.Record:
+        """Get aggregate document collection stats for the dashboard."""
+        query = """
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE status = 'active') as active,
+                COUNT(*) FILTER (WHERE status = 'completed') as completed,
+                COUNT(*) FILTER (WHERE status = 'needs_review') as needs_review
+            FROM agents.document_collections
+        """
+        return await self.pool.fetchrow(query)
 
     async def get_counts(self) -> dict:
         """

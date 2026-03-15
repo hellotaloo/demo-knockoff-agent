@@ -4,6 +4,8 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-15** — **BREAKING**: `NavigationCountsResponse.prescreening` and `.preonboarding` now return `{active, stuck}` (per-type workflow activity counts) instead of vacancy-status counts (`new/generated/published/archived`). Combined `activities` field unchanged
+- **2026-03-15** — Refactored agent vacancy endpoints to unified `AgentVacancyResponse` shape. Removed `?status=` query param from both endpoints — all non-archived vacancies returned with `agent_status` field per item. Added `GET /agents/prescreening/stats` and `GET /agents/preonboarding/stats` dashboard stats endpoints. Migrated prescreening `is_online` to `vacancy_agents` table (same as document_collection). Response now uses self-describing `AgentStatItem` lists for agent-specific data
 - **2026-03-15** — Removed `document_collection_configs` system entirely. Online/offline toggle for document collection agent now uses `ats.vacancy_agents.is_online`. Added `GET /vacancies/{vacancy_id}/agents/{agent_type}/status` and `PATCH /vacancies/{vacancy_id}/agents/{agent_type}/status` endpoints. Removed all `/configs` endpoints and related types (`CollectionConfigResponse`, `CollectionConfigCreate`, etc.). Simplified document resolution to workspace defaults only. Added `POST /collections/{collection_id}/tasks/{task_slug}/trigger` endpoint
 - **2026-03-15** — Added optional `start_date` field (ISO date, `YYYY-MM-DD`) to `VacancyResponse`. Added `PATCH /vacancies/{vacancy_id}` endpoint for updating vacancy fields (currently supports `start_date`)
 - **2026-03-13** — Added `POST /playground/chat` unified SSE chat endpoint for all playground agent types (pre_screening, document_collection). Supports ephemeral in-memory sessions with agent-type dispatch. Replaces agent-specific chat endpoints for playground use
@@ -1221,7 +1223,7 @@ Agent-centric views of vacancies, grouped by AI agent configuration status.
 
 ### GET /agents/prescreening/vacancies
 
-List vacancies by pre-screening agent status.
+List all non-archived vacancies with prescreening agent status and stats. Returns a unified `AgentVacancyResponse` shape.
 
 **Auth:** None
 
@@ -1229,27 +1231,10 @@ List vacancies by pre-screening agent status.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `status` | string | Yes | - | Filter: `new`, `generated`, `published`, or `archived` |
 | `limit` | number | No | 50 | Results per page (1-100) |
 | `offset` | number | No | 0 | Pagination offset |
 
-**Status Definitions:**
-
-- `new`: No pre-screening record (questions not generated yet)
-- `generated`: Has pre-screening record but NOT published (draft)
-- `published`: Has pre-screening record AND published (can be online/offline)
-- `archived`: Vacancy status is 'closed' or 'filled'
-
 **Response:**
-
-```typescript
-interface AgentVacancyListResponse {
-  vacancies: VacancyResponse[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-```
 
 ```json
 {
@@ -1261,33 +1246,31 @@ interface AgentVacancyListResponse {
       "location": "Gent",
       "status": "open",
       "created_at": "2025-01-15T10:00:00Z",
-      "has_screening": true,
-      "is_online": true,
-      "channels": { "voice": true, "whatsapp": true, "cv": false },
-      "agents": {
-        "prescreening": { "exists": true, "status": "online" },
-        "preonboarding": { "exists": false, "status": null },
-        "insights": { "exists": false, "status": null }
-      },
-      "recruiter": { "id": "uuid", "name": "Sarah De Vos" },
-      "client": { "id": "uuid", "name": "Vandemoortele" },
-      "candidates_count": 15,
-      "completed_count": 12,
-      "qualified_count": 8,
-      "last_activity_at": "2025-01-20T09:15:00Z"
+      "agent_status": "published",
+      "agent_online": true,
+      "stats": [
+        {"key": "candidates_count", "label": "Kandidaten", "value": 15},
+        {"key": "completed_count", "label": "Afgerond", "value": 12},
+        {"key": "qualified_count", "label": "Gekwalificeerd", "value": 8}
+      ],
+      "last_activity_at": "2025-01-20T09:15:00Z",
+      "recruiter": {"id": "uuid", "name": "Sarah De Vos"},
+      "client": {"id": "uuid", "name": "Vandemoortele"}
     }
   ],
-  "total": 5,
+  "total": 8,
   "limit": 50,
   "offset": 0
 }
 ```
 
+**`agent_status` values:** `new` (no pre-screening), `generated` (draft), `published`
+
 ---
 
 ### GET /agents/preonboarding/vacancies
 
-List vacancies by pre-onboarding agent status.
+List all non-archived vacancies with document collection agent status and stats. Same `AgentVacancyResponse` shape as prescreening.
 
 **Auth:** None
 
@@ -1295,17 +1278,117 @@ List vacancies by pre-onboarding agent status.
 
 | Name | Type | Required | Default | Description |
 |------|------|----------|---------|-------------|
-| `status` | string | Yes | - | Filter: `new`, `generated`, or `archived` |
 | `limit` | number | No | 50 | Results per page (1-100) |
 | `offset` | number | No | 0 | Pagination offset |
 
-**Status Definitions:**
+**Response:**
 
-- `new`: `preonboarding_agent_enabled` is false or NULL
-- `generated`: `preonboarding_agent_enabled` is true
-- `archived`: Vacancy status is 'closed' or 'filled'
+```json
+{
+  "vacancies": [
+    {
+      "id": "uuid",
+      "title": "Operator Mengafdeling",
+      "company": "Vandemoortele",
+      "location": "Gent",
+      "status": "open",
+      "created_at": "2025-01-15T10:00:00Z",
+      "agent_status": "generated",
+      "agent_online": true,
+      "stats": [
+        {"key": "active", "label": "Actief", "value": 3},
+        {"key": "completed", "label": "Afgerond", "value": 5},
+        {"key": "needs_review", "label": "Review", "value": 1}
+      ],
+      "last_activity_at": "2025-01-20T09:15:00Z",
+      "recruiter": {"id": "uuid", "name": "Sarah De Vos"},
+      "client": {"id": "uuid", "name": "Vandemoortele"}
+    }
+  ],
+  "total": 8,
+  "limit": 50,
+  "offset": 0
+}
+```
 
-**Response:** Same structure as `/agents/prescreening/vacancies`
+**`agent_status` values:** `new` (agent not registered), `generated` (agent registered)
+
+---
+
+### GET /agents/prescreening/stats
+
+Aggregate dashboard stats for the pre-screening overview page.
+
+**Auth:** None
+
+**Response:**
+
+```json
+{
+  "metrics": [
+    {"key": "total_this_week", "label": "Pre-screenings", "value": 12, "description": "Deze week", "variant": "blue", "icon": "users"},
+    {"key": "completion_rate", "label": "Afrondingspercentage", "value": 75, "suffix": "%", "variant": "dark", "icon": "check-circle"},
+    {"key": "qualified_count", "label": "Gekwalificeerd", "value": 9, "description": "Kandidaten", "variant": "lime", "icon": "user-check"},
+    {"key": "channels", "label": "Kanalen", "value": 0, "description": "voice: 5, whatsapp: 7", "variant": "dark", "icon": "phone"}
+  ]
+}
+```
+
+---
+
+### GET /agents/preonboarding/stats
+
+Aggregate dashboard stats for the document collection overview page.
+
+**Auth:** None
+
+**Response:**
+
+```json
+{
+  "metrics": [
+    {"key": "active_collections", "label": "Actieve collecties", "value": 5, "description": "Lopend", "variant": "blue", "icon": "file-text"},
+    {"key": "completion_rate", "label": "Afrondingspercentage", "value": 60, "suffix": "%", "variant": "dark", "icon": "check-circle-2"},
+    {"key": "completed", "label": "Volledig verzameld", "value": 8, "description": "Afgerond", "variant": "lime", "icon": "file-check"},
+    {"key": "needs_review", "label": "Review nodig", "value": 2, "description": "Wacht op verificatie", "variant": "pink", "icon": "alert-circle"}
+  ]
+}
+```
+
+---
+
+### Shared Types
+
+```typescript
+interface AgentStatItem {
+  key: string;                  // Programmatic id
+  label: string;                // Display label
+  value: number;                // Numeric value
+  description?: string;         // Sublabel
+  variant?: string;             // Color: "blue" | "dark" | "lime" | "pink"
+  icon?: string;                // Lucide icon name
+  suffix?: string;              // e.g. "%"
+}
+
+interface AgentVacancyResponse {
+  id: string;
+  title: string;
+  company: string;
+  location?: string;
+  status: string;               // Vacancy status (open/closed/filled)
+  created_at: string;
+  agent_status: string;         // Agent-specific status
+  agent_online?: boolean;       // From vacancy_agents.is_online
+  stats: AgentStatItem[];       // Agent-specific stats
+  last_activity_at?: string;
+  recruiter?: RecruiterSummary;
+  client?: ClientSummary;
+}
+
+interface AgentDashboardStatsResponse {
+  metrics: AgentStatItem[];
+}
+```
 
 ---
 
@@ -1320,15 +1403,12 @@ Get lightweight counts for navigation sidebar. Returns vacancy counts by agent s
 ```typescript
 interface NavigationCountsResponse {
   prescreening: {
-    new: number;
-    generated: number;
-    published: number;
-    archived: number;
+    active: number;   // Active pre-screening workflows
+    stuck: number;    // Pre-screening workflows with SLA breached
   };
   preonboarding: {
-    new: number;
-    generated: number;
-    archived: number;
+    active: number;   // Active document collection workflows
+    stuck: number;    // Document collection workflows with SLA breached
   };
   activities: {
     active: number;   // Active workflows (not stuck)

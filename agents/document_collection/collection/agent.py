@@ -136,6 +136,7 @@ class DocumentCollectionAgent:
     def __init__(self, state: CollectionState, type_cache=None):
         self.state = state
         self.type_cache = type_cache
+        self.pending_image_data: bytes | None = None  # Set by router before process_message()
 
     # ── LLM interface (used by handlers) ──────────────────────────────
 
@@ -170,6 +171,38 @@ class DocumentCollectionAgent:
         if idx < len(flow):
             return flow[idx]
         return None
+
+    async def _jump_to_step(self, tag: str) -> str:
+        """Testing shortcut: jump to a step by tag like --sign-contract-- or --medical--."""
+        # Map tags to step types
+        tag_map = {
+            "--sign-contract--": "contract_signing",
+            "--contract--": "contract_signing",
+            "--medical--": "medical_screening",
+            "--identity--": "identity_verification",
+            "--address--": "address_collection",
+            "--documents--": "collect_documents",
+            "--attributes--": "collect_attributes",
+            "--closing--": "closing",
+        }
+        target_type = tag_map.get(tag)
+        if not target_type:
+            return f"Onbekende test-tag: {tag}\nBeschikbaar: {', '.join(tag_map.keys())}"
+
+        # Find the step in conversation_flow
+        for i, step in enumerate(self.state.conversation_flow):
+            if step.get("type") == target_type:
+                # Mark all previous steps as completed
+                for j in range(i):
+                    prev_type = self.state.conversation_flow[j].get("type", "")
+                    if prev_type not in self.state.completed_steps:
+                        self.state.completed_steps.append(prev_type)
+                self.state.current_step_index = i
+                self.state.step_item_index = 0
+                logger.info(f"[TEST] Jumped to step {i}: {target_type}")
+                return await self._enter_step(step)
+
+        return f"Stap '{target_type}' niet gevonden in conversation_flow."
 
     async def _advance_step(self) -> str:
         """Mark current step complete, find and enter next eligible step."""
@@ -242,6 +275,11 @@ class DocumentCollectionAgent:
     async def process_message(self, user_message: str, has_image: bool = False) -> str:
         """Main entry point — route to the appropriate step handler."""
         self.state.message_count += 1
+
+        # Testing shortcut: jump directly to a step by type
+        if user_message.strip().startswith("--") and user_message.strip().endswith("--"):
+            return await self._jump_to_step(user_message.strip())
+
         step = self._current_step()
 
         if not step:

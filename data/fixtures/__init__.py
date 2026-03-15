@@ -62,3 +62,15 @@ def load_candidacies() -> list[dict]:
         return json.load(f)
 
 
+def load_placements() -> list[dict]:
+    """Load demo placements from JSON file."""
+    with open(FIXTURES_DIR / "placements.json", "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_workstation_sheets() -> list[dict]:
+    """Load demo workstation sheets from JSON file."""
+    with open(FIXTURES_DIR / "workstation_sheets.json", "r", encoding="utf-8") as f:
+        return json.load(f)
+
+

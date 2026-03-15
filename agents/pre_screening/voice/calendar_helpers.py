@@ -47,10 +47,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def is_calendar_configured() -> bool:
     """Return True if Google Calendar credentials are available."""
-    return bool(
+    has_credentials = bool(
         os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
-        and os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_INFO")
     )
+    return has_credentials and bool(os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL"))
 
 
 def _resolve_credentials_path() -> str:
@@ -106,12 +107,10 @@ class _CalendarService:
         if impersonate_email in self._service_cache:
             return self._service_cache[impersonate_email]
 
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
+        from src.utils.google_credentials import get_service_account_credentials
 
-        cred_path = _resolve_credentials_path()
-        credentials = service_account.Credentials.from_service_account_file(
-            cred_path,
+        credentials = get_service_account_credentials(
             scopes=["https://www.googleapis.com/auth/calendar"],
             subject=impersonate_email,
         )

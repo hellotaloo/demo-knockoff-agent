@@ -1,18 +1,21 @@
 """
-Agent listing endpoints - vacancies grouped by agent status.
+Agent listing endpoints - vacancies with agent-specific stats.
+
+Both endpoints return the same AgentVacancyResponse shape, with
+agent-specific data in self-describing AgentStatItem lists.
 """
 import logging
-from typing import Literal
+from typing import Optional
 from fastapi import APIRouter, Query, Depends
 import asyncpg
 
 from src.models.vacancy import (
-    VacancyResponse,
-    ChannelsResponse,
-    VacancyAgentResponse,
     NavigationCountsResponse,
     RecruiterSummary,
     ClientSummary,
+    AgentStatItem,
+    AgentVacancyResponse,
+    AgentDashboardStatsResponse,
 )
 from src.repositories.agent_vacancy_repo import AgentVacancyRepository
 from src.database import get_db_pool
@@ -26,6 +29,91 @@ async def get_agent_vacancy_repo() -> AgentVacancyRepository:
     """Dependency to get AgentVacancyRepository."""
     pool = await get_db_pool()
     return AgentVacancyRepository(pool)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_recruiter(row: asyncpg.Record) -> Optional[RecruiterSummary]:
+    if row.get("recruiter_id") and row.get("r_id"):
+        return RecruiterSummary(
+            id=str(row["r_id"]),
+            name=row["r_name"],
+            email=row.get("r_email"),
+            phone=row.get("r_phone"),
+            team=row.get("r_team"),
+            role=row.get("r_role"),
+            avatar_url=row.get("r_avatar_url"),
+        )
+    return None
+
+
+def _build_client(row: asyncpg.Record) -> Optional[ClientSummary]:
+    if row.get("client_id") and row.get("c_id"):
+        return ClientSummary(
+            id=str(row["c_id"]),
+            name=row["c_name"],
+            location=row.get("c_location"),
+            industry=row.get("c_industry"),
+            logo=row.get("c_logo"),
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Agent-specific vacancy builders
+# ---------------------------------------------------------------------------
+
+
+def _build_prescreening_vacancy(row: asyncpg.Record) -> AgentVacancyResponse:
+    """Build AgentVacancyResponse with prescreening stats."""
+    return AgentVacancyResponse(
+        id=str(row["id"]),
+        title=row["title"],
+        company=row["company"],
+        location=row.get("location"),
+        status=row["status"],
+        created_at=row["created_at"],
+        agent_status=row["agent_status"],
+        agent_online=row.get("agent_online") or False,
+        stats=[
+            AgentStatItem(key="candidates_count", label="Kandidaten", value=row["candidates_count"]),
+            AgentStatItem(key="completed_count", label="Afgerond", value=row["completed_count"]),
+            AgentStatItem(key="qualified_count", label="Gekwalificeerd", value=row["qualified_count"]),
+        ],
+        last_activity_at=row.get("last_activity_at"),
+        recruiter=_build_recruiter(row),
+        client=_build_client(row),
+    )
+
+
+def _build_preonboarding_vacancy(row: asyncpg.Record) -> AgentVacancyResponse:
+    """Build AgentVacancyResponse with document collection stats."""
+    return AgentVacancyResponse(
+        id=str(row["id"]),
+        title=row["title"],
+        company=row["company"],
+        location=row.get("location"),
+        status=row["status"],
+        created_at=row["created_at"],
+        agent_status=row["agent_status"],
+        agent_online=row.get("agent_online"),
+        stats=[
+            AgentStatItem(key="active", label="Actief", value=row["dc_active"]),
+            AgentStatItem(key="completed", label="Afgerond", value=row["dc_completed"]),
+            AgentStatItem(key="needs_review", label="Review", value=row["dc_needs_review"]),
+        ],
+        last_activity_at=row.get("last_activity_at"),
+        recruiter=_build_recruiter(row),
+        client=_build_client(row),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Navigation counts
+# ---------------------------------------------------------------------------
 
 
 @router.get("/counts", response_model=NavigationCountsResponse)
@@ -43,8 +131,8 @@ async def get_navigation_counts():
 
     if not row:
         return NavigationCountsResponse(
-            prescreening={"new": 0, "generated": 0, "published": 0, "archived": 0},
-            preonboarding={"new": 0, "generated": 0, "archived": 0},
+            prescreening={"active": 0, "stuck": 0},
+            preonboarding={"active": 0, "stuck": 0},
             activities={"active": 0, "stuck": 0},
             vacancies={"active": 0, "archived": 0},
             candidates={"total": 0, "archived": 0},
@@ -52,15 +140,12 @@ async def get_navigation_counts():
 
     return NavigationCountsResponse(
         prescreening={
-            "new": row["prescreening_new"],
-            "generated": row["prescreening_generated"],
-            "published": row["prescreening_published"],
-            "archived": row["prescreening_archived"],
+            "active": row["prescreening_active"],
+            "stuck": row["prescreening_stuck"],
         },
         preonboarding={
-            "new": row["preonboarding_new"],
-            "generated": row["preonboarding_generated"],
-            "archived": row["preonboarding_archived"],
+            "active": row["preonboarding_active"],
+            "stuck": row["preonboarding_stuck"],
         },
         activities={
             "active": row["activities_active"],
@@ -77,131 +162,129 @@ async def get_navigation_counts():
     )
 
 
-def _build_agents_from_row(row: asyncpg.Record) -> list[VacancyAgentResponse]:
-    """Build list of registered agents from a vacancy row."""
-    agent_types = row.get("agent_types") or []
-    agents = []
-    for agent_type in agent_types:
-        if agent_type == "prescreening":
-            agents.append(VacancyAgentResponse(
-                type="prescreening",
-                status="online" if row.get("is_online") else ("offline" if row["has_screening"] else None)
-            ))
-        else:
-            agents.append(VacancyAgentResponse(type=agent_type))
-    return agents
-
-
-def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
-    """Build VacancyResponse from database row."""
-    # Build recruiter info if present
-    recruiter = None
-    if row.get("recruiter_id") and row.get("r_id"):
-        recruiter = RecruiterSummary(
-            id=str(row["r_id"]),
-            name=row["r_name"],
-            email=row.get("r_email"),
-            phone=row.get("r_phone"),
-            team=row.get("r_team"),
-            role=row.get("r_role"),
-            avatar_url=row.get("r_avatar_url")
-        )
-
-    # Build client info if present
-    client = None
-    if row.get("client_id") and row.get("c_id"):
-        client = ClientSummary(
-            id=str(row["c_id"]),
-            name=row["c_name"],
-            location=row.get("c_location"),
-            industry=row.get("c_industry"),
-            logo=row.get("c_logo")
-        )
-
-    return VacancyResponse(
-        id=str(row["id"]),
-        title=row["title"],
-        company=row["company"],
-        location=row.get("location"),
-        description=row.get("description"),
-        status=row["status"],
-        created_at=row["created_at"],
-        archived_at=row.get("archived_at"),
-        source=row.get("source"),
-        source_id=row.get("source_id"),
-        has_screening=row["has_screening"],
-        published_at=row.get("published_at"),
-        is_online=row.get("is_online"),
-        channels=ChannelsResponse(
-            voice=row.get("voice_enabled") or False,
-            whatsapp=row.get("whatsapp_enabled") or False,
-            cv=row.get("cv_enabled") or False
-        ),
-        agents=_build_agents_from_row(row),
-        recruiter_id=str(row["recruiter_id"]) if row.get("recruiter_id") else None,
-        recruiter=recruiter,
-        client_id=str(row["client_id"]) if row.get("client_id") else None,
-        client=client,
-        candidates_count=row["candidates_count"],
-        completed_count=row["completed_count"],
-        qualified_count=row["qualified_count"],
-        last_activity_at=row.get("last_activity_at")
-    )
+# ---------------------------------------------------------------------------
+# Vacancy list endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.get("/prescreening/vacancies")
 async def list_prescreening_vacancies(
-    status: Literal["new", "generated", "published", "archived"] = Query(..., description="Agent status filter"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo)
+    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
 ):
     """
-    List vacancies by pre-screening agent status.
+    List all non-archived vacancies with prescreening agent status and stats.
 
-    Status definitions:
+    Each vacancy includes an `agent_status` field:
     - **new**: No pre-screening record (questions not generated yet)
-    - **generated**: Has pre-screening record (questions exist, can be online/offline)
-    - **archived**: Vacancy status is 'closed' or 'filled'
+    - **generated**: Has pre-screening record but not published
+    - **published**: Pre-screening is published
     """
-    rows, total = await repo.list_prescreening_vacancies(
-        status=status, limit=limit, offset=offset
-    )
-
-    vacancies = [build_vacancy_response(row) for row in rows]
+    rows, total = await repo.list_prescreening_vacancies(limit=limit, offset=offset)
+    vacancies = [_build_prescreening_vacancy(row) for row in rows]
 
     return {
         "vacancies": vacancies,
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
     }
 
 
 @router.get("/preonboarding/vacancies")
 async def list_preonboarding_vacancies(
-    status: Literal["new", "generated", "archived"] = Query(..., description="Agent status filter"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo)
+    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
 ):
     """
-    List vacancies by pre-onboarding agent status.
+    List all non-archived vacancies with document collection agent status and stats.
 
-    Status definitions:
-    - **new**: Pre-onboarding agent not enabled
-    - **generated**: Pre-onboarding agent enabled
-    - **archived**: Vacancy status is 'closed' or 'filled'
+    Each vacancy includes an `agent_status` field:
+    - **new**: Document collection agent not registered
+    - **generated**: Document collection agent registered
     """
-    rows, total = await repo.list_preonboarding_vacancies(
-        status=status, limit=limit, offset=offset
-    )
-
-    vacancies = [build_vacancy_response(row) for row in rows]
+    rows, total = await repo.list_preonboarding_vacancies(limit=limit, offset=offset)
+    vacancies = [_build_preonboarding_vacancy(row) for row in rows]
 
     return {
         "vacancies": vacancies,
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
     }
+
+
+# ---------------------------------------------------------------------------
+# Dashboard stats endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/prescreening/stats", response_model=AgentDashboardStatsResponse)
+async def get_prescreening_stats(
+    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
+):
+    """Aggregate dashboard stats for the pre-screening overview page."""
+    row = await repo.get_prescreening_dashboard_stats()
+
+    total = row["total"]
+    completed = row["completed_count"]
+    qualified = row["qualified_count"]
+    completion_rate = int(completed / total * 100) if total > 0 else 0
+    qualification_rate = int(qualified / completed * 100) if completed > 0 else 0
+
+    return AgentDashboardStatsResponse(
+        metrics=[
+            AgentStatItem(
+                key="total_this_week", label="Pre-screenings", value=row["this_week"],
+                description="Deze week", variant="blue", icon="users",
+            ),
+            AgentStatItem(
+                key="completion_rate", label="Afrondingspercentage", value=completion_rate,
+                suffix="%", variant="dark", icon="check-circle",
+            ),
+            AgentStatItem(
+                key="qualified_count", label="Gekwalificeerd", value=qualified,
+                description="Kandidaten", variant="lime", icon="user-check",
+            ),
+            AgentStatItem(
+                key="channels", label="Kanalen", value=0,
+                description=f"voice: {row['voice_count']}, whatsapp: {row['whatsapp_count']}",
+                variant="dark", icon="phone",
+            ),
+        ]
+    )
+
+
+@router.get("/preonboarding/stats", response_model=AgentDashboardStatsResponse)
+async def get_preonboarding_stats(
+    repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
+):
+    """Aggregate dashboard stats for the document collection overview page."""
+    row = await repo.get_preonboarding_dashboard_stats()
+
+    total = row["total"]
+    completed = row["completed"]
+    completion_rate = int(completed / total * 100) if total > 0 else 0
+
+    return AgentDashboardStatsResponse(
+        metrics=[
+            AgentStatItem(
+                key="active_collections", label="Actieve collecties", value=row["active"],
+                description="Lopend", variant="blue", icon="file-text",
+            ),
+            AgentStatItem(
+                key="completion_rate", label="Afrondingspercentage", value=completion_rate,
+                suffix="%", variant="dark", icon="check-circle-2",
+            ),
+            AgentStatItem(
+                key="completed", label="Volledig verzameld", value=completed,
+                description="Afgerond", variant="lime", icon="file-check",
+            ),
+            AgentStatItem(
+                key="needs_review", label="Review nodig", value=row["needs_review"],
+                description="Wacht op verificatie", variant="pink", icon="alert-circle",
+            ),
+        ]
+    )

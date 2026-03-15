@@ -10,7 +10,7 @@ Usage:
     agent = create_simple_agent(
         candidate_name="Jan",
         vacancy_title="Magazijnmedewerker",
-        company_name="ITZU",
+        company_name="Go4Jobs",
         knockout_questions=[{"question": "...", "requirement": "..."}],
         open_questions=["..."],
     )

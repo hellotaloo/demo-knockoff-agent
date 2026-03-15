@@ -20,6 +20,9 @@ from .vacancy import (
     VacancyResponse,
     VacancyStatsResponse,
     DashboardStatsResponse,
+    AgentStatItem,
+    AgentVacancyResponse,
+    AgentDashboardStatsResponse,
 )
 
 # Application models
@@ -182,6 +185,9 @@ __all__ = [
     "VacancyResponse",
     "VacancyStatsResponse",
     "DashboardStatsResponse",
+    "AgentStatItem",
+    "AgentVacancyResponse",
+    "AgentDashboardStatsResponse",
     # Application
     "QuestionAnswerResponse",
     "ApplicationResponse",

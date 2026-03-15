@@ -56,10 +56,7 @@ STAP TYPES:
 6. "contract_signing" — Contract ter ondertekening aanbieden.
    ALLEEN toevoegen als candidacy_stage="offer" EN er een regime is (full, flex, of day).
    Heeft altijd requires: ["identity_verification", "address_collection", "collect_attributes"].
-7. "collect_documents" — Optionele documenten opvragen (VCA, diploma, CV, rijbewijs, etc.).
-   Bevat een lijst van items met slugs uit de documenttypes. Komt NA contract_signing.
-   Sluit deze slugs ALTIJD uit (worden door de agent afgehandeld): id_card, passport, prato_5, prato_9, prato_20, prato_101, prato_102.
-8. "closing" — Altijd de laatste stap. Samenvatting en afsluiting.
+7. "closing" — Altijd de laatste stap. Samenvatting en afsluiting.
 
 REQUIRES (voorwaarden):
 - Een stap met requires wordt pas uitgevoerd als alle genoemde stap-types zijn afgerond.
@@ -86,9 +83,12 @@ CONTRACT:
 - Bij candidacy_stage="offer" en regime "day": voeg "contract_signing" stap toe met description die vermeldt dat het dagcontract automatisch wordt gegenereerd.
 - Als candidacy_stage NIET "offer" is, of er geen regime is: voeg GEEN contract_signing stap toe.
 
-PRIORITEIT VELDEN (voor items in collect_attributes en collect_documents):
+PRIORITEIT VELDEN (voor items in collect_attributes):
 - "required": verplicht voor de opstart. Items gemarkeerd als [standaard] zijn ALTIJD priority "required".
 - "recommended": aanbevolen maar niet blokkerend. Alleen voor items die NIET [standaard] zijn.
+
+OPTIONELE DOCUMENTEN:
+- Voeg GEEN "collect_documents" stap toe. Optionele documenten worden in deze fase niet verzameld.
 
 GOAL (verplicht veld in de output):
 - "placement-collect": als candidacy_stage="offer" — actieve plaatsing, documenten verzamelen en contract tekenen.
@@ -208,14 +208,6 @@ Analyseer de vacature en het kandidaatprofiel. Maak een verzamelplan als JSON:
     }},
     {{
       "step": 7,
-      "type": "collect_documents",
-      "description": "Optionele documenten opvragen.",
-      "items": [
-        {{"slug": "doc_slug", "priority": "required|recommended", "reason": "Waarom nodig"}}
-      ]
-    }},
-    {{
-      "step": 8,
       "type": "closing",
       "description": "Samenvatting en afsluiting."
     }}
@@ -232,9 +224,9 @@ Analyseer de vacature en het kandidaatprofiel. Maak een verzamelplan als JSON:
 
 BELANGRIJK:
 - Laat stappen WEG die niet van toepassing zijn (bv. geen medical_screening als werkpostfiche dat niet vereist).
-- Laat collect_documents WEG als er geen relevante documenten zijn.
+- Voeg GEEN collect_documents stap toe — optionele documenten worden niet verzameld.
 - Pas de step-nummers aan zodat ze opeenvolgend zijn.
-- Items in collect_attributes en collect_documents bevatten ALLEEN slugs, geen velddefinities."""
+- Items in collect_attributes bevatten ALLEEN slugs, geen velddefinities."""
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -260,11 +252,18 @@ def get_ai_instructions(dt: dict) -> str | None:
     return None
 
 
-def build_doc_types_list(doc_types: list) -> str:
-    """Build document types list for the LLM prompt, excluding hardcoded types."""
+def build_doc_types_list(doc_types: list, only_default: bool = True) -> str:
+    """Build document types list for the LLM prompt, excluding hardcoded types.
+
+    Args:
+        doc_types: List of document type dicts.
+        only_default: If True, only include is_default (standaard) document types.
+    """
     lines = []
     for dt in doc_types:
         if dt["slug"] in HARDCODED_DOC_SLUGS:
+            continue
+        if only_default and not dt.get("is_default"):
             continue
         parts = [dt['category']]
         line = f"- {dt['slug']}: {dt['name']} ({', '.join(parts)})"

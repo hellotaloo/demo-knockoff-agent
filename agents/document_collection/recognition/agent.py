@@ -66,6 +66,7 @@ class DocumentVerificationResult:
     verification_passed: bool
     verification_summary: str
     extracted_fields: dict = field(default_factory=dict)  # document-type-specific fields
+    feedback_message: Optional[str] = None  # Dutch feedback for candidate when quality is poor
     raw_response: Optional[str] = None
 
 
@@ -181,10 +182,28 @@ EXAMPLE_FIELDS_BY_TYPE = {
 }
 
 
-def _build_prompt(document_type_hint: Optional[str], candidate_name: Optional[str]) -> str:
-    extra = EXTRA_FIELDS_BY_TYPE.get(document_type_hint or "", "Extract any relevant fields visible on the document.")
-    example = EXAMPLE_FIELDS_BY_TYPE.get(document_type_hint or "", '    "issue_date": "01.01.2020"')
+def _build_prompt(
+    document_type_hint: Optional[str],
+    candidate_name: Optional[str],
+    extract_fields: Optional[list[dict]] = None,
+    available_types: Optional[list[dict]] = None,
+) -> str:
+    # Build extraction fields instruction
+    if extract_fields:
+        # Dynamic fields from verification_config
+        field_lines = [f"- {f['name']} ({f.get('description', '')})" for f in extract_fields]
+        extra = "Extract these fields from the document:\n" + "\n".join(field_lines) + "\nSet to null if not visible."
+        example = "\n".join(f'    "{f["name"]}": "..."' for f in extract_fields[:3])
+    else:
+        extra = EXTRA_FIELDS_BY_TYPE.get(document_type_hint or "", "Extract any relevant fields visible on the document.")
+        example = EXAMPLE_FIELDS_BY_TYPE.get(document_type_hint or "", '    "issue_date": "01.01.2020"')
+
     prompt = BASE_INSTRUCTION.format(extra_fields_instruction=extra, example_fields=example)
+
+    # Override classification options if specific types are provided
+    if available_types:
+        type_list = "\n".join(f"- **{t['slug']}**: {t['name']}" for t in available_types)
+        prompt += f"\n\n## AVAILABLE DOCUMENT TYPES\nClassify the document as one of:\n{type_list}\n- **unknown**: Document type not in the list above\n- **unreadable**: Image too poor quality to identify"
 
     parts = [prompt, "\nAnalyze this document image."]
     if document_type_hint:
@@ -225,10 +244,48 @@ def _preprocess_image(image_data: bytes, max_size: int = 1024) -> tuple[bytes, s
 from src.utils.text_utils import extract_json_from_response as parse_agent_response
 
 
+def _generate_feedback(image_quality: str, readability_issues: list[str]) -> Optional[str]:
+    """Generate Dutch feedback message for the candidate based on image quality."""
+    if image_quality in ("excellent", "good", "acceptable"):
+        return None
+
+    issue_feedback = {
+        "glare": "er is te veel weerkaatsing/glare op de foto",
+        "blur": "de foto is onscherp",
+        "blurry": "de foto is onscherp",
+        "dark": "de foto is te donker",
+        "cropped": "het document is niet volledig zichtbaar",
+        "partial": "het document is niet volledig zichtbaar",
+        "low_resolution": "de resolutie is te laag",
+        "overexposed": "de foto is overbelicht",
+        "shadow": "er valt een schaduw over het document",
+        "angle": "het document staat te schuin",
+        "processing_error": "er ging iets mis bij het verwerken",
+    }
+
+    specific = []
+    for issue in readability_issues:
+        for key, msg in issue_feedback.items():
+            if key in issue.lower():
+                specific.append(msg)
+                break
+
+    if image_quality == "unreadable":
+        if specific:
+            return f"De foto is helaas onleesbaar ({', '.join(specific)}). Kan je een nieuwe foto nemen met goede belichting en het volledige document in beeld?"
+        return "De foto is helaas onleesbaar. Zorg voor goede belichting en dat het volledige document zichtbaar is."
+
+    if specific:
+        return f"De foto is niet duidelijk genoeg ({', '.join(specific)}). Kan je een nieuwe foto proberen?"
+    return "De foto is niet duidelijk genoeg. Probeer opnieuw met meer licht en houd het document vlak."
+
+
 async def verify_document(
     image_data: bytes,
     candidate_name: Optional[str] = None,
     document_type_hint: Optional[str] = None,
+    extract_fields: Optional[list[dict]] = None,
+    available_types: Optional[list[dict]] = None,
 ) -> DocumentVerificationResult:
     """
     Verify a document image with fraud detection and field extraction.
@@ -237,6 +294,8 @@ async def verify_document(
         image_data: Raw image bytes (JPG/PNG)
         candidate_name: Expected name for verification
         document_type_hint: e.g. "id_card", "driver_license", "passport"
+        extract_fields: Dynamic fields from verification_config [{name, description}]
+        available_types: Document types to classify against [{slug, name}]
 
     Returns:
         DocumentVerificationResult with complete analysis
@@ -253,7 +312,7 @@ async def verify_document(
     processed_image, mime_type = _preprocess_image(image_data)
 
     # Build prompt
-    prompt = _build_prompt(document_type_hint, candidate_name)
+    prompt = _build_prompt(document_type_hint, candidate_name, extract_fields, available_types)
 
     # Call Gemini directly (bypasses ADK runner overhead)
     loop = asyncio.get_event_loop()
@@ -297,6 +356,7 @@ async def verify_document(
             readability_issues=["processing_error"],
             verification_passed=False,
             verification_summary="Error: Could not process document",
+            feedback_message="Er ging iets mis bij het verwerken van de foto. Kan je het opnieuw proberen?",
             raw_response=response_text
         )
 
@@ -322,6 +382,10 @@ async def verify_document(
         if parsed.get("fraud_risk_level") != "high":
             verification_passed = True
 
+    image_quality = parsed.get("image_quality", "unreadable")
+    readability_issues = parsed.get("readability_issues", [])
+    feedback = _generate_feedback(image_quality, readability_issues)
+
     result = DocumentVerificationResult(
         document_category=parsed.get("document_category", "unknown"),
         document_category_confidence=parsed.get("document_category_confidence", 0.0),
@@ -334,11 +398,12 @@ async def verify_document(
         fraud_risk_level=parsed.get("fraud_risk_level", "high"),
         fraud_indicators=fraud_indicators,
         overall_fraud_confidence=parsed.get("overall_fraud_confidence", 1.0),
-        image_quality=parsed.get("image_quality", "unreadable"),
-        readability_issues=parsed.get("readability_issues", []),
+        image_quality=image_quality,
+        readability_issues=readability_issues,
         verification_passed=verification_passed,
         verification_summary=parsed.get("verification_summary", ""),
         extracted_fields=parsed.get("extracted_fields", {}),
+        feedback_message=feedback,
         raw_response=response_text
     )
 

@@ -373,22 +373,36 @@ class WorkflowService:
         Get workflow counts for navigation sidebar.
 
         Returns:
-            Dict with active_count (non-stuck) and stuck_count
+            Dict with combined active/stuck and per-type (prescreening, preonboarding) counts.
         """
-        # Stuck = SLA breached (next_action_at is in the past)
-        # Active = SLA not breached yet (next_action_at is in the future or NULL)
         row = await self.pool.fetchrow(
             """
             SELECT
+                -- Combined counts
                 COUNT(*) FILTER (
-                    WHERE status = 'active'
-                    AND (next_action_at IS NULL OR next_action_at > NOW())
+                    WHERE (next_action_at IS NULL OR next_action_at > NOW())
                 ) AS active_count,
                 COUNT(*) FILTER (
-                    WHERE status = 'active'
-                    AND next_action_at IS NOT NULL
-                    AND next_action_at <= NOW()
-                ) AS stuck_count
+                    WHERE next_action_at IS NOT NULL AND next_action_at <= NOW()
+                ) AS stuck_count,
+                -- Pre-screening counts
+                COUNT(*) FILTER (
+                    WHERE workflow_type = 'pre_screening'
+                    AND (next_action_at IS NULL OR next_action_at > NOW())
+                ) AS prescreening_active,
+                COUNT(*) FILTER (
+                    WHERE workflow_type = 'pre_screening'
+                    AND next_action_at IS NOT NULL AND next_action_at <= NOW()
+                ) AS prescreening_stuck,
+                -- Document collection counts
+                COUNT(*) FILTER (
+                    WHERE workflow_type = 'document_collection'
+                    AND (next_action_at IS NULL OR next_action_at > NOW())
+                ) AS preonboarding_active,
+                COUNT(*) FILTER (
+                    WHERE workflow_type = 'document_collection'
+                    AND next_action_at IS NOT NULL AND next_action_at <= NOW()
+                ) AS preonboarding_stuck
             FROM agents.workflows
             WHERE status = 'active'
             """
@@ -397,6 +411,10 @@ class WorkflowService:
         return {
             "active": row["active_count"] if row else 0,
             "stuck": row["stuck_count"] if row else 0,
+            "prescreening_active": row["prescreening_active"] if row else 0,
+            "prescreening_stuck": row["prescreening_stuck"] if row else 0,
+            "preonboarding_active": row["preonboarding_active"] if row else 0,
+            "preonboarding_stuck": row["preonboarding_stuck"] if row else 0,
         }
 
     async def list_active(self) -> list[dict]:

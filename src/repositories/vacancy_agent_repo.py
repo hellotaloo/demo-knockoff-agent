@@ -25,6 +25,22 @@ class VacancyAgentRepository:
             vacancy_id, agent_type,
         )
 
+    async def ensure_registered(
+        self, vacancy_id: uuid.UUID, agent_type: str, is_online: bool = True,
+        conn: Optional[asyncpg.Connection] = None,
+    ) -> asyncpg.Record:
+        """Insert or update a vacancy agent registration."""
+        executor = conn or self.pool
+        return await executor.fetchrow(
+            """
+            INSERT INTO ats.vacancy_agents (vacancy_id, agent_type, is_online)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (vacancy_id, agent_type) DO UPDATE SET is_online = $3
+            RETURNING id, vacancy_id, agent_type, is_online, created_at
+            """,
+            vacancy_id, agent_type, is_online,
+        )
+
     async def set_online(
         self, vacancy_id: uuid.UUID, agent_type: str, is_online: bool
     ) -> Optional[asyncpg.Record]:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import textwrap
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from agents.document_collection.collection.rules import schedule_task
@@ -17,6 +18,18 @@ if TYPE_CHECKING:
     from agents.document_collection.collection.agent import DocumentCollectionAgent
 
 logger = logging.getLogger(__name__)
+
+_DAY_NAMES_NL = ["ma", "di", "woe", "do", "vr", "za", "zo"]
+
+
+def _format_date_eu(iso_date: str) -> str:
+    """Format ISO date (2026-03-23) to European style: ma 23/03/26."""
+    try:
+        dt = datetime.strptime(iso_date, "%Y-%m-%d")
+        day_name = _DAY_NAMES_NL[dt.weekday()]
+        return f"{day_name} {dt.strftime('%d/%m/%y')}"
+    except (ValueError, TypeError):
+        return iso_date
 
 
 def _make_dummy_contract_pdf(candidate_name: str, vacancy_title: str, start_date: str, company_name: str = "") -> bytes:
@@ -134,25 +147,20 @@ async def enter_task(agent: DocumentCollectionAgent, step: dict) -> str:
     step_type = step.get("type", "")
 
     if step_type == "contract_signing":
-        start_date_text = f" voor een start op **{agent.state.start_date}**" if agent.state.start_date else ""
+        start_date_text = f" voor een start op **{_format_date_eu(agent.state.start_date)}**" if agent.state.start_date else ""
 
         # Create Yousign signature request
         signing_url = await _create_contract_signing(agent)
 
         if signing_url:
-            return await agent._say(
-                f"""Informeer {agent.state.candidate_name} dat het **contract**{start_date_text} klaarligt.
-Stuur de ondertekeningslink mee: {signing_url}
-Voorbeeld: "Goed nieuws! Je **contract**{start_date_text} staat klaar. 📝 Je kan het nu via de link bekijken en ondertekenen: {signing_url}"
-Max 2 zinnen. Enthousiast maar professioneel. De link MOET in het bericht staan."""
-            )
+            msg = f"Goed nieuws! Je **contract**{start_date_text} staat klaar om digitaal te ondertekenen. 📝\n\n👉 [Onderteken hier]({signing_url})"
+            agent.state.last_agent_message = msg
+            return msg
 
         # Fallback if Yousign fails
-        return await agent._say(
-            f"""Informeer {agent.state.candidate_name} dat het **contract** wordt klaargemaakt{start_date_text}.
-Voorbeeld: "Je **contract** wordt klaargemaakt! 📝 Je ontvangt binnenkort een link om het digitaal te ondertekenen."
-Max 2 zinnen. Enthousiast maar professioneel."""
-        )
+        msg = f"Je **contract** wordt klaargemaakt{start_date_text}! 📝 Je ontvangt binnenkort een link om het digitaal te ondertekenen."
+        agent.state.last_agent_message = msg
+        return msg
 
     # Medical screening or other interactive task
     description = step.get("description", "")
@@ -184,7 +192,7 @@ async def _handle_contract(agent: DocumentCollectionAgent, message: str, step: d
     state = agent.state
 
     if "--signed--" in message:
-        start_info = f" Je start op **{state.start_date}**." if state.start_date else ""
+        start_info = f" Je start op **{_format_date_eu(state.start_date)}**." if state.start_date else ""
         recruiter_info = ""
         if state.recruiter_name:
             recruiter_info = f"\nNoem **{state.recruiter_name}** als contactpersoon"
@@ -202,12 +210,12 @@ Max 3 zinnen. Warm en enthousiast."""
 
     # Not signed yet — remind with link if available
     signing_url = state.context.get("yousign_signing_url", "")
-    link_reminder = f" Via deze link: {signing_url}" if signing_url else ""
-    return await agent._say(
-        f"""De kandidaat heeft gereageerd maar het contract is nog niet ondertekend.
-Herinner vriendelijk dat het contract ondertekend moet worden via de link.{link_reminder}
-Max 1-2 zinnen."""
-    )
+    if signing_url:
+        msg = f"Je **contract** is nog niet ondertekend. [Onderteken hier]({signing_url})"
+    else:
+        msg = "Je **contract** is nog niet ondertekend. Je ontvangt binnenkort een nieuwe link."
+    agent.state.last_agent_message = msg
+    return msg
 
 
 async def _handle_interactive_task(agent: DocumentCollectionAgent, message: str, step: dict) -> str:

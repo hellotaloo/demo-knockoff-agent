@@ -13,9 +13,10 @@ import os
 import logging
 from typing import Optional, List, Dict, Any
 
-from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+from src.utils.google_credentials import get_service_account_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +51,11 @@ class GoogleDriveService:
         self._credentials = None
 
     def _get_credentials(self, impersonate_email: Optional[str] = None):
-        service_account_file = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE")
-        if not service_account_file:
-            raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_FILE environment variable is required.")
-
         subject = impersonate_email or os.environ.get("GOOGLE_CALENDAR_IMPERSONATE_EMAIL")
-
-        credentials = service_account.Credentials.from_service_account_file(
-            service_account_file,
+        return get_service_account_credentials(
             scopes=DRIVE_SCOPES,
             subject=subject,
         )
-        return credentials
 
     def _get_drive_service(self, impersonate_email: Optional[str] = None):
         if impersonate_email:

@@ -106,9 +106,10 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
         """
         SELECT v.id as vacancy_id, v.title as vacancy_title, v.workspace_id,
                ps.id as pre_screening_id, ps.elevenlabs_agent_id, ps.whatsapp_agent_id,
-               ps.is_online, ps.published_at, ps.intro
+               COALESCE(va.is_online, ps.is_online) as is_online, ps.published_at, ps.intro
         FROM ats.vacancies v
         LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
+        LEFT JOIN ats.vacancy_agents va ON va.vacancy_id = v.id AND va.agent_type = 'prescreening'
         WHERE v.id = $1
         """,
         vacancy_uuid

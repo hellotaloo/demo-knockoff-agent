@@ -58,7 +58,7 @@ def load_config(config_path: str) -> dict:
 async def run_chat(
     candidate_name: str = "Jan",
     vacancy_title: str = "Magazijnmedewerker",
-    company_name: str = "ITZU",
+    company_name: str = "Go4Jobs",
     knockout_questions: list = None,
     open_questions: list = None,
 ):
@@ -138,7 +138,7 @@ def main():
     parser.add_argument("--config", "-c", type=str, help="Path to JSON config file")
     parser.add_argument("--name", "-n", type=str, default="Jan", help="Candidate name")
     parser.add_argument("--vacancy", "-v", type=str, default="Magazijnmedewerker", help="Vacancy title")
-    parser.add_argument("--company", type=str, default="ITZU", help="Company name")
+    parser.add_argument("--company", type=str, default="Go4Jobs", help="Company name")
     args = parser.parse_args()
 
     # Load config from file or use defaults

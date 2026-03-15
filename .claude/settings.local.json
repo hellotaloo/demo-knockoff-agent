@@ -224,7 +224,9 @@
       "Bash(curl -s -N http://localhost:8080/playground/chat -H \"Content-Type: application/json\" -d '{\"\"\"\"agent_type\"\"\"\": \"\"\"\"document_collection\"\"\"\", \"\"\"\"message\"\"\"\": \"\"\"\"START\"\"\"\", \"\"\"\"collection_id\"\"\"\": \"\"\"\"e1178b57-b674-4ee0-b0b0-f2885066dccc\"\"\"\"}')",
       "Bash(SID=\"a06bc9e8-3163-44ea-9188-28444df192b3\" __NEW_LINE_b6a70ddcad7970ab__ echo \"=== CONSENT ===\" curl -s http://localhost:8080/playground/chat -H \"Content-Type: application/json\" -d \"{\"\"agent_type\"\": \"\"document_collection\"\", \"\"message\"\": \"\"ja\"\", \"\"session_id\"\": \"\"$SID\"\"}\")",
       "Bash(head -200 \"/Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\(dashboard\\)/pre-screening/detail/[id]/page.tsx\")",
-      "Bash(ls /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/)"
+      "Bash(ls /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/)",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend -type f \\\\\\(-name *.sql -o -name *migration* \\\\\\) ! -path ./.venv/* ! -path */node_modules/*)",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend -type f \\\\\\(-name migrations* -o -name *schema* -o -name *init* \\\\\\))"
     ],
     "defaultMode": "acceptEdits"
   },

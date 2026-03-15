@@ -60,7 +60,13 @@ class DocumentCollectionRepository:
                    dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
                    c.stage AS candidacy_stage,
-                   COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
+                   CASE
+                       WHEN COALESCE(jsonb_array_length(dc.documents_required), 0) > 0
+                       THEN jsonb_array_length(dc.documents_required)
+                       ELSE COALESCE((SELECT COUNT(*) FROM jsonb_array_elements(dc.collection_plan->'conversation_flow') AS step,
+                            LATERAL jsonb_array_elements(step->'items') AS item
+                            WHERE item->>'type' = 'document'), 0)
+                   END AS documents_total,
                    COALESCE((SELECT COUNT(*) FROM agents.document_collection_uploads u
                              WHERE u.collection_id = dc.id AND u.status = 'verified'), 0) AS documents_collected,
                    COALESCE((SELECT COUNT(*) FROM agents.document_collection_session_turns m
@@ -91,7 +97,13 @@ class DocumentCollectionRepository:
                    dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
                    c.stage AS candidacy_stage,
-                   COALESCE(jsonb_array_length(dc.documents_required), 0) AS documents_total,
+                   CASE
+                       WHEN COALESCE(jsonb_array_length(dc.documents_required), 0) > 0
+                       THEN jsonb_array_length(dc.documents_required)
+                       ELSE COALESCE((SELECT COUNT(*) FROM jsonb_array_elements(dc.collection_plan->'conversation_flow') AS step,
+                            LATERAL jsonb_array_elements(step->'items') AS item
+                            WHERE item->>'type' = 'document'), 0)
+                   END AS documents_total,
                    COALESCE((SELECT COUNT(*) FROM agents.document_collection_uploads u
                              WHERE u.collection_id = dc.id AND u.status = 'verified'), 0) AS documents_collected,
                    COALESCE((SELECT COUNT(*) FROM agents.document_collection_session_turns m

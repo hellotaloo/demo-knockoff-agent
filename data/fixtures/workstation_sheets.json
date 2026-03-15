@@ -1,0 +1,13 @@
+[
+  { "vacancy_idx": 1, "param_key": "werkomgeving", "param_value": "Stoffige productieomgeving, mengafdeling", "notes": "PBM verplicht" },
+  { "vacancy_idx": 1, "param_key": "fysieke_belasting", "param_value": "Zwaar - tillen tot 25kg", "notes": null },
+  { "vacancy_idx": 1, "param_key": "werkuren", "param_value": "2-ploegensysteem (06:00-14:00 / 14:00-22:00)", "notes": null },
+  { "vacancy_idx": 1, "param_key": "veiligheid", "param_value": "VCA basisveiligheid vereist", "notes": null },
+  { "vacancy_idx": 3, "param_key": "werkomgeving", "param_value": "Productiehal, voedingssector", "notes": "HACCP normen van toepassing" },
+  { "vacancy_idx": 3, "param_key": "werkuren", "param_value": "2-ploegensysteem (06:00-14:00 / 14:00-22:00)", "notes": null },
+  { "vacancy_idx": 3, "param_key": "fysieke_belasting", "param_value": "Gemiddeld - langdurig rechtstaan", "notes": null },
+  { "vacancy_idx": 6, "param_key": "werkomgeving", "param_value": "Magazijn en distributiecentrum", "notes": null },
+  { "vacancy_idx": 6, "param_key": "fysieke_belasting", "param_value": "Gemiddeld - lopen en tillen", "notes": null },
+  { "vacancy_idx": 6, "param_key": "werkuren", "param_value": "Dagshift (08:00-17:00)", "notes": null },
+  { "vacancy_idx": 6, "param_key": "veiligheid", "param_value": "Heftruckbrevet is een pluspunt", "notes": null }
+]

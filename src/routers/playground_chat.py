@@ -27,6 +27,12 @@ router = APIRouter(tags=["Playground"])
 # In-memory cache for ephemeral playground sessions
 _chat_sessions: dict[str, "PlaygroundAgent"] = {}
 
+# Reverse lookup: collection_id → session_id (for webhook → playground bridge)
+_collection_to_session: dict[str, str] = {}
+
+# Pending messages injected by external sources (e.g. Yousign webhook)
+_pending_messages: dict[str, list[str]] = {}  # session_id → [messages]
+
 
 # =============================================================================
 # Agent wrapper — uniform interface across agent types
@@ -37,11 +43,17 @@ class PlaygroundAgent:
     agent: Any
     agent_type: str
     candidate_name: str
+    context_id: str = ""
 
     async def process(self, message: str) -> str:
         if self.agent_type == "document_collection":
-            has_image = any(tag in message for tag in ("--img-success--", "--img-fail--", "--eu-id--", "--eu-pass--", "--non-eu-pass--"))
-            return await self.agent.process_message(message, has_image=has_image)
+            has_image = (
+                self.agent.pending_image_data is not None
+                or any(tag in message for tag in ("--img-success--", "--img-fail--", "--eu-id--", "--eu-pass--", "--non-eu-pass--"))
+            )
+            result = await self.agent.process_message(message, has_image=has_image)
+            self.agent.pending_image_data = None  # Clear after processing
+            return result
         return await self.agent.process_message(message)
 
     def is_complete(self) -> bool:
@@ -122,11 +134,25 @@ class PlaygroundAgent:
 
             elif step_type == "identity_verification":
                 id_collected = state.identity_phase == "done" or "identity_verification" in state.completed_steps
+                # Get extracted fields and detected document type from collected identity doc
+                id_extracted = None
+                detected_type = None
+                _doc_type_labels = {"id_card": "Identiteitskaart", "passport": "Paspoort", "driver_license": "Rijbewijs"}
+                for doc_slug, doc_info in state.collected_documents.items():
+                    if doc_info.get("status") in ("verified", "front_verified"):
+                        detected_type = _doc_type_labels.get(doc_slug, doc_slug)
+                        if doc_info.get("extracted_fields"):
+                            id_extracted = {k: v for k, v in doc_info["extracted_fields"].items() if v}
+                        break
+                id_name = "Identiteitsbewijs"
+                if detected_type:
+                    id_name = detected_type
                 items.append({
                     "slug": "identity_verification",
-                    "name": "Identiteitsdocument",
+                    "name": id_name,
                     "type": "document_group",
                     "collected": id_collected,
+                    "value": id_extracted,
                 })
                 # Work eligibility sub-item (rendered as indented arrow by frontend)
                 items.append({
@@ -316,7 +342,7 @@ async def _bootstrap_document_collection(pool, collection_id: str, candidate_nam
 
     row = await pool.fetchrow(
         """
-        SELECT dc.id, dc.candidate_name, dc.collection_plan,
+        SELECT dc.id, dc.candidate_name, dc.candidate_phone, dc.collection_plan,
                dc.workspace_id,
                v.title AS vacancy_title,
                ol.name AS office_name,
@@ -357,6 +383,12 @@ async def _bootstrap_document_collection(pool, collection_id: str, candidate_nam
             "days_remaining": days_remaining,
         }
 
+    # Inject candidate phone for Yousign integration
+    candidate_phone = row["candidate_phone"] or ""
+    if candidate_phone:
+        phone = f"+{candidate_phone}" if not candidate_phone.startswith("+") else candidate_phone
+        plan["context"]["candidate_phone"] = phone
+
     from agents.document_collection.collection.type_cache import TypeCache
     type_cache = TypeCache(pool, row["workspace_id"])
     await type_cache.ensure_loaded()
@@ -370,7 +402,7 @@ async def _bootstrap_document_collection(pool, collection_id: str, candidate_nam
         recruiter_phone=row["recruiter_phone"] or "",
     )
 
-    return PlaygroundAgent(agent=agent, agent_type="document_collection", candidate_name=name)
+    return PlaygroundAgent(agent=agent, agent_type="document_collection", candidate_name=name, context_id=collection_id)
 
 
 # =============================================================================
@@ -384,6 +416,7 @@ async def stream_playground_chat(
     vacancy_id: Optional[str],
     collection_id: Optional[str],
     candidate_name: Optional[str],
+    image_base64: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events for a playground chat turn."""
     global _chat_sessions
@@ -425,6 +458,8 @@ async def stream_playground_chat(
             return
 
         _chat_sessions[session_id] = wrapper
+        if wrapper.context_id:
+            _collection_to_session[wrapper.context_id] = session_id
         candidate_name = wrapper.candidate_name
 
         logger.info("=" * 60)
@@ -443,6 +478,11 @@ async def stream_playground_chat(
     yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Antwoord genereren...'})}\n\n"
 
     try:
+        # Decode and attach image data for document collection
+        if image_base64 and wrapper.agent_type == "document_collection":
+            import base64 as b64
+            wrapper.agent.pending_image_data = b64.b64decode(image_base64)
+
         if is_new:
             result = await wrapper.agent.get_initial_message()
         else:
@@ -450,6 +490,20 @@ async def stream_playground_chat(
 
         # get_initial_message may return list[str] (multiple bubbles) or str
         messages_list = result if isinstance(result, list) else [result]
+
+        # Persist agent state to DB for document_collection (needed for Yousign webhook lookup)
+        if wrapper.agent_type == "document_collection" and wrapper.context_id:
+            try:
+                pool = await get_db_pool()
+                await pool.execute(
+                    """UPDATE agents.document_collections
+                    SET agent_state = $1::jsonb, updated_at = NOW()
+                    WHERE id = $2""",
+                    wrapper.agent.state.to_json(),
+                    uuid.UUID(wrapper.context_id),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist playground agent state: {e}")
 
         is_complete = wrapper.is_complete()
         collection_progress = wrapper.get_collection_progress()
@@ -480,6 +534,27 @@ async def stream_playground_chat(
 # Endpoint
 # =============================================================================
 
+def push_playground_message(collection_id: str, message: str):
+    """Push a message into the playground session for a given collection_id.
+
+    Called by the Yousign webhook to inject confirmation messages.
+    """
+    session_id = _collection_to_session.get(collection_id)
+    if not session_id:
+        logger.warning(f"[PLAYGROUND] No active session for collection_id={collection_id}")
+        return False
+    _pending_messages.setdefault(session_id, []).append(message)
+    logger.info(f"[PLAYGROUND] Pushed message to session {session_id[:8]}... for collection {collection_id[:8]}...")
+    return True
+
+
+@router.get("/playground/chat/{session_id}/pending")
+async def playground_chat_pending(session_id: str):
+    """Return and clear any pending messages for this session (e.g. from webhooks)."""
+    messages = _pending_messages.pop(session_id, [])
+    return {"messages": messages}
+
+
 @router.delete("/playground/chat/{session_id}")
 async def playground_chat_reset(session_id: str):
     """Delete a playground session so the next START creates a fresh agent."""
@@ -507,6 +582,7 @@ async def playground_chat(request: PlaygroundChatRequest):
             vacancy_id=request.vacancy_id,
             collection_id=request.collection_id,
             candidate_name=request.candidate_name,
+            image_base64=request.image_base64,
         ),
         media_type="text/event-stream",
         headers={

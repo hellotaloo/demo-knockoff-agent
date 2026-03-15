@@ -18,7 +18,6 @@ from src.services import DemoService
 from src.services.ats_import_service import ATSImportService, get_import_progress, clear_import_progress
 from src.services.workflow_service import WorkflowService
 from src.repositories import ConversationRepository, ApplicationRepository
-from scripts.seed_prato_flex_document_types import seed_prato_flex_document_types
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +240,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 INSERT INTO ats.office_locations (workspace_id, name, address, spoken_name, is_default)
                 VALUES ($1, $2, $3, $4, true)
                 RETURNING id
-            """, DEFAULT_WORKSPACE_ID, "ITZU Antwerpen centrum", "Mechelsesteenweg 27, 2018 Antwerpen", "Antwerpen centrum")
+            """, DEFAULT_WORKSPACE_ID, "Go4Jobs Antwerpen centrum", "Mechelsesteenweg 27, 2018 Antwerpen", "Antwerpen centrum")
             office_location_id = row["id"]
 
             # Assign to all vacancies in this workspace
@@ -323,7 +322,12 @@ async def reset_demo_data(
             except Exception:
                 pass  # Table may not exist yet
 
-            # Then: applications and candidacies (reference candidates and vacancies)
+            # Then: placements, applications and candidacies (reference candidates and vacancies)
+            try:
+                async with conn.transaction():
+                    await conn.execute("DELETE FROM ats.placements")
+            except Exception:
+                pass  # Table may not exist yet
             await conn.execute("DELETE FROM ats.candidacies")
             await conn.execute("DELETE FROM ats.applications")
 
@@ -333,6 +337,13 @@ async def reset_demo_data(
             # Then: pre-screening related
             await conn.execute("DELETE FROM agents.pre_screening_questions")
             await conn.execute("DELETE FROM agents.pre_screenings")
+
+            # Workstation sheets (reference vacancies)
+            try:
+                async with conn.transaction():
+                    await conn.execute("DELETE FROM ats.workstation_sheets")
+            except Exception:
+                pass  # Table may not exist yet
 
             # Finally: vacancies (clear recruiter_id and client_id first for FK safety)
             await conn.execute("DELETE FROM ats.vacancies")
@@ -354,28 +365,10 @@ async def reset_demo_data(
                 pass  # Table may not exist yet
 
 
-    # Always re-seed Prato Flex document types after reset
-    try:
-        prato_result = await seed_prato_flex_document_types(pool, DEFAULT_WORKSPACE_ID)
-        logger.info(f"Re-seeded Prato Flex document types: {prato_result}")
-    except Exception as e:
-        logger.warning(f"Failed to seed Prato Flex document types: {e}")
-        prato_result = None
-
-    # Always re-seed attribute type defaults after reset
-    try:
-        await pool.execute("SELECT ats.seed_attribute_type_defaults($1)", DEFAULT_WORKSPACE_ID)
-        logger.info("Re-seeded attribute type defaults")
-    except Exception as e:
-        logger.warning(f"Failed to seed attribute type defaults: {e}")
-
     result = {
         "status": "success",
         "message": "All demo data cleared",
     }
-
-    if prato_result:
-        result["document_types"] = prato_result
 
     # Optionally reseed
     if reseed:
