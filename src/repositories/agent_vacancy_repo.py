@@ -161,7 +161,9 @@ class AgentVacancyRepository:
                 COALESCE(app_stats.candidates_count, 0) as candidates_count,
                 COALESCE(app_stats.completed_count, 0) as completed_count,
                 COALESCE(app_stats.qualified_count, 0) as qualified_count,
-                app_stats.last_activity_at
+                app_stats.last_activity_at,
+                (SELECT va2.is_online FROM ats.vacancy_agents va2
+                 WHERE va2.vacancy_id = v.id AND va2.agent_type = 'document_collection') as doc_collection_online
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id

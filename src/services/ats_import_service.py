@@ -437,30 +437,6 @@ class ATSImportService:
                 default_dt_ids = [r["id"] for r in dt_rows]
                 default_slugs = [r["slug"] for r in dt_rows]
 
-                # Ensure workspace default config exists
-                default_config = await conn.fetchrow(
-                    "SELECT id FROM agents.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
-                    workspace_id,
-                )
-                if not default_config:
-                    default_config = await conn.fetchrow("""
-                        INSERT INTO agents.document_collection_configs
-                            (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
-                        VALUES ($1, NULL, $2, $3, 'active', true, true)
-                        RETURNING id
-                    """, workspace_id,
-                        "Standaard documentverzameling",
-                        "Hallo! Welkom bij het documentverzamelingsproces. Ik ga u helpen om de nodige documenten te verzamelen.")
-
-                    # Add default requirements
-                    for pos, dt_id in enumerate(default_dt_ids):
-                        await conn.execute("""
-                            INSERT INTO agents.document_collection_requirements
-                                (config_id, document_type_id, position, is_required)
-                            VALUES ($1, $2, $3, true)
-                            ON CONFLICT (config_id, document_type_id) DO NOTHING
-                        """, default_config["id"], dt_id, pos)
-
                 for vac in imported_vacancies:
                     vacancy_id = UUID(vac["id"])
                     vacancy_title = vac["title"]
@@ -468,42 +444,8 @@ class ATSImportService:
                     _update_vacancy_progress(vac["id"], "generating", activity="Configuratie aanmaken...")
 
                     try:
-                        # Check if config already exists for this vacancy
-                        existing_config = await conn.fetchrow(
-                            "SELECT id FROM agents.document_collection_configs WHERE vacancy_id = $1",
-                            vacancy_id,
-                        )
-                        if existing_config:
-                            configured_count += 1
-                            _update_vacancy_progress(vac["id"], "published", activity="Geconfigureerd")
-                            continue
-
-                        # Create vacancy-specific config
-                        vac_config = await conn.fetchrow("""
-                            INSERT INTO agents.document_collection_configs
-                                (workspace_id, vacancy_id, name, intro_message, status, is_online, whatsapp_enabled)
-                            VALUES ($1, $2, $3, $4, 'active', true, true)
-                            RETURNING id
-                        """, workspace_id, vacancy_id,
-                            f"Documentverzameling - {vacancy_title}",
-                            f"Hallo! Voor de functie {vacancy_title} hebben we een aantal documenten nodig.")
-
-                        # Add default document requirements
-                        for pos, dt_id in enumerate(default_dt_ids):
-                            await conn.execute("""
-                                INSERT INTO agents.document_collection_requirements
-                                    (config_id, document_type_id, position, is_required)
-                                VALUES ($1, $2, $3, true)
-                                ON CONFLICT (config_id, document_type_id) DO NOTHING
-                            """, vac_config["id"], dt_id, pos)
-
                         configured_count += 1
-                        _update_vacancy_progress(
-                            vac["id"], "published",
-                            questions_count=len(default_dt_ids),
-                            activity="Geconfigureerd",
-                        )
-
+                        _update_vacancy_progress(vac["id"], "published", activity="Geconfigureerd")
                     except Exception as e:
                         logger.error(f"Failed to configure doc collection for vacancy {vacancy_id}: {e}")
                         failed_count += 1
@@ -525,22 +467,6 @@ class ATSImportService:
                     workspace_id,
                 )
                 if cand_rows:
-                    # Collect vacancy configs we just created
-                    vac_configs = []
-                    for vac in imported_vacancies:
-                        row = await conn.fetchrow(
-                            "SELECT id FROM agents.document_collection_configs WHERE vacancy_id = $1",
-                            UUID(vac["id"]),
-                        )
-                        if row:
-                            vac_configs.append({"config_id": row["id"], "vacancy_id": UUID(vac["id"])})
-
-                    # Get default config for remaining candidates
-                    default_cfg = await conn.fetchrow(
-                        "SELECT id FROM agents.document_collection_configs WHERE workspace_id = $1 AND vacancy_id IS NULL",
-                        workspace_id,
-                    )
-
                     # Get default slug list for documents_required snapshot
                     default_slug_list = json.dumps(default_slugs) if default_slugs else "[]"
 
@@ -595,22 +521,15 @@ class ATSImportService:
                         cand_phone = (cand["phone"] or "").lstrip("+")
                         scenario = scenarios[i]
 
-                        if i < len(vac_configs):
-                            config_id = vac_configs[i]["config_id"]
-                            vac_id = vac_configs[i]["vacancy_id"]
-                        elif default_cfg:
-                            config_id = default_cfg["id"]
-                            vac_id = None
-                        else:
-                            continue
+                        vac_id = UUID(imported_vacancies[i]["id"]) if i < len(imported_vacancies) else None
 
                         conv = await conn.fetchrow("""
                             INSERT INTO agents.document_collections
                                 (config_id, workspace_id, vacancy_id, candidate_id,
                                  candidate_name, candidate_phone, status, channel, documents_required)
-                            VALUES ($1, $2, $3, $4, $5, $6, 'active', 'whatsapp', $7::jsonb)
+                            VALUES (NULL, $1, $2, $3, $4, $5, 'active', 'whatsapp', $6::jsonb)
                             RETURNING id
-                        """, config_id, workspace_id, vac_id, cand_id,
+                        """, workspace_id, vac_id, cand_id,
                             cand_name, cand_phone, default_slug_list)
 
                         # Add messages

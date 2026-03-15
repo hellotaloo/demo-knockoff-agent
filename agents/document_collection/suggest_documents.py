@@ -134,7 +134,6 @@ async def main():
 
     from src.database import get_db_pool
     from src.repositories.document_type_repo import DocumentTypeRepository
-    from src.repositories.document_collection_config_repo import DocumentCollectionConfigRepository
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -142,7 +141,6 @@ async def main():
     pool = await get_db_pool()
 
     doc_type_repo = DocumentTypeRepository(pool)
-    config_repo = DocumentCollectionConfigRepository(pool)
 
     # Fetch parent document types
     doc_type_rows = await doc_type_repo.list_for_workspace(workspace_id, parents_only=True)
@@ -181,12 +179,6 @@ async def main():
             logger.info("  ⏭️  Overgeslagen — geen vacaturetekst\n")
             continue
 
-        # Check existing config
-        existing = await config_repo.get_for_vacancy(vacancy["id"])
-        if existing and not args.force:
-            logger.info("  ⏭️  Overgeslagen — config bestaat al\n")
-            continue
-
         try:
             result = await suggest_for_vacancy(vacancy, doc_types, valid_slugs)
             results.append(result)
@@ -198,22 +190,7 @@ async def main():
                 logger.info(f"    ✓ {slug}: {dt['name']} ({dt['category']})")
             logger.info(f"  Redenering: {result['reasoning']}")
 
-            # Save to DB if requested
-            if args.save:
-                if existing and args.force:
-                    await config_repo.delete(existing["id"])
-
-                doc_type_ids = [slug_to_doc[s]["id"] for s in result["slugs"]]
-                await config_repo.create(
-                    workspace_id=workspace_id,
-                    vacancy_id=vacancy["id"],
-                    name=f"Auto-suggest: {title}",
-                    intro_message=None,
-                    document_type_ids=doc_type_ids,
-                )
-                logger.info("  ✅ Opgeslagen in database")
-            else:
-                logger.info("  📝 Dry run — niet opgeslagen")
+            logger.info("  📝 Dry run — suggestie niet opgeslagen")
 
         except Exception as e:
             logger.error(f"  ❌ Fout: {e}")

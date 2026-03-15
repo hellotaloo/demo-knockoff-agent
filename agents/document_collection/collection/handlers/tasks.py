@@ -19,12 +19,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _make_dummy_contract_pdf(candidate_name: str, vacancy_title: str, start_date: str) -> bytes:
+def _make_dummy_contract_pdf(candidate_name: str, vacancy_title: str, start_date: str, company_name: str = "") -> bytes:
     """Generate a minimal valid PDF with dummy contract text — no external libs needed."""
+    employer = company_name or "de werkgever"
     content = textwrap.dedent(f"""\
         ARBEIDSOVEREENKOMST
 
-        Tussen de werkgever en {candidate_name}
+        Tussen {employer} en {candidate_name}
         wordt de volgende arbeidsovereenkomst gesloten.
 
         Functie   : {vacancy_title}
@@ -102,6 +103,7 @@ async def _create_contract_signing(agent: DocumentCollectionAgent) -> str | None
         candidate_name=candidate_name,
         vacancy_title=state.vacancy_title,
         start_date=state.start_date,
+        company_name=state.company_name,
     )
 
     service = YousignService()

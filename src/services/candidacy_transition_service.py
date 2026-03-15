@@ -196,6 +196,15 @@ class CandidacyStageTransitionService:
         triggered_by: str,
     ) -> None:
         """Generate a smart collection plan when a candidacy enters OFFER stage."""
+        # Check if the document collection agent is online for this vacancy
+        va = await self.pool.fetchrow(
+            "SELECT is_online FROM ats.vacancy_agents WHERE vacancy_id = $1 AND agent_type = 'document_collection'",
+            vacancy_id,
+        )
+        if not va or not va["is_online"]:
+            logger.info(f"Document collection agent not online for vacancy {vacancy_id}, skipping")
+            return
+
         from src.services.document_collection_planner_service import DocumentCollectionPlannerService
 
         logger.info(f"Triggering document collection planner for candidacy {candidacy_id}")

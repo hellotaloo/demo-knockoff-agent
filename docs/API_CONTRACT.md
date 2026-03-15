@@ -4,6 +4,7 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-15** — Removed `document_collection_configs` system entirely. Online/offline toggle for document collection agent now uses `ats.vacancy_agents.is_online`. Added `GET /vacancies/{vacancy_id}/agents/{agent_type}/status` and `PATCH /vacancies/{vacancy_id}/agents/{agent_type}/status` endpoints. Removed all `/configs` endpoints and related types (`CollectionConfigResponse`, `CollectionConfigCreate`, etc.). Simplified document resolution to workspace defaults only. Added `POST /collections/{collection_id}/tasks/{task_slug}/trigger` endpoint
 - **2026-03-15** — Added optional `start_date` field (ISO date, `YYYY-MM-DD`) to `VacancyResponse`. Added `PATCH /vacancies/{vacancy_id}` endpoint for updating vacancy fields (currently supports `start_date`)
 - **2026-03-13** — Added `POST /playground/chat` unified SSE chat endpoint for all playground agent types (pre_screening, document_collection). Supports ephemeral in-memory sessions with agent-type dispatch. Replaces agent-specific chat endpoints for playground use
 - **2026-03-14** — Added `fields` (JSONB array, optional) to `AttributeTypeResponse` for structured sub-fields on attribute types (e.g. noodcontact → naam + telefoonnummer). Each field: `{key, label, type, required, placeholder?, options?}`. Added `GET /ontology/attribute-fields-schema` endpoint returning available field types for the frontend config UI
@@ -538,6 +539,65 @@ Update vacancy fields.
   start_date: string | null;
 }
 ```
+
+---
+
+### GET /vacancies/{vacancy_id}/agents/{agent_type}/status
+
+Get the online/offline status of an agent for a vacancy.
+
+**Auth:** Bearer token
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `vacancy_id` | string (UUID) | Vacancy identifier |
+| `agent_type` | string | Agent type (e.g. `document_collection`, `pre_screening`) |
+
+**Response:**
+
+```typescript
+interface VacancyAgentStatusResponse {
+  vacancy_id: string;
+  agent_type: string;
+  is_online: boolean;
+  created_at: string;
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| 404 | No agent of this type registered for vacancy |
+
+---
+
+### PATCH /vacancies/{vacancy_id}/agents/{agent_type}/status
+
+Toggle an agent's online/offline status for a vacancy.
+
+**Auth:** Bearer token
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `vacancy_id` | string (UUID) | Vacancy identifier |
+| `agent_type` | string | Agent type (e.g. `document_collection`) |
+
+**Request Body:**
+
+```typescript
+{
+  is_online: boolean;
+}
+```
+
+**Response:** `VacancyAgentStatusResponse`
+
+| Status | Description |
+|--------|-------------|
+| 404 | No agent of this type registered for vacancy |
 
 ---
 
@@ -2973,19 +3033,12 @@ All endpoints under `/workspaces/{workspace_id}/document-collection/`. Requires 
 | POST | `/document-types` | Create document type |
 | PATCH | `/document-types/{id}` | Update document type |
 | DELETE | `/document-types/{id}` | Soft-delete (is_active=false) |
-| GET | `/configs` | List collection configs |
-| POST | `/configs` | Create config |
-| GET | `/configs/{id}` | Get config with required documents |
-| PUT | `/configs/{id}` | Update config |
-| DELETE | `/configs/{id}` | Delete config |
-| PATCH | `/configs/{id}/status` | Toggle online/whatsapp flags |
-| GET | `/configs/{id}/documents` | List required documents |
-| PUT | `/configs/{id}/documents` | Replace all required documents |
 | GET | `/resolve` | Resolve which documents are needed |
 | GET | `/collections` | List document collections |
 | GET | `/collections/{id}` | Get collection with messages + uploads |
 | GET | `/collections/{id}/detail` | Get enriched detail with plan, document statuses, workflow |
 | POST | `/collections/{id}/abandon` | Mark collection as abandoned |
+| POST | `/collections/{id}/tasks/{slug}/trigger` | Trigger a scheduled task immediately |
 | POST | `/start` | Start a new document collection |
 
 ---
@@ -3037,80 +3090,17 @@ interface DocumentTypeUpdate {
   sort_order?: number;
 }
 
-// --- Collection Configs ---
-
-interface CollectionConfigResponse {
-  id: string;
-  workspace_id: string;
-  vacancy_id?: string;           // null = workspace default config
-  name?: string;
-  intro_message?: string;        // Agent opening message template
-  status: string;                // "draft" | "active" | "archived"
-  is_online: boolean;
-  whatsapp_enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-interface CollectionConfigDetailResponse extends CollectionConfigResponse {
-  documents: CollectionRequirementResponse[];  // Required documents for this config
-}
-
-interface CollectionRequirementResponse {
-  id: string;
-  document_type_id: string;
-  document_type: DocumentTypeResponse;  // Full document type object
-  position: number;                     // Collection order
-  is_required: boolean;                 // Required vs optional
-  notes?: string;                       // Instructions for this doc
-}
-
-interface CollectionConfigCreate {
-  vacancy_id?: string;           // null = workspace default
-  name?: string;
-  intro_message?: string;
-  document_type_ids: string[];   // UUIDs of document types to require
-}
-
-interface CollectionConfigUpdate {
-  name?: string;
-  intro_message?: string;
-  status?: string;
-  is_online?: boolean;
-  whatsapp_enabled?: boolean;
-  document_type_ids?: string[];  // If provided, replaces all requirements
-}
-
-interface CollectionConfigStatusUpdate {
-  is_online?: boolean;
-  whatsapp_enabled?: boolean;
-}
-
-// --- Requirements ---
-
-interface RequirementItem {
-  document_type_id: string;
-  position?: number;             // Default: 0
-  is_required?: boolean;         // Default: true
-  notes?: string;
-}
-
-interface SetRequirementsRequest {
-  documents: RequirementItem[];
-}
-
 // --- Document Resolution ---
 
 interface ResolveDocumentsResponse {
   documents: DocumentTypeResponse[];
-  source: string;                // "default" | "vacancy" | "merged"
+  source: string;                // "default"
 }
 
 // --- Collections ---
 
 interface DocumentCollectionResponse {
   id: string;
-  config_id: string;
   workspace_id: string;
   vacancy_id?: string;
   vacancy_title?: string;            // Vacancy title (joined from vacancies table)
@@ -3191,14 +3181,13 @@ interface StartCollectionRequest {
   candidate_name: string;        // min 1 char
   candidate_lastname: string;    // min 1 char
   whatsapp_number: string;       // E.164: ^\+?[1-9]\d{1,14}$
-  vacancy_id?: string;           // If provided, uses vacancy-specific config
+  vacancy_id?: string;
   application_id?: string;
   candidate_id?: string;
 }
 
 interface StartCollectionResponse {
   collection_id: string;
-  config_id: string;
   candidate_name: string;
   whatsapp_number: string;
   documents_required: DocumentTypeResponse[];
@@ -3259,103 +3248,9 @@ Soft-delete a document type (sets `is_active=false`).
 
 ---
 
-### GET /configs
-
-List collection configs for a workspace.
-
-**Auth:** Bearer token
-
-**Query Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `vacancy_id` | string (UUID) | No | Filter by vacancy |
-
-**Response:** `CollectionConfigResponse[]`
-
----
-
-### POST /configs
-
-Create a collection config. Set `vacancy_id=null` for workspace default.
-
-**Auth:** Bearer token
-
-**Request Body:** `CollectionConfigCreate`
-
-**Response:** `CollectionConfigDetailResponse` (201 Created)
-
----
-
-### GET /configs/{config_id}
-
-Get a config with its required documents.
-
-**Auth:** Bearer token
-
-**Response:** `CollectionConfigDetailResponse`
-
----
-
-### PUT /configs/{config_id}
-
-Update a config. If `document_type_ids` is provided, replaces all requirements.
-
-**Auth:** Bearer token
-
-**Request Body:** `CollectionConfigUpdate`
-
-**Response:** `CollectionConfigDetailResponse`
-
----
-
-### DELETE /configs/{config_id}
-
-Delete a collection config. Requirements cascade-delete.
-
-**Auth:** Bearer token
-
-**Response:** `{ "success": true }`
-
----
-
-### PATCH /configs/{config_id}/status
-
-Toggle `is_online` and/or `whatsapp_enabled` flags.
-
-**Auth:** Bearer token
-
-**Request Body:** `CollectionConfigStatusUpdate`
-
-**Response:** `CollectionConfigResponse`
-
----
-
-### GET /configs/{config_id}/documents
-
-List required documents for a config.
-
-**Auth:** Bearer token
-
-**Response:** `CollectionRequirementResponse[]`
-
----
-
-### PUT /configs/{config_id}/documents
-
-Replace all required documents for a config.
-
-**Auth:** Bearer token
-
-**Request Body:** `SetRequirementsRequest`
-
-**Response:** `CollectionRequirementResponse[]`
-
----
-
 ### GET /resolve
 
-Resolve which documents are needed for a candidate. Merges workspace defaults with vacancy-specific requirements.
+Resolve which documents are needed for a candidate. Returns workspace default document types (`is_default=true`).
 
 **Auth:** Bearer token
 
@@ -3363,14 +3258,9 @@ Resolve which documents are needed for a candidate. Merges workspace defaults wi
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `vacancy_id` | string (UUID) | No | If provided, merges vacancy config with defaults |
+| `vacancy_id` | string (UUID) | No | Reserved for future use |
 
 **Response:** `ResolveDocumentsResponse`
-
-**Resolution Logic:**
-1. No `vacancy_id` → returns workspace default docs
-2. `vacancy_id` with config → merges default + vacancy-specific (dedup by type, vacancy overrides)
-3. `vacancy_id` without config → falls back to defaults
 
 ---
 
@@ -3436,6 +3326,23 @@ Get enriched collection detail for the detail panel. Includes the smart planner 
 Mark a document collection as abandoned.
 
 **Auth:** Bearer token
+
+**Response:** `{ "success": true }`
+
+---
+
+### POST /collections/{collection_id}/tasks/{task_slug}/trigger
+
+Trigger a scheduled task immediately (e.g. send a day contract now instead of waiting for the scheduled time).
+
+**Auth:** Bearer token
+
+**Path Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `collection_id` | string (UUID) | Collection identifier |
+| `task_slug` | string | Slug of the task to trigger (e.g. `day_contract`) |
 
 **Response:** `{ "success": true }`
 

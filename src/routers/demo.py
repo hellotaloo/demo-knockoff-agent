@@ -291,8 +291,6 @@ async def reset_demo_data(
                 "agents.document_collection_uploads",
                 "agents.document_collection_session_turns",
                 "agents.document_collections",
-                "agents.document_collection_requirements",
-                "agents.document_collection_configs",
             ]:
                 try:
                     async with conn.transaction():

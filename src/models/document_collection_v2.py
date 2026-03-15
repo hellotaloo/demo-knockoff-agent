@@ -58,63 +58,6 @@ class DocumentTypeResponse(BaseModel):
 
 
 # =============================================================================
-# Collection Configs
-# =============================================================================
-
-class CollectionConfigCreate(BaseModel):
-    """Create a document collection config."""
-    vacancy_id: Optional[str] = None
-    name: Optional[str] = None
-    intro_message: Optional[str] = None
-    document_type_ids: List[str] = Field(default_factory=list)
-
-
-class CollectionConfigUpdate(BaseModel):
-    """Update a collection config."""
-    name: Optional[str] = None
-    intro_message: Optional[str] = None
-    status: Optional[str] = None
-    is_online: Optional[bool] = None
-    whatsapp_enabled: Optional[bool] = None
-    document_type_ids: Optional[List[str]] = None
-
-
-class CollectionConfigStatusUpdate(BaseModel):
-    """Toggle online/whatsapp flags."""
-    is_online: Optional[bool] = None
-    whatsapp_enabled: Optional[bool] = None
-
-
-class CollectionConfigResponse(BaseModel):
-    """Collection config response."""
-    id: str
-    workspace_id: str
-    vacancy_id: Optional[str] = None
-    name: Optional[str] = None
-    intro_message: Optional[str] = None
-    status: str
-    is_online: bool
-    whatsapp_enabled: bool
-    created_at: datetime
-    updated_at: datetime
-
-
-class CollectionRequirementResponse(BaseModel):
-    """A required document within a config."""
-    id: str
-    document_type_id: str
-    document_type: DocumentTypeResponse
-    position: int
-    is_required: bool
-    notes: Optional[str] = None
-
-
-class CollectionConfigDetailResponse(CollectionConfigResponse):
-    """Config with its required documents."""
-    documents: List[CollectionRequirementResponse] = Field(default_factory=list)
-
-
-# =============================================================================
 # Document Resolution
 # =============================================================================
 
@@ -322,18 +265,3 @@ class CandidateDocumentUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-# =============================================================================
-# Requirement management helper
-# =============================================================================
-
-class RequirementItem(BaseModel):
-    """A single requirement when setting documents for a config."""
-    document_type_id: str
-    position: int = 0
-    is_required: bool = True
-    notes: Optional[str] = None
-
-
-class SetRequirementsRequest(BaseModel):
-    """Replace all requirements for a config."""
-    documents: List[RequirementItem]
