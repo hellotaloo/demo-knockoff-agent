@@ -27,8 +27,13 @@ from src.models.ontology import (
     DocumentTypeUpdateRequest,
     VerificationSchema,
     VerificationFieldSchema,
+    AttributeFieldsSchema,
+    IntegrationResponse,
+    SyncWithEntry,
+    SyncWithAddRequest,
 )
 from src.repositories.document_type_repo import DocumentTypeRepository
+from src.repositories.sync_with_repo import SyncWithRepository
 from src.dependencies import get_pool
 
 logger = logging.getLogger(__name__)
@@ -38,6 +43,29 @@ router = APIRouter(prefix="/ontology", tags=["Ontology"])
 
 def _get_doc_type_repo(pool=Depends(get_pool)) -> DocumentTypeRepository:
     return DocumentTypeRepository(pool)
+
+
+def _get_sync_repo(pool=Depends(get_pool)) -> SyncWithRepository:
+    return SyncWithRepository(pool)
+
+
+# ─── sync_with helpers ─────────────────────────────────────────────────────
+
+
+def _build_sync_entry(record) -> SyncWithEntry:
+    """Convert a sync_with DB record to a SyncWithEntry."""
+    import json as _json
+    meta = record["external_metadata"]
+    if isinstance(meta, str):
+        meta = _json.loads(meta)
+    return SyncWithEntry(
+        id=str(record["id"]),
+        integration_id=str(record["integration_id"]),
+        integration_slug=record["integration_slug"],
+        integration_name=record["integration_name"],
+        external_id=record["external_id"],
+        external_metadata=meta,
+    )
 
 
 # ─── document_type helpers ────────────────────────────────────────────────────
@@ -72,6 +100,7 @@ def _doc_record_to_entity(record) -> OntologyEntity:
         metadata=metadata or None,
         scan_mode=record["scan_mode"],
         verification_config=vc,
+        ai_hint=record["ai_hint"],
     )
 
 
@@ -102,6 +131,7 @@ async def _list_document_types(
     include_children: bool,
     include_inactive: bool,
     repo: DocumentTypeRepository,
+    sync_repo: SyncWithRepository,
 ) -> OntologyListResponse:
     """Build ontology list response for document_type entities."""
     is_active = None if include_inactive else True
@@ -112,6 +142,14 @@ async def _list_document_types(
         is_active=is_active,
     )
 
+    # Batch-load sync_with for all records
+    all_ids = [row["id"] for row in rows]
+    sync_rows = await sync_repo.list_for_records("types_documents", all_ids)
+    sync_map: dict[str, list[SyncWithEntry]] = {}
+    for sr in sync_rows:
+        rid = str(sr["record_id"])
+        sync_map.setdefault(rid, []).append(_build_sync_entry(sr))
+
     parents: dict[str, OntologyEntity] = {}
     parent_order: list[str] = []
 
@@ -121,12 +159,15 @@ async def _list_document_types(
 
         if parent_id is None:
             entity = _doc_record_to_entity(row)
+            entity.sync_with = sync_map.get(row_id, [])
             parents[row_id] = entity
             parent_order.append(row_id)
         elif include_children:
             pid = str(parent_id)
             if pid in parents:
-                parents[pid].children.append(_doc_record_to_child(row))
+                child = _doc_record_to_child(row)
+                child.sync_with = sync_map.get(row_id, [])
+                parents[pid].children.append(child)
 
     items = []
     for pid in parent_order:
@@ -197,11 +238,14 @@ async def get_ontology_stats(
     - total_items: total parent entities across all types
     - subtypes: total child entities across all types
     """
-    # Discover all ontology type tables dynamically
+    # Discover all ontology type tables dynamically (only those with required columns)
     type_tables = await pool.fetch("""
         SELECT table_name
-        FROM information_schema.tables
+        FROM information_schema.tables t
         WHERE table_schema = 'ats' AND table_name LIKE 'types_%'
+          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ats' AND c.table_name = t.table_name AND c.column_name = 'workspace_id')
+          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ats' AND c.table_name = t.table_name AND c.column_name = 'is_active')
+          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ats' AND c.table_name = t.table_name AND c.column_name = 'category')
         ORDER BY table_name
     """)
 
@@ -265,6 +309,7 @@ async def list_entities(
     include_inactive: bool = Query(False, description="Include inactive entities"),
     limit: int = Query(200, ge=1, le=1000, description="Max items to return"),
     repo: DocumentTypeRepository = Depends(_get_doc_type_repo),
+    sync_repo: SyncWithRepository = Depends(_get_sync_repo),
 ):
     """
     List ontology entities by type.
@@ -273,7 +318,7 @@ async def list_entities(
     """
     if type == EntityType.document_type:
         return await _list_document_types(
-            workspace_id, category, include_children, include_inactive, repo
+            workspace_id, category, include_children, include_inactive, repo, sync_repo
         )
 
     raise HTTPException(status_code=400, detail=f"Unsupported entity type: {type}")
@@ -284,6 +329,7 @@ async def get_entity(
     entity_id: uuid.UUID,
     include_children: bool = Query(True, description="Include children"),
     repo: DocumentTypeRepository = Depends(_get_doc_type_repo),
+    sync_repo: SyncWithRepository = Depends(_get_sync_repo),
 ):
     """
     Get a single ontology entity by ID with optional children.
@@ -297,9 +343,23 @@ async def get_entity(
 
     entity = _doc_record_to_entity(record)
 
+    # Load sync_with for this entity
+    sync_rows = await sync_repo.list_for_record("types_documents", entity_id)
+    entity.sync_with = [_build_sync_entry(sr) for sr in sync_rows]
+
     if include_children:
         children = await repo.list_children(entity_id)
-        entity.children = [_doc_record_to_child(c) for c in children]
+        child_ids = [c["id"] for c in children]
+        child_sync_rows = await sync_repo.list_for_records("types_documents", child_ids)
+        child_sync_map: dict[str, list[SyncWithEntry]] = {}
+        for sr in child_sync_rows:
+            rid = str(sr["record_id"])
+            child_sync_map.setdefault(rid, []).append(_build_sync_entry(sr))
+
+        for c in children:
+            child = _doc_record_to_child(c)
+            child.sync_with = child_sync_map.get(str(c["id"]), [])
+            entity.children.append(child)
         entity.children_count = len(entity.children)
 
     return entity
@@ -317,6 +377,10 @@ _EXTRACT_FIELDS = [
     VerificationFieldSchema(key="license_categories", label="Categorieën", description="Klassen of categorieën op het document (bv. rijbewijs B, C)", type="list"),
     VerificationFieldSchema(key="certificate_level", label="Niveau", description="Niveau of graad van het certificaat", type="string"),
     VerificationFieldSchema(key="certificate_type", label="Type certificaat", description="Specifiek type of variant van het certificaat", type="string"),
+    VerificationFieldSchema(key="national_registry_number", label="Rijksregisternummer", description="Belgisch rijksregisternummer (11 cijfers)", type="string"),
+    VerificationFieldSchema(key="iban", label="IBAN", description="IBAN rekeningnummer", type="string"),
+    VerificationFieldSchema(key="bic", label="BIC/SWIFT", description="BIC of SWIFT code van de bank", type="string"),
+    VerificationFieldSchema(key="permit_type", label="Type vergunning", description="Specifiek type vergunning of arbeidskaart (A/B/C)", type="string"),
 ]
 
 _CONFIG_FIELDS = [
@@ -335,6 +399,28 @@ async def get_verification_schema():
     - `config_fields`: toggles/options that control verification behaviour
     """
     return VerificationSchema(extract_fields=_EXTRACT_FIELDS, config_fields=_CONFIG_FIELDS)
+
+
+_ATTRIBUTE_FIELD_TYPES = [
+    VerificationFieldSchema(key="text", label="Tekst", description="Vrije tekst (naam, adres, ...)", type="text"),
+    VerificationFieldSchema(key="phone", label="Telefoonnummer", description="Telefoonnummer met landcode", type="text"),
+    VerificationFieldSchema(key="email", label="E-mailadres", description="E-mailadres", type="text"),
+    VerificationFieldSchema(key="date", label="Datum", description="Datumveld (DD/MM/JJJJ)", type="date"),
+    VerificationFieldSchema(key="number", label="Nummer", description="Numerieke waarde", type="number"),
+    VerificationFieldSchema(key="boolean", label="Ja/Nee", description="Ja of nee keuze", type="boolean"),
+    VerificationFieldSchema(key="select", label="Keuzelijst", description="Selectie uit vaste opties", type="select"),
+]
+
+
+@router.get("/attribute-fields-schema", response_model=AttributeFieldsSchema)
+async def get_attribute_fields_schema():
+    """
+    Returns the available field types for building structured attribute fields.
+
+    Used by the frontend to render the fields config UI on attribute type detail panels.
+    For example, a "noodcontact" attribute could have fields: naam (text) + telefoon (phone).
+    """
+    return AttributeFieldsSchema(field_types=_ATTRIBUTE_FIELD_TYPES)
 
 
 @router.post("/entities", response_model=OntologyEntity, status_code=201)
@@ -399,3 +485,89 @@ async def delete_entity(
         raise HTTPException(status_code=404, detail="Entity not found")
 
     await repo.soft_delete(entity_id)
+
+
+# ─── Integrations ─────────────────────────────────────────────────────────────
+
+
+@router.get("/integrations", response_model=list[IntegrationResponse])
+async def list_integrations(
+    sync_repo: SyncWithRepository = Depends(_get_sync_repo),
+):
+    """List all registered integration vendors."""
+    rows = await sync_repo.list_integrations()
+    return [
+        IntegrationResponse(
+            id=str(r["id"]),
+            slug=r["slug"],
+            name=r["name"],
+            vendor=r["vendor"],
+            description=r["description"],
+            icon=r["icon"],
+            is_active=r["is_active"],
+        )
+        for r in rows
+    ]
+
+
+# ─── Sync With CRUD ───────────────────────────────────────────────────────────
+
+
+@router.get("/entities/{entity_id}/sync-with", response_model=list[SyncWithEntry])
+async def list_entity_sync_with(
+    entity_id: uuid.UUID,
+    table_name: str = Query("types_documents", description="Types table name"),
+    sync_repo: SyncWithRepository = Depends(_get_sync_repo),
+):
+    """List all sync_with links for an entity."""
+    rows = await sync_repo.list_for_record(table_name, entity_id)
+    return [_build_sync_entry(r) for r in rows]
+
+
+@router.post("/entities/{entity_id}/sync-with", response_model=SyncWithEntry, status_code=201)
+async def add_entity_sync_with(
+    entity_id: uuid.UUID,
+    body: SyncWithAddRequest,
+    table_name: str = Query("types_documents", description="Types table name"),
+    sync_repo: SyncWithRepository = Depends(_get_sync_repo),
+):
+    """Add a sync_with link to an entity."""
+    integration_id = uuid.UUID(body.integration_id)
+
+    # Verify integration exists
+    integration = await sync_repo.get_integration_by_id(integration_id)
+    if not integration:
+        raise HTTPException(status_code=404, detail="Integration not found")
+
+    try:
+        record = await sync_repo.add(
+            table_name=table_name,
+            record_id=entity_id,
+            integration_id=integration_id,
+            external_id=body.external_id,
+            external_metadata=body.external_metadata,
+        )
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise HTTPException(status_code=409, detail="This sync_with link already exists")
+        raise
+
+    # Re-fetch with integration info
+    rows = await sync_repo.list_for_record(table_name, entity_id)
+    for r in rows:
+        if str(r["id"]) == str(record["id"]):
+            return _build_sync_entry(r)
+
+    return _build_sync_entry(record)
+
+
+@router.delete("/entities/{entity_id}/sync-with/{sync_with_id}", status_code=204)
+async def remove_entity_sync_with(
+    entity_id: uuid.UUID,
+    sync_with_id: uuid.UUID,
+    sync_repo: SyncWithRepository = Depends(_get_sync_repo),
+):
+    """Remove a sync_with link from an entity."""
+    deleted = await sync_repo.remove(sync_with_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Sync link not found")

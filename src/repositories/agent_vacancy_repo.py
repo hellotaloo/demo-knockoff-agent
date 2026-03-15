@@ -62,7 +62,10 @@ class AgentVacancyRepository:
             SELECT
                 v.id, v.title, v.company, v.location, v.description, v.status, v.created_at,
                 v.source, v.source_id, v.archived_at,
-                v.prescreening_agent_enabled, v.preonboarding_agent_enabled, v.insights_agent_enabled,
+                COALESCE(
+                    (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
+                    ARRAY[]::text[]
+                ) as agent_types,
                 v.recruiter_id, v.client_id,
                 r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                 r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
@@ -109,8 +112,8 @@ class AgentVacancyRepository:
         List vacancies filtered by pre-onboarding agent status.
 
         Status logic:
-        - new: preonboarding_agent_enabled = false or NULL
-        - generated: preonboarding_agent_enabled = true
+        - new: document_collection agent not registered
+        - generated: document_collection agent registered
         - archived: Vacancy status is 'closed' or 'filled'
         """
         # Build status-specific conditions
@@ -119,12 +122,12 @@ class AgentVacancyRepository:
         elif status == "generated":
             status_condition = """
                 v.status NOT IN ('closed', 'filled')
-                AND v.preonboarding_agent_enabled = true
+                AND EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')
             """
         else:  # new
             status_condition = """
                 v.status NOT IN ('closed', 'filled')
-                AND (v.preonboarding_agent_enabled IS NULL OR v.preonboarding_agent_enabled = false)
+                AND NOT EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')
             """
 
         # Count query
@@ -140,7 +143,10 @@ class AgentVacancyRepository:
             SELECT
                 v.id, v.title, v.company, v.location, v.description, v.status, v.created_at,
                 v.source, v.source_id, v.archived_at,
-                v.prescreening_agent_enabled, v.preonboarding_agent_enabled, v.insights_agent_enabled,
+                COALESCE(
+                    (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
+                    ARRAY[]::text[]
+                ) as agent_types,
                 v.recruiter_id, v.client_id,
                 r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                 r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
@@ -189,9 +195,9 @@ class AgentVacancyRepository:
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL AND ps.published_at IS NULL) as prescreening_generated,
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL AND ps.published_at IS NOT NULL) as prescreening_published,
                 COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as prescreening_archived,
-                -- Pre-onboarding counts
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND (v.preonboarding_agent_enabled IS NULL OR v.preonboarding_agent_enabled = false)) as preonboarding_new,
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND v.preonboarding_agent_enabled = true) as preonboarding_generated,
+                -- Pre-onboarding counts (based on document_collection agent registration)
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND NOT EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')) as preonboarding_new,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')) as preonboarding_generated,
                 COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as preonboarding_archived
             FROM ats.vacancies v
             LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id

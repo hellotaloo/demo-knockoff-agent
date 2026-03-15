@@ -8,6 +8,43 @@ from uuid import UUID
 
 import asyncpg
 
+
+# ─── Plan enrichment ─────────────────────────────────────────────────────────
+
+async def enrich_plan_documents(pool: asyncpg.Pool, workspace_id: UUID, documents: list[dict]) -> list[dict]:
+    """Enrich plan documents with metadata from ats.types_documents.
+
+    Stored collection plans may be missing scan_mode, verification_config, etc.
+    This patches them in from the document types table so the collection agent
+    has the full metadata it needs.
+    """
+    if not documents:
+        return documents
+
+    slugs = [d["slug"] for d in documents]
+    rows = await pool.fetch(
+        """SELECT slug, scan_mode, is_verifiable, verification_config, ai_hint, category
+           FROM ats.types_documents
+           WHERE workspace_id = $1 AND slug = ANY($2)""",
+        workspace_id, slugs
+    )
+    type_map = {r["slug"]: r for r in rows}
+
+    for doc in documents:
+        dt = type_map.get(doc["slug"])
+        if dt:
+            doc.setdefault("scan_mode", dt["scan_mode"] or "single")
+            doc.setdefault("is_verifiable", dt["is_verifiable"])
+            if dt["verification_config"]:
+                vc = dt["verification_config"] if isinstance(dt["verification_config"], dict) else json.loads(dt["verification_config"])
+                doc.setdefault("verification_config", vc)
+            doc.setdefault("ai_hint", dt["ai_hint"])
+            doc.setdefault("category", dt["category"])
+        else:
+            doc.setdefault("scan_mode", "single")
+
+    return documents
+
 from src.auth.exceptions import WorkspaceAccessDenied, InsufficientRoleError
 from src.exceptions import NotFoundError, ValidationError
 from src.repositories.document_type_repo import DocumentTypeRepository
@@ -26,9 +63,6 @@ from src.models.document_collection_v2 import (
     DocumentCollectionFullDetailResponse,
     CollectionMessageResponse,
     CollectionUploadResponse,
-    CollectionPlanResponse,
-    CollectionPlanDocumentResponse,
-    CollectionPlanStepResponse,
     CollectionItemStatusResponse,
     WorkflowStepResponse,
 )
@@ -413,13 +447,16 @@ class DocumentCollectionService:
         agent_state = collection.get("agent_state")
         if agent_state and isinstance(agent_state, str):
             agent_state = json.loads(agent_state)
-        collection_items = self._build_collection_items(plan, uploads, agent_state)
+        collection_items = await self._build_collection_items(plan, uploads, agent_state, workspace_id)
 
         # Extract plan summary fields for the header
         raw_plan = collection.get("collection_plan")
         plan_dict = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
         summary = plan_dict.get("summary") if isinstance(plan_dict, dict) else None
         deadline_note = plan_dict.get("deadline_note") if isinstance(plan_dict, dict) else None
+
+        # Build conversation step progress from plan + agent state
+        conversation_steps = self._build_conversation_steps(plan, agent_state)
 
         # Look up workflow progress
         workflow_steps = await self._get_workflow_steps(str(collection_id))
@@ -464,161 +501,261 @@ class DocumentCollectionService:
             summary=summary,
             deadline_note=deadline_note,
             collection_items=collection_items,
+            conversation_steps=conversation_steps,
             candidacy_id=str(collection["candidacy_id"]) if collection.get("candidacy_id") else None,
             candidate_id=str(collection["candidate_id"]) if collection.get("candidate_id") else None,
             workflow_steps=workflow_steps,
         )
 
     @staticmethod
-    def _parse_collection_plan(raw_plan) -> Optional[CollectionPlanResponse]:
-        """Parse collection_plan JSONB into a structured response."""
+    def _parse_collection_plan(raw_plan) -> Optional[dict]:
+        """Parse collection_plan JSONB into a dict."""
         if not raw_plan:
             return None
         plan = json.loads(raw_plan) if isinstance(raw_plan, str) else raw_plan
         if not isinstance(plan, dict):
             return None
-        return CollectionPlanResponse(
-            summary=plan.get("summary"),
-            deadline_note=plan.get("deadline_note"),
-            intro_message=plan.get("intro_message"),
-            documents_to_collect=[
-                CollectionPlanDocumentResponse(
-                    slug=d.get("slug", ""),
-                    name=d.get("name", ""),
-                    reason=d.get("reason"),
-                    priority=d.get("priority", "required"),
-                )
-                for d in plan.get("documents_to_collect", [])
-            ],
-            attributes_to_collect=plan.get("attributes_to_collect", []),
-            conversation_steps=[
-                CollectionPlanStepResponse(
-                    step=s.get("step", 0),
-                    topic=s.get("topic", ""),
-                    items=s.get("items", []),
-                    message=s.get("message", ""),
-                )
-                for s in plan.get("conversation_steps", [])
-            ],
-            agent_managed_tasks=plan.get("agent_managed_tasks", []),
-            already_complete=plan.get("already_complete", []),
-            final_step=plan.get("final_step"),
-        )
+        return plan
 
-    @staticmethod
-    def _build_collection_items(
-        plan: Optional[CollectionPlanResponse],
+    async def _build_collection_items(
+        self,
+        plan: Optional[dict],
         upload_rows: list,
         agent_state: Optional[dict],
+        workspace_id: UUID,
     ) -> list[CollectionItemStatusResponse]:
-        """Build unified checklist of documents + attributes with current status."""
+        """Build unified checklist from conversation_flow + agent state."""
         if not plan:
             return []
 
-        # Agent state item_statuses (slug → status string or dict with value)
-        item_statuses = {}
+        conversation_flow = plan.get("conversation_flow", [])
+        if not conversation_flow:
+            return []
+
+        # Collect all slugs that need display names
+        all_slugs = set()
+        for step in conversation_flow:
+            for item in step.get("items", []):
+                all_slugs.add(item.get("slug", ""))
+        # Include attributes_from_documents slugs (extracted from ID)
+        attrs_from_docs = plan.get("attributes_from_documents", [])
+        for afd in attrs_from_docs:
+            all_slugs.add(afd.get("slug", ""))
+        # Include address-related slugs
+        all_slugs.update({"domicile_address", "verblijfs_adres", "adres_gelijk_aan_domicilie"})
+
+        name_map = await self._load_type_names(workspace_id, all_slugs)
+
+        # Extract status from agent state
+        collected_documents: dict = {}
+        collected_attributes: dict = {}
+        completed_steps: list = []
+        skipped_items: list = []
+        consent_given = False
+        identity_phase = "ask_id"
         if agent_state and isinstance(agent_state, dict):
-            item_statuses = agent_state.get("item_statuses", {})
+            collected_documents = agent_state.get("collected_documents", {})
+            collected_attributes = agent_state.get("collected_attributes", {})
+            completed_steps = agent_state.get("completed_steps", [])
+            skipped_items = agent_state.get("skipped_items", [])
+            consent_given = agent_state.get("consent_given", False)
+            identity_phase = agent_state.get("identity_phase", "ask_id")
 
-        items = []
+        skipped_slugs = {s.get("slug", "") for s in skipped_items}
 
-        # Documents from the plan
-        for doc in (plan.documents_to_collect or []):
-            status = item_statuses.get(doc.slug, "pending")
-            # status can be a string or dict {"status": "...", "value": "..."}
-            value = None
-            if isinstance(status, dict):
-                value = status.get("value")
-                status = status.get("status", "pending")
+        IDENTITY_SLUGS = {"id_card", "passport", "prato_5", "prato_9", "prato_20", "prato_101", "prato_102"}
 
-            items.append(CollectionItemStatusResponse(
-                slug=doc.slug,
-                name=doc.name,
-                type="document",
-                priority=doc.priority,
-                status=status,
-                value=value,
-            ))
-
-        # Attributes from the plan
-        for attr in (plan.attributes_to_collect or []):
-            slug = attr.get("slug", "") if isinstance(attr, dict) else str(attr)
-            name = attr.get("name", slug) if isinstance(attr, dict) else slug
-            priority = attr.get("priority", "required") if isinstance(attr, dict) else "required"
-
-            status = item_statuses.get(slug, "pending")
-            value = None
-            if isinstance(status, dict):
-                value = status.get("value")
-                status = status.get("status", "pending")
-
-            items.append(CollectionItemStatusResponse(
-                slug=slug,
-                name=name,
-                type="attribute",
-                priority=priority,
-                status=status,
-                value=value,
-            ))
-
-        # Friendly labels for known task slugs
         TASK_LABELS = {
-            "contract_signing_day": "Dagcontract genereren",
             "contract_signing": "Contract ondertekening",
             "medical_screening": "Medisch onderzoek inplannen",
         }
 
-        # Tasks from the plan (e.g. medical screening, contract signing)
-        for task in (plan.agent_managed_tasks or []):
-            slug = task.get("slug", "") if isinstance(task, dict) else str(task)
-            name = TASK_LABELS.get(slug) or (task.get("name") if isinstance(task, dict) else None) or slug
-            priority = task.get("priority", "required") if isinstance(task, dict) else "required"
+        items = []
 
-            raw_status = item_statuses.get(slug, "pending")
-            value = None
-            scheduled_at = None
-            if isinstance(raw_status, dict):
-                value = raw_status.get("value")
-                scheduled_at = raw_status.get("scheduled_at")
-                raw_status = raw_status.get("status", "pending")
+        for step in conversation_flow:
+            step_type = step.get("type", "")
+            step_completed = step_type in completed_steps
 
-            items.append(CollectionItemStatusResponse(
-                slug=slug,
-                name=name,
-                type="task",
-                priority=priority,
-                status=raw_status,
-                value=value,
-                scheduled_at=scheduled_at,
-            ))
-
-        # Final step (contract signing follow-up) — add as task if present
-        final_step = plan.final_step
-        if final_step and isinstance(final_step, dict):
-            slug = final_step.get("action", "contract_signing")
-            # Don't duplicate if already in agent_managed_tasks
-            existing_slugs = {i.slug for i in items if i.type == "task"}
-            if slug not in existing_slugs:
-                name = TASK_LABELS.get(slug, slug)
-                raw_status = item_statuses.get(slug, "pending")
-                value = None
-                scheduled_at = None
-                if isinstance(raw_status, dict):
-                    value = raw_status.get("value")
-                    scheduled_at = raw_status.get("scheduled_at")
-                    raw_status = raw_status.get("status", "pending")
-
+            if step_type == "greeting_and_consent":
                 items.append(CollectionItemStatusResponse(
-                    slug=slug,
-                    name=name,
+                    slug="greeting_and_consent",
+                    name="Consent gegevensverwerking",
+                    type="attribute",
+                    priority="required",
+                    status="verified" if consent_given or step_completed else "pending",
+                ))
+
+            elif step_type == "identity_verification":
+                id_done = identity_phase == "done" or step_completed
+                items.append(CollectionItemStatusResponse(
+                    slug="identity_verification",
+                    name="Identiteitsdocument",
+                    type="document",
+                    priority="required",
+                    status="verified" if id_done else "pending",
+                    group="identity",
+                ))
+                # Work eligibility — rendered as indented sub-item by frontend
+                work_elig = agent_state.get("work_eligibility") if agent_state else None
+                items.append(CollectionItemStatusResponse(
+                    slug="prato_5",
+                    name=name_map.get("work_eligibility", "Arbeidstoegang"),
+                    type="document",
+                    priority="required",
+                    status="verified" if work_elig is True else "pending",
+                    group="identity",
+                ))
+                # Attributes extracted from identity document
+                for afd in attrs_from_docs:
+                    afd_slug = afd.get("slug", "")
+                    if afd_slug == "work_eligibility":
+                        continue  # Already shown above
+                    afd_info = collected_attributes.get(afd_slug)
+                    items.append(CollectionItemStatusResponse(
+                        slug=afd_slug,
+                        name=name_map.get(afd_slug, afd_slug),
+                        type="attribute",
+                        priority="required",
+                        status="verified" if afd_info else "pending",
+                        value=self._format_attr_value(afd_info),
+                    ))
+
+            elif step_type == "address_collection":
+                # Domicilie adres
+                dom_collected = "domicile_address" in collected_attributes
+                items.append(CollectionItemStatusResponse(
+                    slug="domicile_address",
+                    name=name_map.get("domicile_address", "Domicilie adres"),
+                    type="attribute",
+                    priority="required",
+                    status="verified" if dom_collected else "pending",
+                    value=self._format_attr_value(collected_attributes.get("domicile_address")),
+                ))
+                # Verblijfsadres gelijk aan domicilie
+                same_flag = collected_attributes.get("adres_gelijk_aan_domicilie")
+                items.append(CollectionItemStatusResponse(
+                    slug="adres_gelijk_aan_domicilie",
+                    name=name_map.get("adres_gelijk_aan_domicilie", "Verblijfsadres gelijk aan domicilie"),
+                    type="attribute",
+                    priority="required",
+                    status="verified" if same_flag else "pending",
+                    value=self._format_attr_value(same_flag),
+                ))
+                # Verblijfsadres
+                verb_collected = "verblijfs_adres" in collected_attributes
+                items.append(CollectionItemStatusResponse(
+                    slug="verblijfs_adres",
+                    name=name_map.get("verblijfs_adres", "Verblijfsadres"),
+                    type="attribute",
+                    priority="required",
+                    status="verified" if verb_collected or (same_flag and same_flag.get("value")) else "pending",
+                    value=self._format_attr_value(collected_attributes.get("verblijfs_adres")),
+                ))
+
+            elif step_type == "collect_documents":
+                for item in step.get("items", []):
+                    slug = item.get("slug", "")
+                    doc_info = collected_documents.get(slug)
+                    if doc_info and doc_info.get("status") == "verified":
+                        status = "verified"
+                    elif slug in skipped_slugs:
+                        status = "skipped"
+                    else:
+                        status = "pending"
+
+                    items.append(CollectionItemStatusResponse(
+                        slug=slug,
+                        name=name_map.get(slug, slug),
+                        type="document",
+                        priority=item.get("priority", "required"),
+                        status=status,
+                        group="identity" if slug in IDENTITY_SLUGS else None,
+                    ))
+
+            elif step_type == "collect_attributes":
+                for item in step.get("items", []):
+                    slug = item.get("slug", "")
+                    attr_info = collected_attributes.get(slug)
+                    if attr_info:
+                        status = "verified"
+                    elif slug in skipped_slugs:
+                        status = "skipped"
+                    else:
+                        status = "pending"
+
+                    items.append(CollectionItemStatusResponse(
+                        slug=slug,
+                        name=name_map.get(slug, slug),
+                        type="attribute",
+                        priority=item.get("priority", "required"),
+                        status=status,
+                        value=self._format_attr_value(attr_info),
+                    ))
+
+            elif step_type in ("medical_screening", "contract_signing"):
+                items.append(CollectionItemStatusResponse(
+                    slug=step_type,
+                    name=TASK_LABELS.get(step_type, step.get("description", step_type)),
                     type="task",
                     priority="required",
-                    status=raw_status,
-                    value=value,
-                    scheduled_at=scheduled_at,
+                    status="verified" if step_completed else "pending",
                 ))
 
         return items
+
+    async def _load_type_names(self, workspace_id: UUID, slugs: set[str]) -> dict[str, str]:
+        """Look up display names for document and attribute type slugs."""
+        if not slugs:
+            return {}
+
+        slug_list = list(slugs)
+        rows = await self.pool.fetch(
+            """SELECT slug, name FROM ats.types_documents
+               WHERE workspace_id = $1 AND slug = ANY($2)
+               UNION ALL
+               SELECT slug, name FROM ats.types_attributes
+               WHERE workspace_id = $1 AND slug = ANY($2)""",
+            workspace_id, slug_list
+        )
+        return {r["slug"]: r["name"] for r in rows}
+
+    @staticmethod
+    def _format_attr_value(attr_info: Optional[dict]):
+        """Extract attribute value for display. Returns dict for structured, str for simple."""
+        if not attr_info or not isinstance(attr_info, dict):
+            return None
+        value = attr_info.get("value")
+        if value is None:
+            return None
+        return value
+
+    @staticmethod
+    def _build_conversation_steps(plan: Optional[dict], agent_state: Optional[dict]) -> list[dict]:
+        """Build conversation step progress from plan + agent state."""
+        if not plan:
+            return []
+
+        conversation_flow = plan.get("conversation_flow", [])
+        if not conversation_flow:
+            return []
+
+        completed_steps = []
+        current_step_index = 0
+        if agent_state and isinstance(agent_state, dict):
+            completed_steps = agent_state.get("completed_steps", [])
+            current_step_index = agent_state.get("current_step_index", 0)
+
+        steps = []
+        for i, step in enumerate(conversation_flow):
+            step_type = step.get("type", "")
+            steps.append({
+                "step": step.get("step", i + 1),
+                "type": step_type,
+                "description": step.get("description", ""),
+                "completed": step_type in completed_steps,
+                "current": i == current_step_index,
+            })
+        return steps
 
     async def _get_workflow_steps(self, collection_id: str) -> list[WorkflowStepResponse]:
         """Look up workflow progress for a document collection."""

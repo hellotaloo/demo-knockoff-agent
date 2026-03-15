@@ -15,7 +15,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Form
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
-from google.genai import types
 
 from src.models.document_collection import (
     OutboundDocumentRequest,
@@ -417,44 +416,46 @@ async def document_webhook(
     """
     Handle incoming WhatsApp messages and media for document collection.
 
-    KEY FEATURE: Handles image uploads from WhatsApp!
+    Uses the code-controlled DocumentCollectionAgent (same pattern as pre-screening).
+    Agent state is persisted to the agent_state JSONB column on document_collections.
 
     Flow:
-    1. Find active conversation by phone number
-    2. If media upload: download, verify with document_recognition_agent, store result
-    3. Build message for agent (include verification result if media)
-    4. Run agent to get response
-    5. Check for completion or max retries
-    6. Send TwiML response
+    1. Find active collection by phone
+    2. Restore or create agent from DB state
+    3. Process message through agent (handles verification simulation, skip, etc.)
+    4. Persist updated state to DB
+    5. Check for completion
+    6. Return TwiML response
     """
-    global session_manager
-    pool = await get_db_pool()
+    from agents.document_collection.collection.agent import (
+        create_collection_agent,
+        restore_collection_agent,
+        is_collection_complete,
+    )
+    from agents.document_collection.collection.type_cache import TypeCache
 
+    pool = await get_db_pool()
     phone_normalized = From.replace("whatsapp:", "").lstrip("+")
 
-    # Find active conversation
+    # Find active collection with plan data
     conv_row = await pool.fetchrow(
-        """SELECT dcc.id, dcc.application_id, dcc.session_id, dcc.candidate_name,
-                  dcc.retry_count, dcc.documents_required
-        FROM agents.document_collections dcc
-        WHERE dcc.candidate_phone = $1
-        AND dcc.status = 'active'
-        ORDER BY dcc.started_at DESC LIMIT 1""",
+        """SELECT id, candidacy_id, candidate_name, candidate_id, vacancy_id,
+                  workspace_id, collection_plan, agent_state, message_count
+        FROM agents.document_collections
+        WHERE candidate_phone = $1 AND status = 'active'
+        ORDER BY started_at DESC LIMIT 1""",
         phone_normalized
     )
 
     if not conv_row:
-        # No active collection
         logger.warning(f"No active document collection for {phone_normalized}")
         resp = MessagingResponse()
         resp.message("Geen actieve document verzameling gevonden. Neem contact op met ons voor hulp.")
         return PlainTextResponse(str(resp), media_type="application/xml")
 
     conversation_id = conv_row["id"]
-    session_id = conv_row["session_id"]
     candidate_name = conv_row["candidate_name"]
-    retry_count = conv_row["retry_count"] or 0
-    documents_required = json.loads(conv_row["documents_required"]) if conv_row["documents_required"] else []
+    agent_state_json = conv_row["agent_state"]
 
     # Store user message
     user_message_text = Body or "[IMAGE UPLOADED]"
@@ -466,230 +467,113 @@ async def document_webhook(
         user_message_text
     )
 
-    # Handle media upload
-    verification_result = None
-    if NumMedia > 0 and MediaUrl0:
-        logger.info(f"Processing media upload from {phone_normalized}: {MediaUrl0}")
+    # Build TypeCache for this workspace
+    type_cache = TypeCache(pool, conv_row["workspace_id"])
+    await type_cache.ensure_loaded()
 
-        try:
-            # Download image from Twilio
-            image_bytes = await download_twilio_media(MediaUrl0)
-            image_base64 = base64.b64encode(image_bytes).decode()
-
-            # Verify document using document_recognition_agent (with ORIGINAL image)
-            from agents.document_collection.recognition import verify_document_base64
-            verification_result = await verify_document_base64(
-                image_base64=image_base64,
-                candidate_name=candidate_name,
-                document_type_hint="unknown"  # Let agent classify
-            )
-
-            # Determine which document this is
-            collected_docs = await pool.fetch(
-                """SELECT document_side FROM agents.document_collection_uploads
-                WHERE conversation_id = $1 AND verification_passed = true""",
-                conversation_id
-            )
-            collected_sides = [d["document_side"] for d in collected_docs]
-            document_side = determine_document_side(collected_sides, documents_required)
-
-            # Store verification result
-            upload_row = await pool.fetchrow(
-                """INSERT INTO agents.document_collection_uploads
-                (conversation_id, application_id, document_side, image_hash,
-                 verification_result, verification_passed)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-                RETURNING id""",
-                conversation_id,
-                conv_row["application_id"],
-                document_side,
-                hashlib.sha256(image_bytes).hexdigest(),
-                json.dumps({
-                    "category": verification_result.document_category,
-                    "extracted_name": verification_result.extracted_name,
-                    "name_match_result": verification_result.name_match_result,
-                    "fraud_risk": verification_result.fraud_risk_level,
-                    "confidence": verification_result.document_category_confidence,
-                    "quality": verification_result.image_quality,
-                    "summary": verification_result.verification_summary
-                }),
-                verification_result.verification_passed
-            )
-
-            # BACKGROUND TASK: Save original image for records
-            upload_id = upload_row["id"]
-            asyncio.create_task(
-                save_original_document(
-                    image_bytes=image_bytes,
-                    conversation_id=conversation_id,
-                    upload_id=upload_id,
-                    document_side=document_side
-                )
-            )
-
-            # ====================================================================
-            # 📋 VERIFICATION RESULT RECEIVED
-            # ====================================================================
-            logger.info("=" * 80)
-            logger.info("📋 VERIFICATION RESULT FROM RECOGNITION AGENT")
-            logger.info("=" * 80)
-            logger.info(f"Candidate        : {candidate_name}")
-            logger.info(f"Phone            : {phone_normalized}")
-            logger.info(f"Conversation ID  : {conversation_id}")
-            logger.info("-" * 80)
-
-            # Document category with confidence
-            logger.info(f"Document Category: {verification_result.document_category} "
-                       f"(confidence: {verification_result.document_category_confidence:.2%})")
-
-            # Name extraction and matching with confidence
-            logger.info(f"Extracted Name   : {verification_result.extracted_name or 'N/A'} "
-                       f"(confidence: {verification_result.name_extraction_confidence:.2%})")
-
-            # Enhanced name match display
-            if verification_result.name_match_result:
-                match_display = verification_result.name_match_result
-                if match_display == "partial_match" and verification_result.name_match_details:
-                    # Check if it's due to middle names
-                    details_lower = verification_result.name_match_details.lower()
-                    if "middle" in details_lower:
-                        match_display = "partial_match (middle names differ)"
-                    elif "format" in details_lower:
-                        match_display = "partial_match (different format)"
-
-                logger.info(f"Name Match       : {match_display} "
-                           f"(confidence: {verification_result.name_match_confidence:.2%})")
-                if verification_result.name_match_details:
-                    logger.info(f"Match Details    : {verification_result.name_match_details}")
-            else:
-                logger.info("Name Match       : N/A")
-
-            logger.info("-" * 80)
-
-            # Image quality (no confidence score for quality)
-            logger.info(f"Image Quality    : {verification_result.image_quality}")
-            if verification_result.readability_issues:
-                logger.info(f"Quality Issues   : {', '.join(verification_result.readability_issues)}")
-
-            # Fraud risk with confidence
-            logger.info(f"Fraud Risk       : {verification_result.fraud_risk_level} "
-                       f"(confidence: {verification_result.overall_fraud_confidence:.2%})")
-
-            logger.info("-" * 80)
-            logger.info(f"Verification     : {'✅ PASSED' if verification_result.verification_passed else '❌ FAILED'}")
-            logger.info(f"Retry Count      : {retry_count}/3")
-            logger.info("-" * 80)
-            logger.info(f"Summary: {verification_result.verification_summary}")
-            logger.info("=" * 80)
-            logger.info("")
-
-            # Update retry count if verification failed
-            if not verification_result.verification_passed:
-                retry_count += 1
-                await pool.execute(
-                    """UPDATE agents.document_collections
-                    SET retry_count = $1, updated_at = NOW()
-                    WHERE id = $2""",
-                    retry_count,
-                    conversation_id
-                )
-
-            # Build verification summary for agent
-            verification_summary = f"""
-[DOCUMENT_VERIFICATION_RESULT]
-Category: {verification_result.document_category}
-Name: {verification_result.extracted_name or 'N/A'}
-Name Match: {verification_result.name_match_result or 'N/A'}
-Fraud Risk: {verification_result.fraud_risk_level}
-Quality: {verification_result.image_quality}
-Passed: {verification_result.verification_passed}
-Retry Count: {retry_count}/3
-Summary: {verification_result.verification_summary}
-"""
-
-            user_message = Body + "\n" + verification_summary if Body else verification_summary
-
-        except Exception as e:
-            logger.error(f"Error processing media: {e}", exc_info=True)
-            user_message = Body or "[IMAGE UPLOAD FAILED]"
+    # Restore or create agent
+    if agent_state_json and isinstance(agent_state_json, str):
+        agent = restore_collection_agent(agent_state_json, type_cache=type_cache)
+    elif agent_state_json and isinstance(agent_state_json, dict):
+        agent = restore_collection_agent(json.dumps(agent_state_json), type_cache=type_cache)
     else:
-        user_message = Body
+        # First message — create agent from plan
+        plan = conv_row["collection_plan"]
+        if isinstance(plan, str):
+            plan = json.loads(plan)
 
-    # Run agent
-    runner = session_manager.get_or_create_document_runner(
-        collection_id=session_id,
-        candidate_name=candidate_name,
-        documents_required=documents_required
-    )
+        if not plan:
+            logger.error(f"No collection plan for {conversation_id}")
+            resp = MessagingResponse()
+            resp.message("Er is een probleem met je dossier. Een medewerker neemt contact met je op.")
+            return PlainTextResponse(str(resp), media_type="application/xml")
 
-    response_text = ""
-    is_complete = False
-    completion_outcome = None
-
-    async for event in runner.run_async(
-        user_id="whatsapp",
-        session_id=session_id,
-        new_message=types.Content(
-            role="user",
-            parts=[types.Part(text=user_message)]
+        # Get vacancy info for recruiter contact
+        vacancy_row = await pool.fetchrow(
+            """SELECT r.name AS recruiter_name, r.email AS recruiter_email, r.phone AS recruiter_phone
+               FROM ats.vacancies v
+               LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
+               WHERE v.id = $1""",
+            conv_row["vacancy_id"]
         )
-    ):
-        # Check for tool call in content
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                # Check for function call (tool call)
-                if hasattr(part, 'function_call') and part.function_call:
-                    if part.function_call.name == "document_collection_complete":
-                        is_complete = True
-                        args = part.function_call.args or {}
-                        completion_outcome = args.get("outcome", "")
-                        logger.info(f"📄 Document collection complete: {completion_outcome}")
 
-                # Get response text
-                if hasattr(part, 'text') and part.text:
-                    if event.is_final_response():
-                        response_text += part.text
+        # Inject candidate phone into plan context for Yousign integration
+        if "context" not in plan:
+            plan["context"] = {}
+        plan["context"]["candidate_phone"] = f"+{phone_normalized}" if not phone_normalized.startswith("+") else phone_normalized
+
+        agent = create_collection_agent(
+            plan=plan,
+            type_cache=type_cache,
+            collection_id=str(conversation_id),
+            recruiter_name=vacancy_row["recruiter_name"] or "" if vacancy_row else "",
+            recruiter_email=vacancy_row["recruiter_email"] or "" if vacancy_row else "",
+            recruiter_phone=vacancy_row["recruiter_phone"] or "" if vacancy_row else "",
+        )
+
+        # Send intro as separate messages
+        intro_messages = await agent.get_initial_message()
+
+        # Store each message + persist state
+        for msg in intro_messages:
+            await pool.execute(
+                """INSERT INTO agents.document_collection_session_turns
+                (conversation_id, role, message) VALUES ($1, 'agent', $2)""",
+                conversation_id, msg
+            )
+        await pool.execute(
+            """UPDATE agents.document_collections
+            SET agent_state = $1::jsonb, message_count = COALESCE(message_count, 0) + $2, updated_at = NOW()
+            WHERE id = $3""",
+            agent.state.to_json(), len(intro_messages), conversation_id
+        )
+
+        # Send each as a separate WhatsApp message via TwiML
+        resp = MessagingResponse()
+        for msg in intro_messages:
+            resp.message(msg.replace("**", "*"))
+        return PlainTextResponse(str(resp), media_type="application/xml")
+
+    # Process message through agent
+    has_image = NumMedia > 0
+    response_text = await agent.process_message(Body, has_image=has_image)
+
+    # Persist updated state
+    await pool.execute(
+        """UPDATE agents.document_collections
+        SET agent_state = $1::jsonb, message_count = COALESCE(message_count, 0) + 1, updated_at = NOW()
+        WHERE id = $2""",
+        agent.state.to_json(), conversation_id
+    )
 
     # Store agent response
     await pool.execute(
         """INSERT INTO agents.document_collection_session_turns
-        (conversation_id, role, message)
-        VALUES ($1, 'agent', $2)""",
-        conversation_id,
-        response_text
-    )
-
-    # Update message count
-    await pool.execute(
-        """UPDATE agents.document_collections
-        SET message_count = message_count + 1, updated_at = NOW()
-        WHERE id = $1""",
-        conversation_id
+        (conversation_id, role, message) VALUES ($1, 'agent', $2)""",
+        conversation_id, response_text
     )
 
     # Handle completion
-    if is_complete:
-        logger.info(f"Triggering background processing for {conversation_id}")
-        # Invalidate cache so next message gets fresh routing
+    if is_collection_complete(agent):
+        logger.info(f"Document collection complete: {conversation_id}")
         await conversation_cache.invalidate(phone_normalized)
         asyncio.create_task(_process_document_collection(
-            pool, conversation_id, conv_row["application_id"], completion_outcome
+            pool, conversation_id, None,
+            f"Collected: {list(agent.state.collected_documents.keys())}, "
+            f"Attributes: {list(agent.state.collected_attributes.keys())}"
         ))
 
-    # Check max retries
-    if retry_count >= 3 and not is_complete:
-        logger.warning(f"Max retries reached for {conversation_id}")
-        # Invalidate cache since conversation is ending
-        await conversation_cache.invalidate(phone_normalized)
-        await pool.execute(
-            """UPDATE agents.document_collections
-            SET status = 'needs_review', completed_at = NOW()
-            WHERE id = $1""",
-            conversation_id
-        )
-        response_text = "Na 3 pogingen kunnen we helaas niet verder. Een medewerker zal binnenkort contact met je opnemen."
+        # Advance workflow
+        try:
+            from src.workflows import get_orchestrator
+            orchestrator = await get_orchestrator()
+            wf = await orchestrator.find_by_context("collection_id", str(conversation_id))
+            if wf:
+                await orchestrator.service.update_step(wf["id"], "collection_complete")
+        except Exception as e:
+            logger.error(f"Failed to advance workflow for collection {conversation_id}: {e}")
 
     # Send TwiML response
     resp = MessagingResponse()
-    resp.message(response_text or "Bedankt voor je bericht!")
+    resp.message((response_text or "Bedankt voor je bericht!").replace("**", "*"))
     return PlainTextResponse(str(resp), media_type="application/xml")

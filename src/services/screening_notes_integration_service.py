@@ -77,12 +77,14 @@ class ScreeningNotesIntegrationService:
             logger.warning("No recruiter email configured, skipping notes integration")
             return {"success": False, "reason": "no_recruiter_email"}
 
-        # 1. Get application details including summary
+        # 1. Get application details including summary (candidate name from SSOT)
         app_row = await self.pool.fetchrow(
             """
             SELECT a.id, a.vacancy_id, a.qualified, a.summary, a.candidate_id,
-                   a.candidate_name, a.conversation_id
+                   COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name,
+                   a.conversation_id
             FROM ats.applications a
+            LEFT JOIN ats.candidates c ON c.id = a.candidate_id
             WHERE a.id = $1
             """,
             application_id
@@ -109,18 +111,18 @@ class ScreeningNotesIntegrationService:
             application_id
         )
 
-        if not scheduled:
-            # Fallback: match by vacancy_id and candidate_name
+        if not scheduled and app_row["candidate_id"]:
+            # Fallback: match by vacancy_id and candidate_id (more reliable than name)
             scheduled = await self.pool.fetchrow(
                 """
                 SELECT si.id, si.calendar_event_id, si.selected_date, si.selected_time
                 FROM ats.scheduled_interviews si
-                WHERE si.vacancy_id = $1 AND si.candidate_name = $2
+                WHERE si.vacancy_id = $1 AND si.candidate_id = $2
                 ORDER BY si.scheduled_at DESC
                 LIMIT 1
                 """,
                 app_row["vacancy_id"],
-                app_row["candidate_name"]
+                app_row["candidate_id"]
             )
 
         calendar_event_id = scheduled["calendar_event_id"] if scheduled else None

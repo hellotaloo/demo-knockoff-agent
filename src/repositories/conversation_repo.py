@@ -26,13 +26,13 @@ class ConversationRepository:
         Returns:
             Tuple of (conversation rows, total count)
         """
-        # Build query
-        conditions = ["vacancy_id = $1"]
+        # Build query with table alias for joined query
+        conditions = ["s.vacancy_id = $1"]
         params = [vacancy_id]
         param_idx = 2
 
         if status:
-            conditions.append(f"status = ${param_idx}")
+            conditions.append(f"s.status = ${param_idx}")
             params.append(status)
             param_idx += 1
 
@@ -40,17 +40,19 @@ class ConversationRepository:
 
         # Get total count
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM agents.pre_screening_sessions WHERE {where_clause}",
+            f"SELECT COUNT(*) FROM agents.pre_screening_sessions s WHERE {where_clause}",
             *params
         )
 
-        # Get conversations
+        # Get conversations - pull candidate name from candidates table (SSOT)
         query = f"""
-            SELECT id, vacancy_id, candidate_name, status,
-                   started_at, completed_at, message_count
-            FROM agents.pre_screening_sessions
+            SELECT s.id, s.vacancy_id,
+                   COALESCE(c.first_name || ' ' || c.last_name, s.candidate_name) as candidate_name,
+                   s.status, s.started_at, s.completed_at, s.message_count
+            FROM agents.pre_screening_sessions s
+            LEFT JOIN ats.candidates c ON c.id = s.candidate_id
             WHERE {where_clause}
-            ORDER BY started_at DESC
+            ORDER BY s.started_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
         params.extend([limit, offset])
@@ -63,11 +65,14 @@ class ConversationRepository:
         """Get a single conversation by ID."""
         return await self.pool.fetchrow(
             """
-            SELECT id, vacancy_id, pre_screening_id, session_id, candidate_name,
-                   candidate_phone, status, started_at, completed_at,
-                   message_count, channel, is_test, candidate_id
-            FROM agents.pre_screening_sessions
-            WHERE id = $1
+            SELECT s.id, s.vacancy_id, s.pre_screening_id, s.session_id,
+                   COALESCE(c.first_name || ' ' || c.last_name, s.candidate_name) as candidate_name,
+                   COALESCE(c.phone, s.candidate_phone) as candidate_phone,
+                   s.status, s.started_at, s.completed_at,
+                   s.message_count, s.channel, s.is_test, s.candidate_id
+            FROM agents.pre_screening_sessions s
+            LEFT JOIN ats.candidates c ON c.id = s.candidate_id
+            WHERE s.id = $1
             """,
             conversation_id
         )

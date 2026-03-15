@@ -98,11 +98,18 @@ async def _call_gemini(
     # Extract text, skipping thinking parts
     text = ""
     if response and response.candidates:
-        for part in response.candidates[0].content.parts:
+        candidate = response.candidates[0]
+        for part in candidate.content.parts:
             if getattr(part, "thought", False):
                 continue
             if hasattr(part, "text") and part.text:
                 text += part.text
+
+        # Warn if response was truncated by max_output_tokens
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason and str(finish_reason) == "MAX_TOKENS":
+            logger.warning(f"[LLM] Response truncated (MAX_TOKENS): {text[-80:]!r}...")
+
     return text
 
 

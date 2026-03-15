@@ -10,7 +10,7 @@ from agents.cv_analyzer import analyze_cv_base64
 from src.utils.date_utils import get_next_business_days, get_dutch_date
 
 from src.models.common import PaginatedResponse
-from src.models.vacancy import VacancyResponse, VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse
+from src.models.vacancy import VacancyResponse, VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse, VacancyUpdateRequest
 from src.models.application import ApplicationResponse, QuestionAnswerResponse, CVApplicationRequest
 from src.repositories import VacancyRepository, ApplicationRepository
 from src.services import VacancyService, ActivityService
@@ -76,6 +76,22 @@ async def get_vacancy(
         **base_response.model_dump(),
         timeline=timeline
     )
+
+
+@router.patch("/vacancies/{vacancy_id}")
+async def update_vacancy(
+    vacancy_id: str,
+    body: VacancyUpdateRequest,
+    repo: VacancyRepository = Depends(get_vacancy_repo),
+):
+    """Update vacancy fields (e.g. start_date)."""
+    vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
+
+    row = await repo.update(vacancy_uuid, start_date=body.start_date)
+    if not row:
+        raise HTTPException(status_code=404, detail="Vacancy not found")
+
+    return {"id": str(row["id"]), "start_date": row["start_date"].isoformat() if row["start_date"] else None}
 
 
 @router.post("/vacancies/{vacancy_id}/cv-application")

@@ -5,7 +5,7 @@ import uuid
 from typing import Optional, Tuple
 import asyncpg
 from src.repositories import VacancyRepository
-from src.models import VacancyResponse, ChannelsResponse, AgentStatusResponse, AgentsResponse, VacancyStatsResponse, DashboardStatsResponse
+from src.models import VacancyResponse, ChannelsResponse, VacancyAgentResponse, VacancyStatsResponse, DashboardStatsResponse
 from src.models.vacancy import RecruiterSummary, ClientSummary, ApplicantSummary
 
 
@@ -30,6 +30,31 @@ class VacancyService:
             started_at=row["started_at"],
             completed_at=row["completed_at"]
         )
+
+    @staticmethod
+    def _build_agents(row: asyncpg.Record) -> list[VacancyAgentResponse]:
+        """Build list of registered agents from vacancy row."""
+        agent_types = row.get("agent_types") or []
+        agents = []
+
+        for agent_type in agent_types:
+            if agent_type == "prescreening":
+                agents.append(VacancyAgentResponse(
+                    type="prescreening",
+                    status="online" if row["is_online"] else ("offline" if row["has_screening"] else None),
+                    total_screenings=row["candidates_count"] if row["has_screening"] else None,
+                    qualified_count=row["qualified_count"] if row["has_screening"] else None,
+                    qualification_rate=(
+                        int(row["qualified_count"] / row["candidates_count"] * 100)
+                        if row["has_screening"] and row["candidates_count"] > 0
+                        else None
+                    ),
+                    last_activity_at=row["last_activity_at"] if row["has_screening"] else None,
+                ))
+            else:
+                agents.append(VacancyAgentResponse(type=agent_type))
+
+        return agents
 
     @staticmethod
     def build_vacancy_response(
@@ -100,6 +125,7 @@ class VacancyService:
             archived_at=row["archived_at"],
             source=row["source"],
             source_id=row["source_id"],
+            start_date=row["start_date"],
             has_screening=row["has_screening"],
             published_at=row["published_at"],
             is_online=effective_is_online,
@@ -108,29 +134,7 @@ class VacancyService:
                 whatsapp=whatsapp_active,
                 cv=cv_active
             ),
-            agents=AgentsResponse(
-                prescreening=AgentStatusResponse(
-                    exists=row["has_screening"],
-                    status="online" if row["is_online"] else ("offline" if row["has_screening"] else None),
-                    # Include stats for prescreening agent
-                    total_screenings=row["candidates_count"] if row["has_screening"] else None,
-                    qualified_count=row["qualified_count"] if row["has_screening"] else None,
-                    qualification_rate=(
-                        int(row["qualified_count"] / row["candidates_count"] * 100)
-                        if row["has_screening"] and row["candidates_count"] > 0
-                        else None
-                    ),
-                    last_activity_at=row["last_activity_at"] if row["has_screening"] else None
-                ),
-                preonboarding=AgentStatusResponse(
-                    exists=row["preonboarding_agent_enabled"] or False,
-                    status=None  # No online/offline concept for preonboarding yet
-                ),
-                insights=AgentStatusResponse(
-                    exists=row["insights_agent_enabled"] or False,
-                    status=None  # No online/offline concept for insights yet
-                )
-            ),
+            agents=VacancyService._build_agents(row),
             recruiter=recruiter,
             client=client,
             applicants=applicants,

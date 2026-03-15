@@ -34,6 +34,7 @@ class OntologyChild(BaseModel):
     is_active: bool = True
     sort_order: int = 0
     metadata: Optional[dict[str, Any]] = None
+    sync_with: List["SyncWithEntry"] = Field(default_factory=list)
 
 
 class OntologyEntity(BaseModel):
@@ -54,8 +55,10 @@ class OntologyEntity(BaseModel):
     metadata: Optional[dict[str, Any]] = None
     scan_mode: ScanMode = ScanMode.single
     verification_config: Optional[dict[str, Any]] = None
+    ai_hint: Optional[str] = None
     children: List[OntologyChild] = Field(default_factory=list)
     children_count: int = 0
+    sync_with: List["SyncWithEntry"] = Field(default_factory=list)
 
 
 class DocumentTypeCreateRequest(BaseModel):
@@ -89,6 +92,7 @@ class DocumentTypeUpdateRequest(BaseModel):
     sort_order: Optional[int] = None
     scan_mode: Optional[ScanMode] = None
     verification_config: Optional[dict[str, Any]] = None
+    ai_hint: Optional[str] = None
 
 
 class VerificationFieldSchema(BaseModel):
@@ -105,6 +109,12 @@ class VerificationSchema(BaseModel):
 
     extract_fields: List[VerificationFieldSchema]
     config_fields: List[VerificationFieldSchema]
+
+
+class AttributeFieldsSchema(BaseModel):
+    """Schema returned to the frontend for building the attribute fields config UI."""
+
+    field_types: List[VerificationFieldSchema]
 
 
 class OntologyListResponse(BaseModel):
@@ -148,3 +158,37 @@ class OntologyOverviewStatsResponse(BaseModel):
     """Rich overview stats for the ontology dashboard."""
 
     stats: List[OntologyStatCard]
+
+
+# ─── Integrations & Sync ─────────────────────────────────────────────────────
+
+
+class IntegrationResponse(BaseModel):
+    """A registered integration vendor."""
+
+    id: str
+    slug: str
+    name: str
+    vendor: str
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    is_active: bool = True
+
+
+class SyncWithEntry(BaseModel):
+    """A sync_with link on a types record."""
+
+    id: str
+    integration_id: str
+    integration_slug: str
+    integration_name: str
+    external_id: Optional[str] = None
+    external_metadata: Optional[dict[str, Any]] = None
+
+
+class SyncWithAddRequest(BaseModel):
+    """Request to add a sync_with link."""
+
+    integration_id: str
+    external_id: Optional[str] = None
+    external_metadata: Optional[dict[str, Any]] = None

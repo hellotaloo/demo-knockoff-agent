@@ -115,6 +115,7 @@ from src.routers import (
     interview_analysis_router,
     ats_simulator_router,
     playground_router,
+    playground_chat_router,
     document_collection_v2_router,
     ontology_router,
     redirect_router,
@@ -320,6 +321,7 @@ app.include_router(architecture_router)
 app.include_router(interview_analysis_router)
 app.include_router(ats_simulator_router)
 app.include_router(playground_router)
+app.include_router(playground_chat_router)
 app.include_router(document_collection_v2_router)
 app.include_router(ontology_router)
 app.include_router(redirect_router)

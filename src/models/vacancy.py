@@ -1,7 +1,7 @@
 """
 Vacancy-related models.
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel
 
@@ -12,22 +12,15 @@ class ChannelsResponse(BaseModel):
     cv: bool = False
 
 
-class AgentStatusResponse(BaseModel):
-    """Status of an individual AI agent with optional stats."""
-    exists: bool = False  # True if agent is generated/configured
-    status: Optional[str] = None  # "online" | "offline" | null (not published)
-    # Stats (populated for prescreening agent)
+class VacancyAgentResponse(BaseModel):
+    """An agent registered to a vacancy."""
+    type: str  # 'prescreening', 'document_collection', etc.
+    status: Optional[str] = None  # 'online', 'offline', None
+    # Prescreening-specific stats (optional)
     total_screenings: Optional[int] = None
     qualified_count: Optional[int] = None
     qualification_rate: Optional[int] = None  # Percentage (0-100)
     last_activity_at: Optional[datetime] = None
-
-
-class AgentsResponse(BaseModel):
-    """AI agents status for a vacancy."""
-    prescreening: AgentStatusResponse = AgentStatusResponse()
-    preonboarding: AgentStatusResponse = AgentStatusResponse()
-    insights: AgentStatusResponse = AgentStatusResponse()
 
 
 class RecruiterSummary(BaseModel):
@@ -63,6 +56,11 @@ class ApplicantSummary(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class VacancyUpdateRequest(BaseModel):
+    """Request body for updating vacancy fields."""
+    start_date: Optional[date] = None
+
+
 class VacancyResponse(BaseModel):
     id: str
     title: str
@@ -74,11 +72,12 @@ class VacancyResponse(BaseModel):
     archived_at: Optional[datetime] = None
     source: Optional[str] = None
     source_id: Optional[str] = None
+    start_date: Optional[date] = None
     has_screening: bool = False  # True if pre-screening exists
     published_at: Optional[datetime] = None  # When pre-screening was published (None=draft)
     is_online: Optional[bool] = None  # None=draft/unpublished, True=online, False=offline
     channels: ChannelsResponse = ChannelsResponse()  # Voice/WhatsApp channel availability
-    agents: AgentsResponse = AgentsResponse()  # AI agents enabled for this vacancy
+    agents: list[VacancyAgentResponse] = []  # AI agents registered to this vacancy
     # Recruiter ownership
     recruiter: Optional[RecruiterSummary] = None  # Full recruiter info (includes id)
     # Client/company

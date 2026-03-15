@@ -257,7 +257,7 @@ async def reprocess_conversation(conversation_id: str):
                     kr.passed,
                     kr.score,
                     kr.rating,
-                    conv["channel"] or "chat"
+                    conv["channel"] or "whatsapp"
                 )
 
             # Insert new qualification results with motivation
@@ -274,7 +274,7 @@ async def reprocess_conversation(conversation_id: str):
                     qr.answer,
                     qr.score,
                     qr.rating,
-                    conv["channel"] or "chat",
+                    conv["channel"] or "whatsapp",
                     qr.motivation
                 )
 

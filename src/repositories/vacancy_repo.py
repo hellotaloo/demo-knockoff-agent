@@ -3,8 +3,8 @@ Vacancy repository - handles all vacancy-related database operations.
 """
 import asyncpg
 import uuid
+from datetime import date
 from typing import Optional, Tuple
-from datetime import datetime
 
 
 class VacancyRepository:
@@ -50,8 +50,7 @@ class VacancyRepository:
         # Get vacancies with application stats, recruiter info, and client info
         query = f"""
             SELECT v.id, v.title, v.company, v.location, v.description, v.status,
-                   v.created_at, v.archived_at, v.source, v.source_id,
-                   v.prescreening_agent_enabled, v.preonboarding_agent_enabled, v.insights_agent_enabled,
+                   v.created_at, v.archived_at, v.source, v.source_id, v.start_date,
                    v.recruiter_id,
                    r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                    r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
@@ -71,7 +70,11 @@ class VacancyRepository:
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
                    app_stats.avg_score,
-                   app_stats.last_activity_at
+                   app_stats.last_activity_at,
+                   COALESCE(
+                       (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
+                       ARRAY[]::text[]
+                   ) as agent_types
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
@@ -109,8 +112,7 @@ class VacancyRepository:
         """Get a single vacancy by ID with stats, recruiter info, and client info."""
         query = """
             SELECT v.id, v.title, v.company, v.location, v.description, v.status,
-                   v.created_at, v.archived_at, v.source, v.source_id,
-                   v.prescreening_agent_enabled, v.preonboarding_agent_enabled, v.insights_agent_enabled,
+                   v.created_at, v.archived_at, v.source, v.source_id, v.start_date,
                    v.recruiter_id,
                    r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                    r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
@@ -130,7 +132,11 @@ class VacancyRepository:
                    COALESCE(app_stats.completed_count, 0) as completed_count,
                    COALESCE(app_stats.qualified_count, 0) as qualified_count,
                    app_stats.avg_score,
-                   app_stats.last_activity_at
+                   app_stats.last_activity_at,
+                   COALESCE(
+                       (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
+                       ARRAY[]::text[]
+                   ) as agent_types
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
@@ -166,6 +172,18 @@ class VacancyRepository:
             vacancy_id
         )
         return result is not None
+
+    async def update(self, vacancy_id: uuid.UUID, start_date: Optional[date] = None) -> Optional[asyncpg.Record]:
+        """Update vacancy fields. Returns the updated row or None if not found."""
+        return await self.pool.fetchrow(
+            """
+            UPDATE ats.vacancies
+            SET start_date = $2
+            WHERE id = $1
+            RETURNING id, start_date
+            """,
+            vacancy_id, start_date
+        )
 
     async def get_basic_info(self, vacancy_id: uuid.UUID) -> Optional[asyncpg.Record]:
         """Get basic vacancy information without stats."""
@@ -226,8 +244,8 @@ class VacancyRepository:
             SELECT
                 a.id,
                 a.vacancy_id,
-                a.candidate_name as name,
-                a.candidate_phone as phone,
+                COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as name,
+                COALESCE(c.phone, a.candidate_phone) as phone,
                 a.channel,
                 a.status,
                 a.qualified,
@@ -239,6 +257,7 @@ class VacancyRepository:
                     WHERE ans.application_id = a.id AND ans.score IS NOT NULL
                 ) as score
             FROM ats.applications a
+            LEFT JOIN ats.candidates c ON c.id = a.candidate_id
             WHERE a.vacancy_id = ANY($1)
               AND a.is_test = false
             ORDER BY a.started_at DESC

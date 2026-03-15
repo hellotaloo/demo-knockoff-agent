@@ -1,9 +1,11 @@
 """
 Smart document & info collection planner.
 
-Analyzes a vacancy + candidate profile to produce an efficient collection plan:
-which documents and info to still collect, grouped into conversation steps,
-with deadline awareness and contract signing as the final step.
+Analyzes a vacancy + candidate profile to produce a collection plan
+with an ordered conversation_flow that the collection agent follows step by step.
+
+This agent ONLY generates the plan. A separate conversation agent handles
+the actual WhatsApp interaction with the candidate.
 
 Usage:
     python agents/document_collection/smart_collection_planner.py \
@@ -27,171 +29,221 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-SYSTEM_INSTRUCTION = """Je bent een vriendelijke digitale assistent van een Belgisch uitzendbureau.
-Je doel is om de kandidaat zo vlot en aangenaam mogelijk door de administratie te helpen.
-Je bent er om het hen MAKKELIJK te maken, niet om druk te zetten.
+# ─── System Instruction ────────────────────────────────────────────────────────
 
-KANAAL: Je communiceert met de kandidaat via WhatsApp. Dit betekent:
-- Documenten worden verzameld als FOTO'S die de kandidaat met de smartphone maakt en stuurt via WhatsApp
-- Gebruik taal als "stuur even een foto van...", "maak een foto van je ID-kaart en stuur die door"
-- Houd berichten kort en WhatsApp-vriendelijk (niet te formeel, niet te lang)
-- De kandidaat kan ook gewoon tekst typen voor gegevens zoals IBAN, adres, etc.
+SYSTEM_INSTRUCTION = """\
+Je bent de document collection planner van een Belgisch uitzendbureau.
+Je stelt een gestructureerd verzamelplan op dat een gespreksagent stap voor stap volgt
+om documenten en kandidaatgegevens te verzamelen bij de onboarding van een nieuwe kandidaat.
 
-Toon & stijl:
-- Warm, informeel maar professioneel. Denk aan een behulpzame collega, niet een ambtenaar.
-- "Ik help je graag om alles in orde te krijgen zodat je vlot kunt starten!"
-- Vermijd woorden als "verplicht", "dringend", "moeten". Gebruik liever "nodig hebben", "even regelen", "in orde maken".
-- Deadline mag vermeld worden als context ("je start over X dagen, dus laten we dat even in orde brengen"), maar nooit als dreiging.
+Je maakt ALLEEN het plan. Een andere agent voert het gesprek met de kandidaat.
 
-CONVERSATIESTIJL — ÉÉN ONDERWERP PER BERICHT:
-Dit is een conversational AI agent — GEEN formulier. De agent voert een natuurlijk gesprek via WhatsApp.
-Elke conversation_group = 1 WhatsApp-bericht = 1 onderwerp/vraag.
-De agent wacht op het antwoord van de kandidaat voordat het volgende onderwerp wordt aangesneden.
+HET PLAN = conversation_flow:
+Je output is een geordende lijst van stappen (conversation_flow) die de gespreksagent sequentieel doorloopt.
+Elke stap heeft een type, beschrijving, en optioneel items en voorwaarden (requires).
 
-Vaste volgorde:
-1. INTRO — Warm welkomstbericht: feliciteer, vermeld functie + startdatum, leg uit wat je gaat helpen regelen.
-   Eindig met: "Als iets niet duidelijk is, help ik je graag verder of schakel ik je door naar de recruiter."
-   Dit bericht stelt GEEN vragen — het is puur een warm onthaal.
-2. ID-SCAN — Altijd de eerste vraag na het intro. Vraag om een foto van voor- en achterkant van de ID-kaart.
-   Eén simpele vraag, niet gecombineerd met andere items.
-3. Daarna volgen de andere items, elk als apart bericht:
-   - Adresgegevens (straat + postcode + woonplaats mogen samen — het is 1 onderwerp)
-   - IBAN apart — leg kort uit waarom je dit vraagt (loonuitbetaling)
-   - Noodcontact apart — leg kort uit waarom (veiligheid op het werk)
-   - Afspraken (medisch onderzoek) ALLEEN als de functie dit vereist (zie regels hieronder)
-   - Aanbevolen documenten (diploma, CV) apart
-   - Vervoer / overige vragen apart
-4. LAATSTE STAP — Contract ondertekening via Yousign
+STAP TYPES:
+1. "greeting_and_consent" — Altijd stap 1. Begroeting en toestemming vragen.
+2. "identity_verification" — Identiteitsdocument verzamelen. Voeg toe als er GEEN identiteitsdocument op het dossier staat.
+   De gespreksagent bepaalt zelf welk document (ID-kaart of paspoort) en of werkvergunning nodig is.
+3. "address_collection" — Domicilie- en verblijfsadres verzamelen. Voeg toe als er GEEN adresgegevens op het dossier staan.
+   De gespreksagent bepaalt zelf de adres-flow (domicilie → gelijk aan domicilie? → verblijfsadres).
+4. "collect_attributes" — Persoonsgegevens opvragen. Bevat een lijst van items met slugs uit de attribuuttypes.
+   Voeg ALLEEN attributen toe met collection_method="ask" die nog NIET op het dossier staan.
+   Sluit deze slugs ALTIJD uit (worden door de agent afgehandeld): domicile_address, adres_gelijk_aan_domicilie, verblijfs_adres.
+5. "medical_screening" — Medisch onderzoek inplannen. ALLEEN toevoegen als de werkpostfiche medical_check=yes aangeeft.
+   Heeft altijd requires: ["identity_verification"]. Vermeld de risico's uit de werkpostfiche in details.
+6. "contract_signing" — Contract ter ondertekening aanbieden.
+   ALLEEN toevoegen als candidacy_stage="offer" EN er een regime is (full, flex, of day).
+   Heeft altijd requires: ["identity_verification", "address_collection", "collect_attributes"].
+7. "collect_documents" — Optionele documenten opvragen (VCA, diploma, CV, rijbewijs, etc.).
+   Bevat een lijst van items met slugs uit de documenttypes. Komt NA contract_signing.
+   Sluit deze slugs ALTIJD uit (worden door de agent afgehandeld): id_card, passport, prato_5, prato_9, prato_20, prato_101, prato_102.
+8. "closing" — Altijd de laatste stap. Samenvatting en afsluiting.
 
-BELANGRIJKE REGELS:
-1. Sla items over die de kandidaat AL HEEFT (zie "Bestaande gegevens")
-2. Begrijp de relatie tussen info en documenten:
-   - nationality/national_register_nr → vereist identiteitsdocument (ID-kaart of paspoort)
-   - IBAN → kan als tekst gevraagd worden, bankdocument is optioneel
-   - address_city/address_postal_code → kan verbaal, geen document nodig
-   - work_eligibility → kan werkvergunning vereisen bij niet-EU
-3. Houd rekening met de deadline — prioriteer kritieke items eerst, maar altijd in een behulpzame toon
-4. Elk documenttype heeft een "instructie" veld. Als dit gevuld is, volg die instructie EXACT.
-   Let vooral op "OWNER=AGENCY" — deze items worden NIET in documents_to_collect gezet!
-   Ze horen UITSLUITEND in agent_managed_tasks. De kandidaat hoeft hier niks voor aan te leveren.
-   Alleen documenten die de kandidaat zelf moet sturen komen in documents_to_collect (owner=candidate).
-5. Items die de agent zelf regelt (OWNER=AGENCY) komen ALLEEN in agent_managed_tasks.
-   De kandidaat wordt WEL geïnformeerd als ze ergens naartoe moeten (bv. afspraak arbeidsgeneesheer).
-   Voor afspraken: stel 3 tijdsloten voor aan de KANDIDAAT via WhatsApp zodat zij een moment kunnen kiezen.
-   Deze afspraak-keuze komt als conversation_group (want de kandidaat moet een slot kiezen).
-6. De recruiter krijgt een STATUS UPDATE van jou, zoals een junior recruiter zijn manager informeert:
-   "Hey, ik heb de documenten opgevraagd bij [naam], [status van items]."
-   NIET een takenlijst — jij doet het werk, de recruiter hoeft alleen op de hoogte te zijn.
-7. Alle message_hints moeten WhatsApp-geschikt zijn: kort, informeel, 1 onderwerp per bericht
-8. Antwoord ALTIJD in valid JSON"""
+REQUIRES (voorwaarden):
+- Een stap met requires wordt pas uitgevoerd als alle genoemde stap-types zijn afgerond.
+- Gebruik requires om afhankelijkheden vast te leggen (bv. geen contract zonder identiteitscontrole).
 
-PROMPT_TEMPLATE = """## Vacature: {title} ({company})
-### Locatie: {location}
+DOCUMENTEN & ATTRIBUTEN:
+- Items gemarkeerd als "standaard" zijn ALTIJD nodig voor elke kandidaat. Voeg ze ALTIJD toe (tenzij al op dossier).
+- Elk type kan een "Hint" veld hebben met extra context.
+- Volg de hint EXACT:
+  • "OWNER=AGENCY" → komt NIET in collect_documents of collect_attributes, alleen als apart stap-type als nodig
+  • Andere hints beschrijven de conditie (bv. "alleen als de vacature rijden vereist")
+- Types die NIET standaard zijn en GEEN hint hebben: analyseer de vacaturetekst om te bepalen of ze relevant zijn.
+- Sla items over die de kandidaat AL HEEFT (zie "Bestaande gegevens").
+- Attributen met collection_method="document" zijn auto-extracted door de agent — neem ze op in attributes_from_documents, NIET in collect_attributes.
+
+WERKPOSTFICHE:
+- Medisch onderzoek wordt NIET door jou beslist. De werkpostfiche bepaalt dit.
+- Als werkpostfiche medical_check=yes: voeg "medical_screening" stap toe met requires: ["identity_verification"].
+- Als werkpostfiche medical_risks bevat: vermeld de specifieke risico's in details.
+- Als werkpostfiche GEEN medical_check bevat: voeg GEEN medical_screening stap toe.
+
+CONTRACT:
+- Bij candidacy_stage="offer" en regime "full" of "flex": voeg "contract_signing" stap toe.
+- Bij candidacy_stage="offer" en regime "day": voeg "contract_signing" stap toe met description die vermeldt dat het dagcontract automatisch wordt gegenereerd.
+- Als candidacy_stage NIET "offer" is, of er geen regime is: voeg GEEN contract_signing stap toe.
+
+PRIORITEIT VELDEN (voor items in collect_attributes en collect_documents):
+- "required": verplicht voor de opstart. Items gemarkeerd als [standaard] zijn ALTIJD priority "required".
+- "recommended": aanbevolen maar niet blokkerend. Alleen voor items die NIET [standaard] zijn.
+
+GOAL (verplicht veld in de output):
+- "placement-collect": als candidacy_stage="offer" — actieve plaatsing, documenten verzamelen en contract tekenen.
+- "prequalification-collect": in alle andere gevallen — kandidaatprofiel opbouwen voor toekomstige matching.
+
+URGENTIE & SAMENVATTING:
+- Vermeld ALTIJD de startdatum en het aantal resterende dagen in de summary.
+- Als er minder dan 5 werkdagen resten: benadruk de urgentie.
+- Schrijf de summary vanuit eerste persoon ("Ik zal...").
+- Tel het realistisch aantal stappen en items.
+- Vermeld of dit een nieuwe kandidaat is of een bestaande kandidaat.
+- Vermeld de candidacy_stage in de context.
+
+Antwoord ALTIJD in valid JSON. Geen markdown codeblocks, geen uitleg buiten de JSON."""
+
+# ─── Prompt Template ───────────────────────────────────────────────────────────
+
+PROMPT_TEMPLATE = """\
+## Vacature: {title} ({company})
+Locatie: {location}
 
 ### Vacaturetekst:
 {description}
 
-### Deadline:
-Startdatum: {start_date} (nog {days_remaining} dagen)
-
-### Beschikbare documenttypes (ouders):
-{doc_types_list}
-
-### Beschikbare attribuuttypes:
-{attr_types_list}
-
-### Bestaande gegevens van de kandidaat:
-#### Documenten op dossier:
-{existing_docs}
-
-#### Attributen op dossier:
-{existing_attrs}
-
-### Kandidaat info:
-Naam: {candidate_name}
+### Startdatum: {start_date} (nog {days_remaining} dagen)
 
 ### Plaatsing:
 Regime: {regime_label}
+Candidacy stage: {candidacy_stage}
 {contract_note}
 
 ### Werkpostfiche:
 {werkpostfiche_section}
 
-### Opdracht:
-Analyseer de vacature en maak een verzamelplan. BELANGRIJK: elke conversation_group is 1 WhatsApp-bericht over 1 onderwerp.
-De agent wacht op het antwoord voordat het volgende bericht gestuurd wordt. Dit is een GESPREK, geen formulier.
+### Beschikbare documenttypes:
+{doc_types_list}
 
-Geef je antwoord als JSON:
+### Beschikbare attribuuttypes:
+{attr_types_list}
+
+### Kandidaat: {candidate_name}
+Status: {candidate_status}
+
+Documenten op dossier:
+{existing_docs}
+
+Attributen op dossier:
+{existing_attrs}
+
+### Opdracht:
+Analyseer de vacature en het kandidaatprofiel. Maak een verzamelplan als JSON:
+
 {{
-  "intro_message": "Warm welkomstbericht: feliciteer, vermeld functie + startdatum, leg uit dat je helpt met administratie. STEL GEEN VRAGEN in dit bericht — het is puur een warm onthaal.",
-  "documents_to_collect": [
-    {{"slug": "doc_slug", "name": "Naam", "reason": "Waarom nodig", "priority": "required|recommended"}}
-  ],
-  "attributes_to_collect": [
-    {{"slug": "attr_slug", "name": "Naam", "reason": "Waarom nodig", "collection_method": "ask|document"}}
-  ],
-  "conversation_steps": [
+  "goal": "placement-collect|prequalification-collect",
+  "context": {{
+    "vacancy": "{title}",
+    "company": "{company}",
+    "location": "{location}",
+    "start_date": "{start_date}",
+    "days_remaining": {days_remaining},
+    "regime": "{regime_value}",
+    "candidate": "{candidate_name}",
+    "candidate_status": "new|existing",
+    "candidacy_stage": "{candidacy_stage}",
+    "candidacy_context": "Korte uitleg over de fase van de kandidaat"
+  }},
+  "identity_verification": {{
+    "needed": true,
+    "reason": "Waarom identiteitscontrole nodig is"
+  }},
+  "work_eligibility_verification": {{
+    "needed": true,
+    "reason": "Waarom arbeidstoegang gecontroleerd moet worden"
+  }},
+  "address_needed": {{
+    "needed": true,
+    "reason": "Waarom adresgegevens nodig zijn"
+  }},
+  "conversation_flow": [
     {{
       "step": 1,
-      "topic": "Kort onderwerp (bv. 'ID-scan', 'Adresgegevens', 'IBAN')",
-      "items": ["slug1"],
-      "message": "Het exacte WhatsApp-bericht. Kort, warm, 1 onderwerp. De agent wacht op antwoord na dit bericht.",
-      "proposed_slots": ["tijdslot1", "tijdslot2"]
-    }}
-  ],
-  "agent_managed_tasks": [
+      "type": "greeting_and_consent",
+      "description": "Begroeting en toestemming vragen."
+    }},
     {{
-      "slug": "doc_slug",
-      "action": "Wat de agent zelf regelt (bv. medisch onderzoek inplannen)",
-      "candidate_message": "Wat je de kandidaat hierover vertelt via WhatsApp",
-      "proposed_slots": ["2026-03-14 09:00", "2026-03-14 14:00", "2026-03-17 10:00"]
+      "step": 2,
+      "type": "identity_verification",
+      "description": "Identiteitsdocument verzamelen en arbeidstoegang vaststellen.",
+      "reason": "Waarom nodig"
+    }},
+    {{
+      "step": 3,
+      "type": "address_collection",
+      "description": "Domicilie- en verblijfsadres verzamelen.",
+      "reason": "Waarom nodig"
+    }},
+    {{
+      "step": 4,
+      "type": "collect_attributes",
+      "description": "Persoonsgegevens opvragen.",
+      "items": [
+        {{"slug": "attr_slug", "method": "ask", "priority": "required|recommended", "reason": "Waarom nodig"}}
+      ]
+    }},
+    {{
+      "step": 5,
+      "type": "medical_screening",
+      "description": "Medisch onderzoek inplannen.",
+      "requires": ["identity_verification"],
+      "details": "Risico's uit werkpostfiche"
+    }},
+    {{
+      "step": 6,
+      "type": "contract_signing",
+      "description": "Contract ter ondertekening aanbieden.",
+      "requires": ["identity_verification", "address_collection", "collect_attributes"]
+    }},
+    {{
+      "step": 7,
+      "type": "collect_documents",
+      "description": "Optionele documenten opvragen.",
+      "items": [
+        {{"slug": "doc_slug", "priority": "required|recommended", "reason": "Waarom nodig"}}
+      ]
+    }},
+    {{
+      "step": 8,
+      "type": "closing",
+      "description": "Samenvatting en afsluiting."
     }}
   ],
-  "recruiter_notification": "Status update van de agent naar het team (Teams-bericht). Toon als een junior recruiter die zijn manager informeert. NIET een takenlijst.",
-  "already_complete": ["slug1", "slug2"],
-  "final_step": {{
-    "action": "contract_signing",
-    "message": "Warm bericht wanneer alles compleet is en contract klaarstaat via Yousign"
+  "attributes_from_documents": [
+    {{"slug": "attr_slug", "reason": "Waarom nodig"}}
+  ],
+  "already_known": {{
+    "documents": ["slug1"],
+    "attributes": ["slug1"]
   }},
-  "summary": "Korte samenvatting voor de admin (3-4 regels, Nederlands). Wat gaat de agent doen? Hoeveel documenten/gegevens? Welke prioriteiten? Wordt er een afspraak ingepland? Eindigt met contract of dossier-voorbereiding? Dit wordt getoond in de UI zodat de recruiter in één oogopslag ziet wat het plan is.",
-  "deadline_note": "Samenvatting (behulpzame toon)"
+  "summary": "Korte samenvatting (3-4 regels, Nederlands). Wie, wat, hoeveel stappen, urgentie."
 }}
 
-Richtlijnen:
-- Identiteitsdocumenten zijn bijna altijd nodig voor uitzendarbeid
-- Werkvergunning bij niet-EU kandidaten
-- Rijbewijs alleen als de functie rijden vereist
-- VCA bij bouw/industrie/logistiek
-- Wees selectief: niet elk document/attribuut is voor elke vacature nodig
+BELANGRIJK:
+- Laat stappen WEG die niet van toepassing zijn (bv. geen medical_screening als werkpostfiche dat niet vereist).
+- Laat collect_documents WEG als er geen relevante documenten zijn.
+- Pas de step-nummers aan zodat ze opeenvolgend zijn.
+- Items in collect_attributes en collect_documents bevatten ALLEEN slugs, geen velddefinities."""
 
-MEDISCH ONDERZOEK (arbeidsgeneeskundig onderzoek / medische schifting):
-- Dit wordt NIET door de AI beslist. De werkpostfiche bepaalt of medisch onderzoek nodig is.
-- Als de werkpostfiche medical_check=yes bevat: voeg medisch onderzoek toe als agent_managed_task met tijdsloten.
-- Als de werkpostfiche medical_risks bevat: vermeld de specifieke risico's in het bericht aan de kandidaat.
-- Als de werkpostfiche GEEN medical_check bevat: voeg GEEN medisch onderzoek toe. Nooit zelf beslissen.
-- Dit is een harde regel — de recruiter beheert dit via de werkpostfiche op de vacature.
 
-CONVERSATIE-FLOW (conversation_steps):
-- Elke stap = 1 WhatsApp-bericht = 1 onderwerp. De agent WACHT op antwoord voor het volgende bericht.
-- Stap 1 is ALTIJD de ID-scan (foto voor- en achterkant). Nooit gecombineerd met andere vragen.
-- Adresgegevens (straat, postcode, woonplaats) mogen samen in 1 bericht — het is 1 onderwerp.
-- IBAN is een apart bericht — leg kort uit waarom (loonuitbetaling).
-- Noodcontact is een apart bericht — leg kort uit waarom (veiligheid op het werk).
-- Afspraken (medisch onderzoek), INDIEN van toepassing, zijn een apart bericht met tijdsloten.
-- Aanbevolen documenten (diploma, CV) mogen samen in 1 bericht.
-- Elk bericht is kort, warm en stelt maximaal 1 vraag. Denk WhatsApp, niet e-mail.
+# ─── Helpers ────────────────────────────────────────────────────────────────────
 
-- agent_managed_tasks bevat wat de agent ZELF doet achter de schermen (boeken, invullen, opvolgen)
-  De kandidaat wordt enkel geïnformeerd als ze ergens naartoe moeten (bv. afspraak arbeidsgeneesheer)
-  Laat agent_managed_tasks LEEG als er geen taken zijn die de agent zelf regelt.
-- recruiter_notification: schrijf een INFORMEEL status update bericht (voor Teams) alsof je een collega bijpraat
-  Toon: "Hey team, voor [naam] ([functie], start [datum]): ik heb de documenten opgevraagd, [status van andere items]."
-  NIET: "□ doe dit □ doe dat" — de agent doet het werk, de recruiter wordt alleen geïnformeerd
-- Eindig altijd met contract ondertekening via Yousign (final_step)
-- Alle berichten in een warme, behulpzame toon — je bent er om het makkelijk te maken!
-- intro_message is het EERSTE bericht (geen vragen!) dat de kandidaat ontvangt via WhatsApp. Maak het persoonlijk en positief!
-  Voorbeeld: "Hey {candidate_name}! 🎉 Goed nieuws — over {days_remaining} dagen start je als {title} bij {company}! Om alles vlot te laten verlopen, help ik je even met de administratie. Ik stel je een paar vragen en vraag enkele documenten op. Heel simpel: je kunt gewoon foto's sturen via WhatsApp. Als iets niet duidelijk is, help ik je graag verder of schakel ik je door naar de recruiter."
-- Alle berichten zijn WhatsApp-berichten: kort, informeel, 1 onderwerp per bericht"""
+# Slugs handled by the agent — excluded from planner output
+IDENTITY_DOC_SLUGS = {"id_card", "passport"}
+WORK_PERMIT_SLUGS = {"prato_5", "prato_9", "prato_20", "prato_101", "prato_102"}
+HARDCODED_DOC_SLUGS = IDENTITY_DOC_SLUGS | WORK_PERMIT_SLUGS
+HARDCODED_ATTR_SLUGS = {"domicile_address", "domicilie_adres", "adres_gelijk_aan_domicilie", "verblijfs_adres"}
 
 
 def get_ai_instructions(dt: dict) -> str | None:
@@ -199,7 +251,6 @@ def get_ai_instructions(dt: dict) -> str | None:
     vc = dt.get("verification_config")
     if vc and isinstance(vc, dict):
         return vc.get("additional_instructions")
-    # verification_config is stored as jsonb, asyncpg may return it as a string
     if vc and isinstance(vc, str):
         import json as _json
         try:
@@ -210,20 +261,42 @@ def get_ai_instructions(dt: dict) -> str | None:
 
 
 def build_doc_types_list(doc_types: list) -> str:
+    """Build document types list for the LLM prompt, excluding hardcoded types."""
     lines = []
     for dt in doc_types:
-        line = f"- {dt['slug']}: {dt['name']} ({dt['category']})"
-        instructions = get_ai_instructions(dt)
-        if instructions:
-            line += f"\n  Instructie: {instructions}"
+        if dt["slug"] in HARDCODED_DOC_SLUGS:
+            continue
+        parts = [dt['category']]
+        line = f"- {dt['slug']}: {dt['name']} ({', '.join(parts)})"
+        if dt.get("is_default"):
+            line += " [standaard]"
+        if dt.get("description"):
+            line += f"\n  Beschrijving: {dt['description']}"
+        if dt.get("ai_hint"):
+            line += f"\n  Hint: {dt['ai_hint']}"
+        else:
+            instructions = get_ai_instructions(dt)
+            if instructions:
+                line += f"\n  Hint: {instructions}"
         lines.append(line)
     return "\n".join(lines) or "(geen)"
 
 
 def build_attr_types_list(attr_types: list) -> str:
+    """Build attribute types list for the LLM prompt, excluding hardcoded types."""
     lines = []
     for at in attr_types:
-        lines.append(f"- {at['slug']}: {at['name']} ({at['data_type']}, {at['category']})")
+        if at["slug"] in HARDCODED_ATTR_SLUGS:
+            continue
+        parts = [at['data_type'], at['category']]
+        line = f"- {at['slug']}: {at['name']} ({', '.join(parts)})"
+        if at.get("is_default"):
+            line += " [standaard]"
+        if at.get("description"):
+            line += f"\n  Beschrijving: {at['description']}"
+        if at.get("ai_hint"):
+            line += f"\n  Hint: {at['ai_hint']}"
+        lines.append(line)
     return "\n".join(lines) or "(geen)"
 
 
@@ -233,7 +306,7 @@ def build_existing_docs(docs: list) -> str:
     lines = []
     for d in docs:
         status = d.get("status", "unknown")
-        verified = "✓" if d.get("verification_passed") else "○"
+        verified = "V" if d.get("verification_passed") else "O"
         lines.append(f"- {d['document_type_slug']}: {d['document_type_name']} [{status}] {verified}")
     return "\n".join(lines)
 
@@ -243,9 +316,8 @@ def build_existing_attrs(attrs: list) -> str:
         return "Geen attributen op dossier."
     lines = []
     for a in attrs:
-        verified = "✓" if a.get("verified") else "○"
+        verified = "V" if a.get("verified") else "O"
         value = a.get("value", "")
-        # Truncate long values
         if len(value) > 50:
             value = value[:47] + "..."
         lines.append(f"- {a['type_slug']}: {a['type_name']} = \"{value}\" {verified}")
@@ -278,7 +350,6 @@ def build_werkpostfiche_section(params: list) -> str:
         if medical_risks:
             risk_names = [r.get("name", "?") for r in medical_risks]
             lines.append(f"- Risico's: {', '.join(risk_names)}")
-            lines.append("  Vermeld deze risico's in het bericht aan de kandidaat zodat ze weten waarvoor het onderzoek dient.")
         else:
             lines.append("- Risico's: niet gespecificeerd")
     else:
@@ -293,120 +364,18 @@ def parse_response(response_text: str) -> dict:
         lines = text.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]
         text = "\n".join(lines).strip()
-    return json.loads(text)
+    plan = json.loads(text)
+
+    # Basic validation
+    if "conversation_flow" not in plan:
+        raise ValueError("Plan missing 'conversation_flow' field")
+    if not isinstance(plan["conversation_flow"], list):
+        raise ValueError("'conversation_flow' must be a list")
+
+    return plan
 
 
-def generate_markdown(plan: dict, vacancy, candidate_name: str, start_date: date, days_remaining: int) -> str:
-    """Generate a structured markdown report from the collection plan."""
-    lines = [
-        f"# Verzamelplan: {vacancy['title']} ({vacancy['company']})",
-        f"",
-        f"| | |",
-        f"|---|---|",
-        f"| **Kandidaat** | {candidate_name} |",
-        f"| **Vacature** | {vacancy['title']} |",
-        f"| **Bedrijf** | {vacancy['company']} |",
-        f"| **Locatie** | {vacancy['location']} |",
-        f"| **Startdatum** | {start_date} (nog {days_remaining} dagen) |",
-        f"| **Kanaal** | WhatsApp |",
-        f"",
-    ]
-
-    # Intro message
-    intro = plan.get("intro_message")
-    if intro:
-        lines.append("## Welkomstbericht (WhatsApp)")
-        lines.append(f"> {intro}")
-        lines.append("")
-
-    # Already complete
-    complete = plan.get("already_complete", [])
-    if complete:
-        lines.append("## Al compleet")
-        for item in complete:
-            lines.append(f"- [x] {item}")
-        lines.append("")
-
-    # Documents from candidate
-    docs = plan.get("documents_to_collect", [])
-    if docs:
-        lines.append("## Documenten van kandidaat")
-        for d in docs:
-            priority = "**NODIG**" if d.get("priority") == "required" else "aanbevolen"
-            lines.append(f"- [ ] **{d.get('name', '?')}** (`{d.get('slug', '?')}`) — {priority}")
-            lines.append(f"  - {d.get('reason', '')}")
-        lines.append("")
-
-    # Attributes to collect
-    attrs = plan.get("attributes_to_collect", [])
-    if attrs:
-        lines.append("## Informatie te verzamelen")
-        for a in attrs:
-            method = "💬 vragen" if a.get("collection_method") == "ask" else "📄 uit document"
-            lines.append(f"- [ ] **{a.get('name', '?')}** (`{a.get('slug', '?')}`) — {method}")
-            lines.append(f"  - {a.get('reason', '')}")
-        lines.append("")
-
-    # Conversation flow
-    steps = plan.get("conversation_steps", [])
-    if steps:
-        lines.append("## Gesprek (WhatsApp)")
-        lines.append("*Elk bericht = 1 onderwerp. De agent wacht op antwoord voor het volgende bericht.*")
-        lines.append("")
-        for s in steps:
-            step_nr = s.get("step", "?")
-            topic = s.get("topic", "?")
-            items = s.get("items", [])
-            lines.append(f"### Bericht {step_nr}: {topic}")
-            if items:
-                lines.append(f"**Items:** {', '.join(items)}")
-                lines.append("")
-            lines.append(f"> {s.get('message', '')}")
-            if s.get("proposed_slots"):
-                lines.append(f"")
-                lines.append(f"📅 **Kies een moment:** {', '.join(s['proposed_slots'])}")
-            lines.append("")
-
-    # Agent managed tasks
-    agent_tasks = plan.get("agent_managed_tasks", [])
-    if agent_tasks:
-        lines.append("## Agent regelt (achter de schermen)")
-        for a in agent_tasks:
-            lines.append(f"- [ ] **{a.get('slug', '?')}** — {a.get('action', '')}")
-            if a.get("proposed_slots"):
-                lines.append(f"  - 📅 Tijdsloten: {', '.join(a['proposed_slots'])}")
-            if a.get("candidate_message"):
-                lines.append(f"  - 💬 Aan kandidaat: *\"{a['candidate_message']}\"*")
-        lines.append("")
-
-    # Recruiter notification
-    recruiter_msg = plan.get("recruiter_notification")
-    if recruiter_msg:
-        lines.append("## Status update voor recruiter (Teams)")
-        lines.append(f"> {recruiter_msg}")
-        lines.append("")
-
-    # Final step
-    final = plan.get("final_step")
-    if final:
-        lines.append("## Laatste stap: Contract ondertekening")
-        lines.append(f"> {final.get('message', '') or final.get('message_hint', '')}")
-        lines.append("")
-
-    # Deadline & reasoning
-    deadline_note = plan.get("deadline_note")
-    if deadline_note:
-        lines.append(f"---")
-        lines.append(f"⏰ **{deadline_note}**")
-        lines.append("")
-
-    summary = plan.get("summary")
-    if summary:
-        lines.append(f"## Samenvatting")
-        lines.append(f"{summary}")
-
-    return "\n".join(lines)
-
+# ─── Core Plan Generation ──────────────────────────────────────────────────────
 
 async def generate_collection_plan(
     pool,
@@ -415,11 +384,14 @@ async def generate_collection_plan(
     workspace_id: uuid.UUID = DEFAULT_WORKSPACE_ID,
     start_date: date | None = None,
     regime: str | None = None,
+    candidacy_stage: str = "offer",
+    is_new_candidate: bool = True,
 ) -> dict:
     """
     Generate a smart collection plan for a candidate + vacancy.
 
-    This is the core planner logic, callable from services and CLI.
+    Returns a plan with conversation_flow — an ordered list of steps
+    that the collection agent follows sequentially.
 
     Args:
         pool: asyncpg connection pool
@@ -427,10 +399,12 @@ async def generate_collection_plan(
         candidate_id: The candidate UUID
         workspace_id: Workspace UUID (default: DEFAULT_WORKSPACE_ID)
         start_date: Expected start date (default: 7 days from now)
+        regime: Employment regime (full, flex, day)
+        candidacy_stage: Current candidacy stage (offer, qualified, etc.)
+        is_new_candidate: Whether this is a new candidate with no prior dossier
 
     Returns:
-        dict with the full collection plan JSON (intro_message, documents_to_collect,
-        conversation_steps, summary, etc.)
+        dict with conversation_flow, context, summary, etc.
 
     Raises:
         ValueError: If candidate or vacancy not found
@@ -493,23 +467,32 @@ async def generate_collection_plan(
     regime_labels = {"full": "Voltijds", "flex": "Flex", "day": "Dagcontract"}
     regime_label = regime_labels.get(regime, "Onbekend") if regime else "Niet opgegeven"
 
-    if not regime:
+    if not regime or candidacy_stage != "offer":
         contract_note = (
-            "GEEN PLAATSING: De kandidaat zit nog niet in de aanbod-fase. "
+            "GEEN CONTRACT: De kandidaat zit niet in de aanbod-fase of er is geen plaatsing. "
             "Verzamel enkel documenten om het dossier voor te bereiden. "
-            "Geen contract ondertekening — laat final_step leeg (null)."
+            "Voeg GEEN contract_signing stap toe."
         )
     elif regime == "day":
         contract_note = (
-            "DAGCONTRACT: Het contract wordt automatisch gegenereerd en 15 minuten voor aanvang "
-            "ter ondertekening verstuurd via Yousign. Dit is een vast proces — geen LLM-planning nodig. "
-            "Voeg dit toe als agent_managed_task met slug 'contract_signing_day'."
+            "DAGCONTRACT: Het contract wordt automatisch gegenereerd en voor aanvang "
+            "ter ondertekening verstuurd via Yousign. "
+            "Voeg een contract_signing stap toe met requires: [\"identity_verification\", \"address_collection\", \"collect_attributes\"]."
         )
     else:
         contract_note = (
             "CONTRACT: Na het verzamelen van alle documenten wordt het contract gegenereerd "
-            "en via Yousign ter ondertekening verstuurd. Voeg dit toe als final_step."
+            "en via Yousign ter ondertekening verstuurd. "
+            "Voeg een contract_signing stap toe met requires: [\"identity_verification\", \"address_collection\", \"collect_attributes\"]."
         )
+
+    # Build candidate status line
+    if is_new_candidate:
+        candidate_status = "Nieuwe kandidaat — geen bestaand dossier"
+    elif existing_docs or existing_attrs:
+        candidate_status = "Bestaande kandidaat — dossier gedeeltelijk ingevuld"
+    else:
+        candidate_status = "Bestaande kandidaat"
 
     # Build prompt
     prompt = PROMPT_TEMPLATE.format(
@@ -520,7 +503,10 @@ async def generate_collection_plan(
         start_date=start_date.isoformat(),
         days_remaining=days_remaining,
         candidate_name=candidate_name,
+        candidate_status=candidate_status,
         regime_label=regime_label,
+        regime_value=regime or "none",
+        candidacy_stage=candidacy_stage,
         contract_note=contract_note,
         werkpostfiche_section=build_werkpostfiche_section(werkpostfiche_params),
         doc_types_list=build_doc_types_list(doc_types),
@@ -532,16 +518,24 @@ async def generate_collection_plan(
     response = await generate(
         prompt=prompt,
         system_instruction=SYSTEM_INSTRUCTION,
-        temperature=0.2,
+        temperature=0,
+        thinking_budget=2048,
     )
 
     plan = parse_response(response)
 
-    logger.info(f"Collection plan generated: {len(plan.get('conversation_steps', []))} steps, "
-                f"{len(plan.get('documents_to_collect', []))} docs to collect")
+    # Count items in conversation_flow for logging
+    flow = plan.get("conversation_flow", [])
+    doc_items = sum(len(s.get("items", [])) for s in flow if s.get("type") == "collect_documents")
+    attr_items = sum(len(s.get("items", [])) for s in flow if s.get("type") == "collect_attributes")
+
+    logger.info(f"Collection plan generated: "
+                f"{len(flow)} steps, {doc_items} docs, {attr_items} attrs")
 
     return plan
 
+
+# ─── CLI ────────────────────────────────────────────────────────────────────────
 
 async def main():
     parser = argparse.ArgumentParser(description="Smart document & info collection planner")
@@ -566,12 +560,10 @@ async def main():
     workspace_id = uuid.UUID(args.workspace_id)
     vacancy_id = uuid.UUID(args.vacancy_id)
 
-    # Parse start date
     if args.start_date:
         start_date = date.fromisoformat(args.start_date)
     else:
         start_date = date.today() + timedelta(days=7)
-    days_remaining = (start_date - date.today()).days
 
     pool = await get_db_pool()
 
@@ -587,6 +579,25 @@ async def main():
             return
         candidate_id = candidate["id"]
 
+    # Auto-fetch regime and candidacy stage from placement/candidacy
+    placement = await pool.fetchrow(
+        "SELECT regime, start_date FROM ats.placements WHERE candidate_id = $1 AND vacancy_id = $2",
+        candidate_id, vacancy_id,
+    )
+    regime = placement["regime"] if placement else None
+    if placement and placement["start_date"]:
+        start_date = placement["start_date"]
+    if regime:
+        logger.info(f"Auto-detected regime from placement: {regime}")
+
+    # Auto-fetch candidacy stage
+    candidacy = await pool.fetchrow(
+        "SELECT stage FROM ats.candidacies WHERE candidate_id = $1 AND vacancy_id = $2 ORDER BY created_at DESC LIMIT 1",
+        candidate_id, vacancy_id,
+    )
+    candidacy_stage = candidacy["stage"] if candidacy else "unknown"
+    logger.info(f"Candidacy stage: {candidacy_stage}")
+
     try:
         plan = await generate_collection_plan(
             pool=pool,
@@ -594,132 +605,15 @@ async def main():
             candidate_id=candidate_id,
             workspace_id=workspace_id,
             start_date=start_date,
+            regime=regime,
+            candidacy_stage=candidacy_stage,
         )
     except ValueError as e:
         logger.error(str(e))
         await pool.close()
         return
 
-    # Fetch vacancy + candidate for display
-    vacancy = await pool.fetchrow(
-        "SELECT id, title, company, location, description FROM ats.vacancies WHERE id = $1",
-        vacancy_id,
-    )
-    candidate_repo = CandidateRepository(pool)
-    candidate = await candidate_repo.get_by_id(candidate_id)
-    candidate_name = candidate.get("full_name") or "Onbekend"
-
-    # Print the plan
-    logger.info(f"{'━' * 70}")
-    logger.info(f"VERZAMELPLAN — {vacancy['title']} ({vacancy['company']})")
-    logger.info(f"Kandidaat: {candidate_name}")
-    logger.info(f"Deadline: {start_date} (nog {days_remaining} dagen)")
-    logger.info(f"{'━' * 70}\n")
-
-    # Intro message
-    intro = plan.get("intro_message")
-    if intro:
-        logger.info(f"📱 Welkomstbericht (WhatsApp):")
-        logger.info(f"   \"{intro}\"")
-        logger.info("")
-
-    # Already complete
-    complete = plan.get("already_complete", [])
-    if complete:
-        logger.info(f"✅ Al compleet ({len(complete)}):")
-        for item in complete:
-            logger.info(f"   ✓ {item}")
-        logger.info("")
-
-    # Documents to collect
-    docs = plan.get("documents_to_collect", [])
-    if docs:
-        logger.info(f"📄 Documenten van kandidaat ({len(docs)}):")
-        for d in docs:
-            priority = "⚠️" if d.get("priority") == "required" else "○"
-            logger.info(f"   {priority} {d.get('slug', '?')}: {d.get('name', '?')}")
-            logger.info(f"     {d.get('reason', '-')}")
-        logger.info("")
-
-    # Attributes to collect
-    attrs = plan.get("attributes_to_collect", [])
-    if attrs:
-        logger.info(f"📋 Informatie te verzamelen ({len(attrs)}):")
-        for a in attrs:
-            method = "💬" if a.get("collection_method") == "ask" else "📄"
-            logger.info(f"   {method} {a.get('slug', '?')}: {a.get('name', '?')}")
-            logger.info(f"     Reden: {a.get('reason', '-')}")
-        logger.info("")
-
-    # Conversation steps
-    steps = plan.get("conversation_steps", [])
-    if steps:
-        logger.info(f"💬 Gesprek ({len(steps)} berichten):")
-        for s in steps:
-            step_nr = s.get("step", "?")
-            topic = s.get("topic", "?")
-            items = s.get("items", [])
-            logger.info(f"\n   Bericht {step_nr}: {topic}")
-            if items:
-                logger.info(f"   Items: {', '.join(items)}")
-            logger.info(f"   💬 \"{s.get('message', '')}\"")
-            if s.get("proposed_slots"):
-                logger.info(f"   📅 Tijdsloten: {', '.join(s['proposed_slots'])}")
-        logger.info("")
-
-    # Agent managed tasks
-    agent_tasks = plan.get("agent_managed_tasks", [])
-    if agent_tasks:
-        logger.info(f"🤖 Agent regelt achter de schermen ({len(agent_tasks)}):")
-        for a in agent_tasks:
-            logger.info(f"   → {a.get('slug', '?')}: {a.get('action', '?')}")
-            if a.get("proposed_slots"):
-                logger.info(f"     📅 Tijdsloten: {', '.join(a['proposed_slots'])}")
-            if a.get("candidate_message"):
-                logger.info(f"     💬 Aan kandidaat: \"{a['candidate_message']}\"")
-        logger.info("")
-
-    # Recruiter notification
-    recruiter_msg = plan.get("recruiter_notification")
-    if recruiter_msg:
-        logger.info(f"📨 Status update voor recruiter (Teams):")
-        logger.info(f"   \"{recruiter_msg}\"")
-        logger.info("")
-
-    # Final step
-    final = plan.get("final_step")
-    if final:
-        logger.info(f"🎉 Laatste stap: {final.get('action', 'contract_signing')}")
-        logger.info(f"   💬 \"{final.get('message', '') or final.get('message_hint', '')}\"")
-        logger.info("")
-
-    # Deadline note
-    deadline_note = plan.get("deadline_note")
-    if deadline_note:
-        logger.info(f"⏰ {deadline_note}")
-        logger.info("")
-
-    # Summary
-    summary = plan.get("summary")
-    if summary:
-        logger.info(f"📋 Samenvatting (voor UI):")
-        logger.info(f"   {summary}")
-
-    logger.info(f"\n{'━' * 70}")
-
-    # Export to markdown
-    md = generate_markdown(plan, vacancy, candidate_name, start_date, days_remaining)
-    plans_dir = Path(__file__).parent / "plans"
-    plans_dir.mkdir(exist_ok=True)
-
-    safe_title = (vacancy["title"] or "vacancy").replace(" ", "_").replace("/", "-")[:30]
-    safe_name = (candidate_name).replace(" ", "_")[:20]
-    md_filename = f"{safe_title}_{safe_name}_{date.today().isoformat()}.md"
-    md_path = plans_dir / md_filename
-
-    md_path.write_text(md, encoding="utf-8")
-    logger.info(f"\n📝 Plan opgeslagen: {md_path}")
-
+    print(json.dumps(plan, indent=2, ensure_ascii=False))
     await pool.close()
 
 

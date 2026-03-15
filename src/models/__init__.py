@@ -13,8 +13,7 @@ from .enums import VacancyStatus, VacancySource, InterviewChannel
 # Vacancy models
 from .vacancy import (
     ChannelsResponse,
-    AgentStatusResponse,
-    AgentsResponse,
+    VacancyAgentResponse,
     RecruiterSummary,
     ClientSummary,
     ApplicantSummary,
@@ -176,8 +175,7 @@ __all__ = [
     "InterviewChannel",
     # Vacancy
     "ChannelsResponse",
-    "AgentStatusResponse",
-    "AgentsResponse",
+    "VacancyAgentResponse",
     "RecruiterSummary",
     "ClientSummary",
     "ApplicantSummary",

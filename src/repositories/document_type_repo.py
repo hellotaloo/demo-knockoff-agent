@@ -12,7 +12,7 @@ _COLUMNS = """
     requires_front_back, is_verifiable, icon, is_default,
     is_active, sort_order, parent_id,
     prato_flex_type_id, prato_flex_detail_type_id,
-    scan_mode, verification_config,
+    scan_mode, verification_config, ai_hint,
     created_at, updated_at
 """
 
@@ -241,7 +241,7 @@ class DocumentTypeRepository:
         for field in [
             "name", "description", "category", "requires_front_back",
             "is_verifiable", "icon", "is_default", "is_active", "sort_order",
-            "scan_mode",
+            "scan_mode", "ai_hint",
         ]:
             if field in kwargs and kwargs[field] is not None:
                 updates.append(f"{field} = ${idx}")

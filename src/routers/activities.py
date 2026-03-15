@@ -38,6 +38,10 @@ class WorkflowStep(BaseModel):
 class TaskRow(BaseModel):
     """A single row in the tasks table."""
     id: str
+    candidate_id: Optional[str]
+    vacancy_id: Optional[str]
+    application_id: Optional[str]
+    collection_id: Optional[str]
     candidate_name: Optional[str]
     vacancy_title: Optional[str]
     workflow_type: str
@@ -445,6 +449,10 @@ async def get_tasks(
 
         task = TaskRow(
             id=wf["id"],
+            candidate_id=context.get("candidate_id"),
+            vacancy_id=context.get("vacancy_id"),
+            application_id=context.get("application_id"),
+            collection_id=context.get("collection_id"),
             candidate_name=context.get("candidate_name"),
             vacancy_title=context.get("vacancy_title"),
             workflow_type=wf["workflow_type"],

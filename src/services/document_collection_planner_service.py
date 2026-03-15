@@ -9,6 +9,7 @@ Triggered automatically when a candidacy transitions to OFFER stage.
 import json
 import logging
 import uuid
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import asyncpg
@@ -27,6 +28,36 @@ class DocumentCollectionPlannerService:
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
         self.activity_service = ActivityService(pool)
+
+    @staticmethod
+    def _calculate_sla_seconds(placement_start_date: Optional[date]) -> int:
+        """
+        Calculate the SLA timeout in seconds for document collection.
+
+        Default SLA is 7 days. If the placement start date falls before that,
+        the SLA is set to (start_date - 1 day) so documents are collected
+        before the placement begins.
+        """
+        default_sla_seconds = 7 * 24 * 3600  # 7 days
+
+        if not placement_start_date:
+            return default_sla_seconds
+
+        now = datetime.now(timezone.utc)
+        placement_deadline = datetime(
+            placement_start_date.year,
+            placement_start_date.month,
+            placement_start_date.day,
+            tzinfo=timezone.utc,
+        ) - timedelta(days=1)
+
+        seconds_until_deadline = int((placement_deadline - now).total_seconds())
+
+        if seconds_until_deadline < default_sla_seconds:
+            # Ensure at least 1 hour SLA even if placement is very soon
+            return max(seconds_until_deadline, 3600)
+
+        return default_sla_seconds
 
     async def generate_and_store_plan(
         self,
@@ -147,7 +178,7 @@ class DocumentCollectionPlannerService:
                     "triggered_by": triggered_by,
                 },
                 initial_step="generating_plan",
-                timeout_seconds=7 * 24 * 3600,  # 7 day SLA for document collection
+                timeout_seconds=self._calculate_sla_seconds(start_date),
             )
             logger.info(f"Created workflow {workflow_id} for document collection {collection_id}")
         except Exception as e:

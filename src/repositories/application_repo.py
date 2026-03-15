@@ -64,11 +64,12 @@ class ApplicationRepository:
         count_query = f"SELECT COUNT(*) FROM ats.applications a {where_clause}"
         total = await self.pool.fetchval(count_query, *params)
 
-        # Get applications - use the application's own candidate_name (unique per conversation)
+        # Get applications - pull candidate name from candidates table (SSOT),
+        # falling back to denormalized field if no candidate record linked
         query = f"""
             SELECT a.id, a.vacancy_id, a.candidate_id,
-                   a.candidate_name,
-                   a.candidate_phone,
+                   COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name,
+                   COALESCE(c.phone, a.candidate_phone) as candidate_phone,
                    c.email as candidate_email,
                    a.channel, a.status, a.qualified,
                    a.started_at, a.completed_at, a.interaction_seconds,
@@ -90,8 +91,8 @@ class ApplicationRepository:
         return await self.pool.fetchrow(
             """
             SELECT a.id, a.vacancy_id, a.candidate_id,
-                   a.candidate_name,
-                   a.candidate_phone,
+                   COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name,
+                   COALESCE(c.phone, a.candidate_phone) as candidate_phone,
                    c.email as candidate_email,
                    a.channel, a.status, a.qualified,
                    a.started_at, a.completed_at, a.interaction_seconds,
@@ -287,7 +288,8 @@ class ApplicationRepository:
         if exclude_completed:
             return await self.pool.fetchrow(
                 """
-                SELECT a.id, a.vacancy_id, a.candidate_name,
+                SELECT a.id, a.vacancy_id,
+                       COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name,
                        a.channel, a.status, a.qualified, a.candidate_id
                 FROM ats.applications a
                 LEFT JOIN ats.candidates c ON c.id = a.candidate_id
@@ -300,7 +302,8 @@ class ApplicationRepository:
         else:
             return await self.pool.fetchrow(
                 """
-                SELECT a.id, a.vacancy_id, a.candidate_name,
+                SELECT a.id, a.vacancy_id,
+                       COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name,
                        a.channel, a.status, a.qualified, a.candidate_id
                 FROM ats.applications a
                 LEFT JOIN ats.candidates c ON c.id = a.candidate_id
@@ -340,7 +343,8 @@ class ApplicationRepository:
         """Find all test applications that need reprocessing."""
         return await self.pool.fetch(
             """
-            SELECT a.id, a.vacancy_id, a.candidate_name
+            SELECT a.id, a.vacancy_id,
+                   COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name
             FROM ats.applications a
             LEFT JOIN ats.candidates c ON c.id = a.candidate_id
             WHERE a.is_test = true

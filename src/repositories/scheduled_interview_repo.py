@@ -204,10 +204,12 @@ class ScheduledInterviewRepository:
         return await self.pool.fetchrow(
             """
             SELECT sc.vacancy_id, sc.candidate_id, sc.application_id,
-                   sc.candidate_name, sc.candidate_phone,
+                   COALESCE(c.first_name || ' ' || c.last_name, sc.candidate_name) as candidate_name,
+                   COALESCE(c.phone, sc.candidate_phone) as candidate_phone,
                    v.title as vacancy_title
             FROM agents.pre_screening_sessions sc
             JOIN ats.vacancies v ON v.id = sc.vacancy_id
+            LEFT JOIN ats.candidates c ON c.id = sc.candidate_id
             WHERE sc.session_id = $1 AND sc.channel = 'voice'
             """,
             conversation_id

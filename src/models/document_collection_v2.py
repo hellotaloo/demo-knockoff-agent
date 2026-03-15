@@ -5,7 +5,7 @@ Covers: document types, collection configs, requirements,
 document collections, messages, uploads, and candidate documents.
 """
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Any, Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -246,13 +246,14 @@ class CollectionItemStatusResponse(BaseModel):
     slug: str
     name: str
     type: str  # "document" | "attribute" | "task"
-    priority: str  # "required" | "recommended"
+    priority: str  # "required" | "recommended" | "conditional"
     status: str  # pending | asked | received | verified | failed | skipped | scheduled
-    value: Optional[str] = None  # For attributes: the collected value
+    value: Optional[Any] = None  # For attributes: string or dict for structured values
     upload_id: Optional[str] = None
     verification_passed: Optional[bool] = None
     uploaded_at: Optional[datetime] = None
     scheduled_at: Optional[datetime] = None  # For tasks: when the task is scheduled to execute
+    group: Optional[str] = None  # Visual grouping key (e.g. "identity" for id_card/passport/work_permit)
 
 
 class WorkflowStepResponse(BaseModel):
@@ -272,6 +273,8 @@ class DocumentCollectionFullDetailResponse(DocumentCollectionResponse):
     deadline_note: Optional[str] = None
     # Unified checklist: documents + attributes with current status
     collection_items: List[CollectionItemStatusResponse] = Field(default_factory=list)
+    # Conversation step progress (horizontal stepper)
+    conversation_steps: List[dict] = Field(default_factory=list)
     # Links
     candidacy_id: Optional[str] = None
     candidate_id: Optional[str] = None

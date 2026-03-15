@@ -19,10 +19,12 @@ from src.models.common import PaginatedResponse
 from src.repositories.candidate_attribute_type_repo import CandidateAttributeTypeRepository
 from src.repositories.candidate_attribute_repo import CandidateAttributeRepository
 from src.repositories.candidate_repo import CandidateRepository
+from src.repositories.sync_with_repo import SyncWithRepository
 from src.models.candidate_attribute import (
     AttributeTypeCreate,
     AttributeTypeUpdate,
     AttributeTypeResponse,
+    SyncWithEntryCompact,
     CandidateAttributeSet,
     CandidateAttributeBulkSet,
     CandidateAttributeResponse,
@@ -37,18 +39,21 @@ router = APIRouter(tags=["Candidate Attributes"])
 # Helpers
 # =============================================================================
 
-def _parse_options(raw):
-    """Parse options field — may be a list, a JSON string, or None."""
+def _parse_json_field(raw):
+    """Parse a JSONB field — may be a list/dict, a JSON string, or None."""
     if raw is None:
         return None
-    if isinstance(raw, list):
+    if isinstance(raw, (list, dict)):
         return raw
     if isinstance(raw, str):
         return json.loads(raw)
     return raw
 
 
-def _build_type_response(record: asyncpg.Record) -> AttributeTypeResponse:
+def _build_type_response(
+    record: asyncpg.Record,
+    sync_entries: Optional[List[SyncWithEntryCompact]] = None,
+) -> AttributeTypeResponse:
     """Convert a DB record to an AttributeTypeResponse."""
     return AttributeTypeResponse(
         id=str(record["id"]),
@@ -58,14 +63,32 @@ def _build_type_response(record: asyncpg.Record) -> AttributeTypeResponse:
         description=record["description"],
         category=record["category"],
         data_type=record["data_type"],
-        options=_parse_options(record["options"]),
+        options=_parse_json_field(record["options"]),
+        fields=_parse_json_field(record["fields"]),
         icon=record["icon"],
         is_default=record["is_default"],
         is_active=record["is_active"],
         sort_order=record["sort_order"],
         collected_by=record["collected_by"],
+        ai_hint=record["ai_hint"],
+        sync_with=sync_entries or [],
         created_at=record["created_at"],
         updated_at=record["updated_at"],
+    )
+
+
+def _build_sync_entry_compact(record) -> SyncWithEntryCompact:
+    """Convert a sync_with DB record to a SyncWithEntryCompact."""
+    meta = record["external_metadata"]
+    if isinstance(meta, str):
+        meta = json.loads(meta)
+    return SyncWithEntryCompact(
+        id=str(record["id"]),
+        integration_id=str(record["integration_id"]),
+        integration_slug=record["integration_slug"],
+        integration_name=record["integration_name"],
+        external_id=record["external_id"],
+        external_metadata=meta,
     )
 
 
@@ -81,7 +104,8 @@ def _build_attribute_response(record: asyncpg.Record, include_type: bool = False
             description=record["type_description"],
             category=record["type_category"],
             data_type=record["type_data_type"],
-            options=_parse_options(record["type_options"]),
+            options=_parse_json_field(record["type_options"]),
+            fields=_parse_json_field(record.get("type_fields")),
             icon=record["type_icon"],
             is_default=record["type_is_default"],
             is_active=record["type_is_active"],
@@ -126,8 +150,19 @@ async def list_attribute_types(
     ws_uuid = parse_uuid(workspace_id, field="workspace_id")
     pool = await get_db_pool()
     repo = CandidateAttributeTypeRepository(pool)
+    sync_repo = SyncWithRepository(pool)
+
     records = await repo.list_for_workspace(ws_uuid, category=category, collected_by=collected_by, is_active=is_active)
-    items = [_build_type_response(r) for r in records]
+
+    # Batch-load sync_with
+    all_ids = [r["id"] for r in records]
+    sync_rows = await sync_repo.list_for_records("types_attributes", all_ids)
+    sync_map: dict[str, list[SyncWithEntryCompact]] = {}
+    for sr in sync_rows:
+        rid = str(sr["record_id"])
+        sync_map.setdefault(rid, []).append(_build_sync_entry_compact(sr))
+
+    items = [_build_type_response(r, sync_entries=sync_map.get(str(r["id"]), [])) for r in records]
     total = len(items)
     page = items[offset:offset + limit]
     return PaginatedResponse(items=page, total=total, limit=limit, offset=offset)
@@ -147,6 +182,9 @@ async def create_attribute_type(
     ws_uuid = parse_uuid(workspace_id, field="workspace_id")
     pool = await get_db_pool()
     repo = CandidateAttributeTypeRepository(pool)
+    # Serialize fields to dicts for JSON storage
+    fields_data = [f.model_dump() for f in data.fields] if data.fields else None
+
     record = await repo.create(
         ws_uuid,
         slug=data.slug,
@@ -155,6 +193,7 @@ async def create_attribute_type(
         category=data.category,
         data_type=data.data_type.value if data.data_type else "text",
         options=data.options,
+        fields=fields_data,
         icon=data.icon,
         is_default=data.is_default,
         sort_order=data.sort_order,
@@ -178,6 +217,7 @@ async def update_attribute_type(
     type_uuid = parse_uuid(attr_type_id, field="attr_type_id")
     pool = await get_db_pool()
     repo = CandidateAttributeTypeRepository(pool)
+    sync_repo = SyncWithRepository(pool)
 
     existing = await repo.get_by_id(type_uuid)
     if not existing:
@@ -187,8 +227,17 @@ async def update_attribute_type(
     if "data_type" in update_data and update_data["data_type"] is not None:
         update_data["data_type"] = update_data["data_type"].value
 
+    # Serialize fields to dicts for JSON storage
+    if "fields" in update_data and update_data["fields"] is not None:
+        update_data["fields"] = [f if isinstance(f, dict) else f.model_dump() for f in update_data["fields"]]
+
     record = await repo.update(type_uuid, **update_data)
-    return _build_type_response(record)
+
+    # Load sync_with
+    sync_rows = await sync_repo.list_for_record("types_attributes", type_uuid)
+    sync_entries = [_build_sync_entry_compact(sr) for sr in sync_rows]
+
+    return _build_type_response(record, sync_entries=sync_entries)
 
 
 @router.delete(

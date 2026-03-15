@@ -9,8 +9,8 @@ from typing import Optional
 
 _COLUMNS = """
     id, workspace_id, slug, name, description, category,
-    data_type, options, icon, is_default, is_active, sort_order,
-    collected_by,
+    data_type, options, fields, icon, is_default, is_active, sort_order,
+    collected_by, ai_hint,
     created_at, updated_at
 """
 
@@ -85,13 +85,14 @@ class CandidateAttributeTypeRepository:
     async def create(self, workspace_id: uuid.UUID, **kwargs) -> asyncpg.Record:
         """Create a new attribute type."""
         options = kwargs.get("options")
+        fields = kwargs.get("fields")
         return await self.pool.fetchrow(
             f"""
             INSERT INTO ats.types_attributes
                 (workspace_id, slug, name, description, category,
-                 data_type, options, icon, is_default, sort_order,
+                 data_type, options, fields, icon, is_default, sort_order,
                  collected_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING {_COLUMNS}
             """,
             workspace_id,
@@ -101,6 +102,7 @@ class CandidateAttributeTypeRepository:
             kwargs.get("category", "general"),
             kwargs.get("data_type", "text"),
             json.dumps(options) if options is not None else None,
+            json.dumps(fields) if fields is not None else None,
             kwargs.get("icon"),
             kwargs.get("is_default", False),
             kwargs.get("sort_order", 0),
@@ -116,7 +118,7 @@ class CandidateAttributeTypeRepository:
         for field in [
             "name", "description", "category", "data_type",
             "icon", "is_default", "is_active", "sort_order",
-            "collected_by",
+            "collected_by", "ai_hint",
         ]:
             if field in kwargs and kwargs[field] is not None:
                 updates.append(f"{field} = ${idx}")
@@ -126,6 +128,12 @@ class CandidateAttributeTypeRepository:
         if "options" in kwargs:
             updates.append(f"options = ${idx}")
             val = kwargs["options"]
+            params.append(json.dumps(val) if val is not None else None)
+            idx += 1
+
+        if "fields" in kwargs:
+            updates.append(f"fields = ${idx}")
+            val = kwargs["fields"]
             params.append(json.dumps(val) if val is not None else None)
             idx += 1
 

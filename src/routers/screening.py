@@ -137,7 +137,7 @@ async def stream_screening_chat(
                 candidate_id=candidate_id,
                 candidate_name=candidate_name,
                 candidate_phone=None,
-                channel="chat",
+                channel="whatsapp",
                 is_test=True,
             )
 

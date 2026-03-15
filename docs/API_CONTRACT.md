@@ -4,6 +4,10 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-15** — Added optional `start_date` field (ISO date, `YYYY-MM-DD`) to `VacancyResponse`. Added `PATCH /vacancies/{vacancy_id}` endpoint for updating vacancy fields (currently supports `start_date`)
+- **2026-03-13** — Added `POST /playground/chat` unified SSE chat endpoint for all playground agent types (pre_screening, document_collection). Supports ephemeral in-memory sessions with agent-type dispatch. Replaces agent-specific chat endpoints for playground use
+- **2026-03-14** — Added `fields` (JSONB array, optional) to `AttributeTypeResponse` for structured sub-fields on attribute types (e.g. noodcontact → naam + telefoonnummer). Each field: `{key, label, type, required, placeholder?, options?}`. Added `GET /ontology/attribute-fields-schema` endpoint returning available field types for the frontend config UI
+- **2026-03-13** — Added `ai_hint` field (optional string) to `DocumentTypeResponse` and `AttributeTypeResponse` for data-driven AI planner instructions. Added `group` field (optional string) to `CollectionItemStatusResponse` for visual grouping of related items (e.g. identity documents). Added `scheduled_at` field to `CollectionItemStatusResponse` for task scheduling. Extended `priority` values to include `"conditional"` alongside `"required"` and `"recommended"`
 - **2026-03-13** — Added `vacancies` and `candidates` fields to `NavigationCountsResponse` (`GET /agents/counts`). Endpoint now reads from denormalized `ats.navigation_counts` table kept in sync by DB triggers for Supabase Realtime support
 - **2026-03-13** — Added `"task"` as third `CollectionItemStatusResponse.type` value. Tasks (e.g. medical screening, contract signing) are sourced from `plan.agent_managed_tasks` and tracked in `agent_state.item_statuses` like documents and attributes
 - **2026-03-13** — Added `goal` field to `DocumentCollectionResponse` (and all derived responses). Values: `"collect_basic"` (standard onboarding docs & info), `"collect_and_sign"` (collect + Yousign contract), `"document_renewal"` (re-collect expired document). Defaults to `"collect_basic"`. Stored as column on `agents.document_collections`
@@ -453,6 +457,7 @@ interface VacancyResponse {
   archived_at?: string;
   source?: VacancySource;
   source_id?: string;
+  start_date?: string;  // ISO date (YYYY-MM-DD) when the position starts
   has_screening: boolean;
   published_at?: string;  // ISO timestamp when pre-screening was published (null = draft)
   is_online?: boolean;
@@ -512,6 +517,27 @@ Note: See `ActivityResponse` in [Candidates](#candidates) section for the activi
 |--------|-------|
 | 400 | Invalid vacancy ID format |
 | 404 | Vacancy not found |
+
+---
+
+### PATCH /vacancies/{vacancy_id}
+
+Update vacancy fields.
+
+**Request body:**
+```typescript
+{
+  start_date?: string | null;  // ISO date "YYYY-MM-DD" or null to clear
+}
+```
+
+**Response:**
+```typescript
+{
+  id: string;
+  start_date: string | null;
+}
+```
 
 ---
 
@@ -2541,6 +2567,63 @@ room.disconnect();
 
 ---
 
+### POST /playground/chat
+
+Unified SSE chat endpoint for all playground agent types. Creates ephemeral in-memory sessions for interactive testing — no database records are created.
+
+**Auth:** None
+
+**Request Body:**
+
+```typescript
+interface PlaygroundChatRequest {
+  agent_type: string;              // "pre_screening" | "document_collection"
+  message: string;                 // User message or "START" for new conversation
+  session_id?: string;             // From previous response — omit for new conversation
+  vacancy_id?: string;             // Required when agent_type = "pre_screening"
+  collection_id?: string;          // Required when agent_type = "document_collection"
+  candidate_name?: string;         // Optional — random name generated if omitted
+}
+```
+
+**Response:** Server-Sent Events (SSE) stream
+
+```typescript
+// Status event (thinking indicator)
+{ type: "status", status: "thinking", message: "Antwoord genereren..." }
+
+// Complete event (agent response)
+{ type: "complete", message: string, session_id: string, candidate_name: string, is_complete: boolean }
+
+// Error event
+{ type: "error", message: string }
+
+// Stream terminator
+[DONE]
+```
+
+**Agent Types:**
+
+| Type | Required Field | Description |
+|------|---------------|-------------|
+| `pre_screening` | `vacancy_id` | WhatsApp pre-screening agent — knockout + qualification questions |
+| `document_collection` | `collection_id` | Document collection conductor — collects documents + attributes from plan |
+
+**Document Collection Notes:**
+- Include `--img-success--` or `--img-fail--` in the message text to simulate document photo upload verification
+- The agent loads the collection plan from the database and walks through the item queue
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | vacancy_id / collection_id required for agent type |
+| 400 | Unknown agent_type |
+| 400 | Session not found |
+| 404 | Vacancy / Collection not found |
+
+---
+
 ## CV Analysis
 
 ### POST /cv/analyze
@@ -2918,6 +3001,7 @@ interface DocumentTypeResponse {
   slug: string;                  // e.g. "id_card", "drivers_license"
   name: string;                  // Display name, e.g. "ID-kaart"
   description?: string;
+  ai_hint?: string;              // AI planner instruction: when/how to collect this document
   category: string;              // "identity" | "certificate" | "financial" | "other"
   requires_front_back: boolean;  // If true, agent collects front + back
   is_verifiable: boolean;        // If true, document_recognition_agent can verify
@@ -3067,15 +3151,17 @@ interface DocumentCollectionFullDetailResponse extends DocumentCollectionRespons
 }
 
 interface CollectionItemStatusResponse {
-  slug: string;                  // e.g. "id_card", "iban", "address_city"
-  name: string;                  // e.g. "ID-kaart", "IBAN", "Woonplaats"
+  slug: string;                  // e.g. "id_card", "iban", "domicile_address"
+  name: string;                  // e.g. "ID-kaart", "IBAN", "Domicilie adres"
   type: string;                  // "document" | "attribute" | "task"
-  priority: string;              // "required" | "recommended"
-  status: string;                // "pending" | "asked" | "received" | "verified" | "failed" | "skipped"
+  priority: string;              // "required" | "recommended" | "conditional"
+  status: string;                // "pending" | "asked" | "received" | "verified" | "failed" | "skipped" | "scheduled"
   value?: string;                // For attributes: the collected value (e.g. "BE68 5390 0754 7034")
   upload_id?: string;            // For documents: upload reference
   verification_passed?: boolean; // For documents: verification result
   uploaded_at?: string;          // For documents: upload timestamp
+  scheduled_at?: string;         // For tasks: when the task is scheduled
+  group?: string;                // Visual grouping key (e.g. "identity" for id_card/passport/work_permit)
 }
 
 interface WorkflowStepResponse {
@@ -4598,6 +4684,29 @@ Get a single entity by ID with optional children.
 
 ---
 
+### Attribute Fields Schema
+
+#### `GET /ontology/attribute-fields-schema`
+
+Returns the available field types for building structured attribute fields. Used by the frontend to render the fields config UI on attribute type detail panels.
+
+**Response:**
+```json
+{
+  "field_types": [
+    {"key": "text", "label": "Tekst", "description": "Vrije tekst (naam, adres, ...)", "type": "text"},
+    {"key": "phone", "label": "Telefoonnummer", "description": "Telefoonnummer met landcode", "type": "text"},
+    {"key": "email", "label": "E-mailadres", "description": "E-mailadres", "type": "text"},
+    {"key": "date", "label": "Datum", "description": "Datumveld (DD/MM/JJJJ)", "type": "date"},
+    {"key": "number", "label": "Nummer", "description": "Numerieke waarde", "type": "number"},
+    {"key": "boolean", "label": "Ja/Nee", "description": "Ja of nee keuze", "type": "boolean"},
+    {"key": "select", "label": "Keuzelijst", "description": "Selectie uit vaste opties", "type": "select"}
+  ]
+}
+```
+
+---
+
 ### Create Entity
 
 #### `POST /ontology/entities`
@@ -4853,6 +4962,7 @@ List all attribute types for a workspace.
     "slug": "work_permit_status",
     "name": "Werkvergunning status",
     "description": "Heeft de kandidaat een geldige werkvergunning?",
+    "ai_hint": "Wordt bepaald op basis van nationaliteit. Niet apart vragen.",
     "category": "legal",
     "data_type": "select",
     "options": [
@@ -4860,11 +4970,35 @@ List all attribute types for a workspace.
       {"value": "has_permit", "label": "Heeft arbeidsvergunning"},
       {"value": "no_permit", "label": "Geen vergunning"}
     ],
+    "fields": null,
     "icon": "file-badge",
     "is_default": true,
     "is_active": true,
     "sort_order": 0,
     "collected_by": "pre_screening",
+    "created_at": "datetime",
+    "updated_at": "datetime"
+  },
+  {
+    "id": "uuid",
+    "workspace_id": "uuid",
+    "slug": "emergency_contact",
+    "name": "Noodcontact",
+    "description": "Contactpersoon in geval van nood",
+    "ai_hint": null,
+    "category": "personal",
+    "data_type": "text",
+    "options": null,
+    "fields": [
+      {"key": "name", "label": "Naam", "type": "text", "required": true},
+      {"key": "phone", "label": "Telefoonnummer", "type": "phone", "required": true},
+      {"key": "relationship", "label": "Relatie", "type": "text", "required": false, "placeholder": "bv. partner, ouder, ..."}
+    ],
+    "icon": "heart-handshake",
+    "is_default": true,
+    "is_active": true,
+    "sort_order": 6,
+    "collected_by": "document_collection",
     "created_at": "datetime",
     "updated_at": "datetime"
   }
@@ -4882,6 +5016,7 @@ Create a new attribute type.
 - `category` (string, default: `"general"`): Category grouping
 - `data_type` (string, default: `"text"`): One of `text`, `boolean`, `date`, `select`, `multi_select`, `number`
 - `options` (array, optional): For select/multi_select: `[{value, label}]`
+- `fields` (array, optional): Structured sub-fields: `[{key, label, type, required, placeholder?, options?}]`. Field types: `text`, `phone`, `email`, `date`, `number`, `boolean`, `select`
 - `icon` (string, optional): Lucide icon name
 - `is_default` (boolean, default: `false`)
 - `sort_order` (integer, default: `0`)

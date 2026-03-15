@@ -9,8 +9,7 @@ import asyncpg
 from src.models.vacancy import (
     VacancyResponse,
     ChannelsResponse,
-    AgentStatusResponse,
-    AgentsResponse,
+    VacancyAgentResponse,
     NavigationCountsResponse,
     RecruiterSummary,
     ClientSummary,
@@ -78,6 +77,21 @@ async def get_navigation_counts():
     )
 
 
+def _build_agents_from_row(row: asyncpg.Record) -> list[VacancyAgentResponse]:
+    """Build list of registered agents from a vacancy row."""
+    agent_types = row.get("agent_types") or []
+    agents = []
+    for agent_type in agent_types:
+        if agent_type == "prescreening":
+            agents.append(VacancyAgentResponse(
+                type="prescreening",
+                status="online" if row.get("is_online") else ("offline" if row["has_screening"] else None)
+            ))
+        else:
+            agents.append(VacancyAgentResponse(type=agent_type))
+    return agents
+
+
 def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
     """Build VacancyResponse from database row."""
     # Build recruiter info if present
@@ -123,20 +137,7 @@ def build_vacancy_response(row: asyncpg.Record) -> VacancyResponse:
             whatsapp=row.get("whatsapp_enabled") or False,
             cv=row.get("cv_enabled") or False
         ),
-        agents=AgentsResponse(
-            prescreening=AgentStatusResponse(
-                exists=row["has_screening"],
-                status="online" if row.get("is_online") else ("offline" if row["has_screening"] else None)
-            ),
-            preonboarding=AgentStatusResponse(
-                exists=row.get("preonboarding_agent_enabled") or False,
-                status=None
-            ),
-            insights=AgentStatusResponse(
-                exists=row.get("insights_agent_enabled") or False,
-                status=None
-            )
-        ),
+        agents=_build_agents_from_row(row),
         recruiter_id=str(row["recruiter_id"]) if row.get("recruiter_id") else None,
         recruiter=recruiter,
         client_id=str(row["client_id"]) if row.get("client_id") else None,

@@ -18,6 +18,17 @@ class AttributeDataType(str, Enum):
     SELECT = "select"
     MULTI_SELECT = "multi_select"
     NUMBER = "number"
+    STRUCTURED = "structured"
+
+
+class AttributeFieldDefinition(BaseModel):
+    """A sub-field within a structured attribute type (e.g. noodcontact → naam + telefoonnummer)."""
+    key: str = Field(..., description="Unique key for this field (e.g. 'name', 'phone')")
+    label: str = Field(..., description="Display label (e.g. 'Naam', 'Telefoonnummer')")
+    type: str = Field(default="text", description="Field type: text, date, number, boolean, select")
+    required: bool = Field(default=True, description="Whether this field is required")
+    placeholder: Optional[str] = Field(default=None, description="Placeholder text for the input")
+    options: Optional[List[str]] = Field(default=None, description="Options for select-type fields")
 
 
 # =============================================================================
@@ -32,10 +43,12 @@ class AttributeTypeCreate(BaseModel):
     category: str = Field(default="general")
     data_type: AttributeDataType = AttributeDataType.TEXT
     options: Optional[List[dict[str, Any]]] = None
+    fields: Optional[List[AttributeFieldDefinition]] = Field(default=None, description="Sub-fields for structured attributes (e.g. noodcontact → naam + telefoon)")
     icon: Optional[str] = None
     is_default: bool = False
     sort_order: int = 0
     collected_by: Optional[str] = None
+    ai_hint: Optional[str] = None
 
 
 class AttributeTypeUpdate(BaseModel):
@@ -45,11 +58,23 @@ class AttributeTypeUpdate(BaseModel):
     category: Optional[str] = None
     data_type: Optional[AttributeDataType] = None
     options: Optional[List[dict[str, Any]]] = None
+    fields: Optional[List[AttributeFieldDefinition]] = None
     icon: Optional[str] = None
     is_default: Optional[bool] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
     collected_by: Optional[str] = None
+    ai_hint: Optional[str] = None
+
+
+class SyncWithEntryCompact(BaseModel):
+    """A sync_with link on a types record (used in attribute type responses)."""
+    id: str
+    integration_id: str
+    integration_slug: str
+    integration_name: str
+    external_id: Optional[str] = None
+    external_metadata: Optional[dict[str, Any]] = None
 
 
 class AttributeTypeResponse(BaseModel):
@@ -62,11 +87,14 @@ class AttributeTypeResponse(BaseModel):
     category: str
     data_type: str
     options: Optional[List[dict[str, Any]]] = None
+    fields: Optional[List[AttributeFieldDefinition]] = None
     icon: Optional[str] = None
     is_default: bool
     is_active: bool
     sort_order: int
     collected_by: Optional[str] = None
+    ai_hint: Optional[str] = None
+    sync_with: List[SyncWithEntryCompact] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

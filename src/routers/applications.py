@@ -280,7 +280,7 @@ async def reprocess_test_applications():
                             kr.passed,
                             kr.score,
                             kr.rating,
-                            app["channel"] or "chat"
+                            app["channel"] or "whatsapp"
                         )
 
                     # Insert new qualification results with motivation
@@ -297,7 +297,7 @@ async def reprocess_test_applications():
                             qr.answer,
                             qr.score,
                             qr.rating,
-                            app["channel"] or "chat",
+                            app["channel"] or "whatsapp",
                             qr.motivation
                         )
 

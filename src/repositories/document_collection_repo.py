@@ -53,7 +53,9 @@ class DocumentCollectionRepository:
         rows = await self.pool.fetch(
             f"""
             SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
-                   dc.candidate_id, dc.candidacy_id, dc.session_id, dc.candidate_name, dc.candidate_phone,
+                   dc.candidate_id, dc.candidacy_id, dc.session_id,
+                   COALESCE(cand.first_name || ' ' || cand.last_name, dc.candidate_name) as candidate_name,
+                   COALESCE(cand.phone, dc.candidate_phone) as candidate_phone,
                    dc.status, dc.goal, dc.channel, dc.retry_count, dc.message_count,
                    dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at,
                    v.title AS vacancy_title,
@@ -66,6 +68,7 @@ class DocumentCollectionRepository:
             FROM agents.document_collections dc
             LEFT JOIN ats.vacancies v ON dc.vacancy_id = v.id
             LEFT JOIN ats.candidacies c ON dc.candidacy_id = c.id
+            LEFT JOIN ats.candidates cand ON cand.id = dc.candidate_id
             WHERE {where}
             ORDER BY dc.started_at DESC
             LIMIT ${idx} OFFSET ${idx + 1}
@@ -81,7 +84,8 @@ class DocumentCollectionRepository:
             """
             SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
                    dc.candidate_id, dc.candidacy_id, dc.session_id,
-                   dc.candidate_name, dc.candidate_phone,
+                   COALESCE(cand.first_name || ' ' || cand.last_name, dc.candidate_name) as candidate_name,
+                   COALESCE(cand.phone, dc.candidate_phone) as candidate_phone,
                    dc.status, dc.goal, dc.channel, dc.retry_count, dc.message_count,
                    dc.documents_required, dc.collection_plan, dc.agent_state,
                    dc.started_at, dc.updated_at, dc.completed_at,
@@ -95,6 +99,7 @@ class DocumentCollectionRepository:
             FROM agents.document_collections dc
             LEFT JOIN ats.vacancies v ON dc.vacancy_id = v.id
             LEFT JOIN ats.candidacies c ON dc.candidacy_id = c.id
+            LEFT JOIN ats.candidates cand ON cand.id = dc.candidate_id
             WHERE dc.id = $1
             """,
             collection_id,
@@ -104,12 +109,15 @@ class DocumentCollectionRepository:
         """Find an active document collection by phone number."""
         return await self.pool.fetchrow(
             """
-            SELECT id, config_id, workspace_id, vacancy_id, application_id,
-                   candidate_id, session_id, candidate_name, candidate_phone,
-                   status, channel, retry_count, message_count,
-                   documents_required, started_at, updated_at, completed_at
-            FROM agents.document_collections
-            WHERE candidate_phone = $1 AND status = 'active'
+            SELECT dc.id, dc.config_id, dc.workspace_id, dc.vacancy_id, dc.application_id,
+                   dc.candidate_id, dc.session_id,
+                   COALESCE(cand.first_name || ' ' || cand.last_name, dc.candidate_name) as candidate_name,
+                   COALESCE(cand.phone, dc.candidate_phone) as candidate_phone,
+                   dc.status, dc.channel, dc.retry_count, dc.message_count,
+                   dc.documents_required, dc.started_at, dc.updated_at, dc.completed_at
+            FROM agents.document_collections dc
+            LEFT JOIN ats.candidates cand ON cand.id = dc.candidate_id
+            WHERE dc.candidate_phone = $1 AND dc.status = 'active'
             ORDER BY started_at DESC
             LIMIT 1
             """,

@@ -142,7 +142,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                         AND table_name = 'pre_screening_conversations'
                         AND column_name = 'channel'
                     ) THEN
-                        ALTER TABLE agents.pre_screening_sessions ADD COLUMN channel VARCHAR(20) DEFAULT 'chat';
+                        ALTER TABLE agents.pre_screening_sessions ADD COLUMN channel VARCHAR(20) DEFAULT 'whatsapp';
                     END IF;
                 END IF;
             END $$;
@@ -583,7 +583,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                     -- personal
                     (p_workspace_id, 'date_of_birth',       'Geboortedatum',          'Geboortedatum van de kandidaat',                   'personal',     'date',    NULL,  'cake',            true, 0,  'pre_screening'),
                     (p_workspace_id, 'nationality',         'Nationaliteit',          'Nationaliteit van de kandidaat',                   'personal',     'text',    NULL,  'flag',            true, 1,  'pre_screening'),
-                    (p_workspace_id, 'address_city',        'Woonplaats',             'Stad of gemeente waar de kandidaat woont',         'personal',     'text',    NULL,  'map-pin',         true, 2,  'pre_screening'),
+                    (p_workspace_id, 'domicile_address',    'Domicilie adres',        'Domicilieadres van de kandidaat',                  'personal',     'text',    NULL,  'map-pin',         true, 2,  NULL),
                     (p_workspace_id, 'address_postal_code', 'Postcode',               'Postcode van de kandidaat',                        'personal',     'text',    NULL,  'hash',            true, 3,  'pre_screening'),
                     (p_workspace_id, 'marital_status',      'Burgerlijke staat',      'Burgerlijke staat (voor dimona/contract)',          'personal',     'text',    NULL,  'heart',           true, 4,  'contract'),
                     (p_workspace_id, 'national_register_nr','Rijksregisternummer',    'Belgisch rijksregisternummer',                     'personal',     'text',    NULL,  'fingerprint',     true, 5,  'contract'),

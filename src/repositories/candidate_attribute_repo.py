@@ -18,7 +18,7 @@ _COLUMNS_WITH_TYPE = """
     ca.created_at, ca.updated_at,
     cat.slug AS type_slug, cat.name AS type_name, cat.description AS type_description,
     cat.category AS type_category, cat.data_type AS type_data_type,
-    cat.options AS type_options, cat.icon AS type_icon,
+    cat.options AS type_options, cat.fields AS type_fields, cat.icon AS type_icon,
     cat.is_default AS type_is_default, cat.is_active AS type_is_active,
     cat.sort_order AS type_sort_order, cat.collected_by AS type_collected_by,
     cat.workspace_id AS type_workspace_id,
