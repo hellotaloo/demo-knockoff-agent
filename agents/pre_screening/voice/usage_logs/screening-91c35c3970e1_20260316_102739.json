@@ -1,0 +1,16 @@
+{
+  "room": "screening-91c35c3970e1",
+  "timestamp": "20260316_102739",
+  "candidate_name": "Lars Visser",
+  "job_title": "Winkelmedewerker Bakkerij",
+  "llm_prompt_tokens": 19339,
+  "llm_completion_tokens": 567,
+  "tts_characters": 1725,
+  "stt_audio_duration": 97.34999999999985,
+  "cost_usd": {
+    "llm": 0.008643,
+    "tts": 0.019406,
+    "stt": 0.012493,
+    "total": 0.040542
+  }
+}

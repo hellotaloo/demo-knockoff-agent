@@ -1,0 +1,16 @@
+{
+  "room": "screening-efc7c3dbbbd3",
+  "timestamp": "20260316_104658",
+  "candidate_name": "Jan de Jong",
+  "job_title": "Winkelmedewerker Bakkerij",
+  "llm_prompt_tokens": 15752,
+  "llm_completion_tokens": 500,
+  "tts_characters": 1366,
+  "stt_audio_duration": 67.74999999999991,
+  "cost_usd": {
+    "llm": 0.007101,
+    "tts": 0.015368,
+    "stt": 0.008695,
+    "total": 0.031163
+  }
+}

@@ -38,7 +38,7 @@ DUTCH_MONTHS = {
 }
 
 # Project root — used to resolve relative credential paths during local dev.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -107,13 +107,30 @@ class _CalendarService:
         if impersonate_email in self._service_cache:
             return self._service_cache[impersonate_email]
 
+        import json
+        from google.oauth2 import service_account
         from googleapiclient.discovery import build
-        from src.utils.google_credentials import get_service_account_credentials
 
-        credentials = get_service_account_credentials(
-            scopes=["https://www.googleapis.com/auth/calendar"],
-            subject=impersonate_email,
-        )
+        sa_file = _resolve_credentials_path()
+        sa_info = os.environ.get("GOOGLE_SERVICE_ACCOUNT_INFO")
+
+        if sa_file:
+            credentials = service_account.Credentials.from_service_account_file(
+                sa_file,
+                scopes=["https://www.googleapis.com/auth/calendar"],
+                subject=impersonate_email,
+            )
+        elif sa_info:
+            credentials = service_account.Credentials.from_service_account_info(
+                json.loads(sa_info),
+                scopes=["https://www.googleapis.com/auth/calendar"],
+                subject=impersonate_email,
+            )
+        else:
+            raise RuntimeError(
+                "Google service account not configured. "
+                "Set GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_SERVICE_ACCOUNT_INFO."
+            )
         service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
         self._service_cache[impersonate_email] = service
         logger.info(f"Created Google Calendar service (impersonating {impersonate_email})")

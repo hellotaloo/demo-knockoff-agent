@@ -1,0 +1,16 @@
+{
+  "room": "screening-9f8a2a1d7d5c",
+  "timestamp": "20260316_104037",
+  "candidate_name": "Eva Smit",
+  "job_title": "Winkelmedewerker Bakkerij",
+  "llm_prompt_tokens": 19491,
+  "llm_completion_tokens": 590,
+  "tts_characters": 1848,
+  "stt_audio_duration": 87.69999999999985,
+  "cost_usd": {
+    "llm": 0.00874,
+    "tts": 0.02079,
+    "stt": 0.011255,
+    "total": 0.040785
+  }
+}
