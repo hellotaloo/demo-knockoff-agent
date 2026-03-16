@@ -35,8 +35,8 @@ STEP_CONFIG = {
         "stuck_threshold_seconds": 4 * 3600,  # 4 hours - flag if no activity for this long
     },
     "processed": {
-        "timeout_seconds": 5 * 60,         # 5 minutes - transcript processing should be quick
-        "stuck_threshold_seconds": 2 * 60,   # 2 minutes - should process almost instantly
+        "timeout_seconds": 15 * 60,        # 15 minutes - notifications may take a few minutes
+        "stuck_threshold_seconds": 10 * 60,  # 10 minutes - flag if stuck for this long
         "auto_delay_seconds": 10,          # 10 second delay before sending notifications
     },
     "complete": {
