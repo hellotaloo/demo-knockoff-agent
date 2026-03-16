@@ -1,0 +1,16 @@
+{
+  "room": "screening-cc2e8e81fb94",
+  "timestamp": "20260316_091337",
+  "candidate_name": "Sanne de Jong",
+  "job_title": "Productieoperator (2 ploegen)",
+  "llm_prompt_tokens": 2942,
+  "llm_completion_tokens": 72,
+  "tts_characters": 389,
+  "stt_audio_duration": 21.749999999999964,
+  "cost_usd": {
+    "llm": 0.001292,
+    "tts": 0.004376,
+    "stt": 0.002791,
+    "total": 0.008459
+  }
+}

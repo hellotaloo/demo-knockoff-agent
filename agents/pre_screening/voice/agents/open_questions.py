@@ -16,7 +16,7 @@ def _set_user_away_timeout(session: AgentSession, timeout: float):
 
 
 class OpenQuestionsAgent(BaseAgent):
-    def __init__(self, job_title: str, allow_escalation: bool = True, persona_name: str = "Anna") -> None:
+    def __init__(self, job_title: str, allow_escalation: bool = True, persona_name: str = "Liv") -> None:
         super().__init__(
             instructions=open_questions_prompt(job_title, allow_escalation=allow_escalation, persona_name=persona_name),
             allow_escalation=allow_escalation,

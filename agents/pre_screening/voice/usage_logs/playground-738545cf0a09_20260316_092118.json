@@ -1,0 +1,16 @@
+{
+  "room": "playground-738545cf0a09",
+  "timestamp": "20260316_092118",
+  "candidate_name": "Onbekende beller",
+  "job_title": "Customer Service Medewerker Portugal",
+  "llm_prompt_tokens": 1954,
+  "llm_completion_tokens": 38,
+  "tts_characters": 311,
+  "stt_audio_duration": 4.699999999999991,
+  "cost_usd": {
+    "llm": 0.000842,
+    "tts": 0.003499,
+    "stt": 0.000603,
+    "total": 0.004944
+  }
+}

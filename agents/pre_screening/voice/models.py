@@ -85,7 +85,7 @@ class SessionInput:
     allow_escalation: bool = True
     require_consent: bool = True
     is_playground: bool = False
-    persona_name: str = "Anna"
+    persona_name: str = "Liv"
 
     # Scheduling (loaded from DB agent_config)
     schedule_days_ahead: int = 3
@@ -164,7 +164,7 @@ class SessionInput:
             allow_escalation=data.get("allow_escalation", True),
             require_consent=data.get("require_consent", True),
             is_playground=data.get("is_playground", False),
-            persona_name=data.get("persona_name", "Anna"),
+            persona_name=data.get("persona_name", "Liv"),
             schedule_days_ahead=data.get("schedule_days_ahead", 3),
             schedule_start_offset=data.get("schedule_start_offset", 1),
         )

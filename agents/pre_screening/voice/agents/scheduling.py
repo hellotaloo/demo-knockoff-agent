@@ -57,7 +57,7 @@ def _build_fallback_slots(offset_days: int = 1) -> list[str]:
 
 
 class SchedulingAgent(BaseAgent):
-    def __init__(self, office_location: str = "", office_address: str = "", allow_escalation: bool = True, persona_name: str = "Anna") -> None:
+    def __init__(self, office_location: str = "", office_address: str = "", allow_escalation: bool = True, persona_name: str = "Liv") -> None:
         today = date.today()
         today_str = f"{_DAY_NAMES[today.weekday()]} {today.day} {_MONTH_NAMES[today.month]} {today.year}"
         super().__init__(
