@@ -267,4 +267,95 @@ class DocumentCollectionPlannerService:
         except Exception as e:
             logger.error(f"Failed to advance workflow for collection {collection_id}: {e}")
 
+        # Send opening WhatsApp message to candidate
+        if candidate_phone:
+            try:
+                await self._send_opening_message(
+                    collection_id=collection_id,
+                    plan=plan,
+                    vacancy_id=vacancy_id,
+                    candidate_phone=candidate_phone,
+                    workspace_id=workspace_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to send opening WhatsApp message for collection {collection_id}: {e}")
+
+        # Advance workflow from plan_generated → collecting
+        try:
+            orch = await get_orchestrator()
+            wf = await orch.find_by_context("collection_id", str(collection_id))
+            if wf:
+                await orch.service.update_step(wf["id"], "collecting")
+                logger.info(f"Workflow advanced to collecting for collection {collection_id}")
+            else:
+                logger.warning(f"No workflow found for collection {collection_id} — cannot advance to collecting")
+        except Exception as e:
+            logger.error(f"Failed to advance workflow to collecting: {e}")
+
         return collection_id
+
+    async def _send_opening_message(
+        self,
+        collection_id: uuid.UUID,
+        plan: dict,
+        vacancy_id: uuid.UUID,
+        candidate_phone: str,
+        workspace_id: uuid.UUID,
+    ) -> None:
+        """Create collection agent, generate opening message, and send via WhatsApp."""
+        from agents.document_collection.collection import create_collection_agent
+        from agents.document_collection.collection.type_cache import TypeCache
+        from src.services.whatsapp_service import send_whatsapp_message
+
+        # Load type cache
+        type_cache = TypeCache(self.pool, workspace_id)
+        await type_cache.ensure_loaded()
+
+        # Fetch recruiter info for agent creation
+        recruiter = await self.pool.fetchrow(
+            """
+            SELECT r.name, r.email, r.phone
+            FROM ats.vacancies v
+            JOIN ats.recruiters r ON r.id = v.recruiter_id
+            WHERE v.id = $1
+            """,
+            vacancy_id,
+        )
+
+        agent = create_collection_agent(
+            plan=plan,
+            type_cache=type_cache,
+            collection_id=str(collection_id),
+            recruiter_name=recruiter["name"] if recruiter else "",
+            recruiter_email=recruiter["email"] if recruiter else "",
+            recruiter_phone=recruiter["phone"] if recruiter else "",
+        )
+
+        # Generate opening message(s)
+        result = await agent.get_initial_message()
+        messages = result if isinstance(result, list) else [result]
+
+        # Send each message via WhatsApp
+        for msg in messages:
+            if msg:
+                await send_whatsapp_message(candidate_phone, msg)
+
+        # Store messages in session turns
+        for msg in messages:
+            if msg:
+                await self.pool.execute(
+                    """INSERT INTO agents.document_collection_session_turns
+                    (conversation_id, role, message) VALUES ($1, 'agent', $2)""",
+                    collection_id, msg,
+                )
+
+        # Persist agent state so the webhook can continue the conversation
+        await self.pool.execute(
+            """UPDATE agents.document_collections
+            SET agent_state = $1::jsonb, updated_at = NOW()
+            WHERE id = $2""",
+            agent.state.to_json(),
+            collection_id,
+        )
+
+        logger.info(f"📤 Opening WhatsApp message sent for collection {collection_id}")

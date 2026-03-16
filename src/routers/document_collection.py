@@ -6,6 +6,7 @@ This router handles:
 2. Webhook processing: Handle incoming messages and media uploads
 """
 import logging
+import os
 import uuid
 import json
 import base64
@@ -111,6 +112,203 @@ def determine_document_side(documents_collected: list, documents_required: list)
         if doc not in documents_collected:
             return doc
     return "unknown"
+
+
+TEAMS_ALERTS_SERVICE_URL = os.environ.get(
+    "MS_TEAMS_ALERTS_SERVICE_URL",
+    "https://smba.trafficmanager.net/emea/a26bd06f-6855-4146-bc95-efcf68a95619/",
+)
+TEAMS_ALERTS_CONVERSATION_ID = os.environ.get(
+    "MS_TEAMS_ALERTS_CONVERSATION_ID",
+    "19:201cf6383c2340cd9ff9da60f85d892f@thread.tacv2",
+)
+
+
+async def _persist_collected_attributes(
+    pool,
+    candidate_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    collected_attributes: dict,
+    collection_id: uuid.UUID,
+):
+    """Persist collected attributes from agent state to ats.candidate_attributes."""
+    if not collected_attributes:
+        return
+
+    from src.repositories.candidate_attribute_repo import CandidateAttributeRepository
+    from src.repositories.candidate_attribute_type_repo import CandidateAttributeTypeRepository
+    from src.services.activity_service import ActivityService
+    from src.models.activity import ActivityEventType, ActorType
+
+    attr_repo = CandidateAttributeRepository(pool)
+    type_repo = CandidateAttributeTypeRepository(pool)
+    activity_service = ActivityService(pool)
+
+    saved_count = 0
+    for slug, attr_data in collected_attributes.items():
+        try:
+            attr_type = await type_repo.get_by_slug(workspace_id, slug)
+            if not attr_type:
+                logger.warning(f"[PERSIST] Unknown attribute slug: {slug}, skipping")
+                continue
+
+            value = attr_data.get("value") if isinstance(attr_data, dict) else attr_data
+            if isinstance(value, (dict, list, bool)):
+                value = json.dumps(value, ensure_ascii=False)
+            elif value is not None:
+                value = str(value)
+
+            await attr_repo.upsert(
+                candidate_id=candidate_id,
+                attribute_type_id=attr_type["id"],
+                value=value,
+                source="document_collection",
+                source_session_id=str(collection_id),
+                verified=False,
+            )
+            saved_count += 1
+
+            await activity_service.log(
+                candidate_id=str(candidate_id),
+                event_type=ActivityEventType.ATTRIBUTE_EXTRACTED,
+                actor_type=ActorType.AGENT,
+                metadata={
+                    "slug": slug,
+                    "value": value,
+                    "data_type": attr_type["data_type"],
+                    "source": "document_collection",
+                },
+                summary=f"Kenmerk '{attr_type['name']}' verzameld: {value[:80] if value else ''}",
+            )
+        except Exception as e:
+            logger.error(f"[PERSIST] Failed to save attribute {slug}: {e}")
+
+    logger.info(f"[PERSIST] Saved {saved_count}/{len(collected_attributes)} attributes for candidate {candidate_id}")
+
+
+async def _notify_recruiter_team(pool, collection_id: uuid.UUID):
+    """Send a Teams notification when document collection is completed."""
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT dc.candidate_name, dc.agent_state,
+                   v.title AS vacancy_title
+            FROM agents.document_collections dc
+            JOIN ats.vacancies v ON v.id = dc.vacancy_id
+            WHERE dc.id = $1
+            """,
+            collection_id,
+        )
+        if not row:
+            return
+
+        candidate_name = row["candidate_name"] or "Onbekend"
+        vacancy_title = row["vacancy_title"] or "Onbekend"
+
+        # Parse agent state for stats
+        agent_state = row["agent_state"]
+        if isinstance(agent_state, str):
+            agent_state = json.loads(agent_state)
+
+        docs_count = len(agent_state.get("collected_documents", {})) if agent_state else 0
+        attrs_count = len(agent_state.get("collected_attributes", {})) if agent_state else 0
+        signing_url = (agent_state or {}).get("context", {}).get("yousign_signing_url")
+        review_flags = (agent_state or {}).get("review_flags", [])
+
+        card = _build_collection_notification_card(
+            candidate_name=candidate_name,
+            vacancy_title=vacancy_title,
+            docs_count=docs_count,
+            attrs_count=attrs_count,
+            signing_url=signing_url,
+            review_flags=review_flags,
+        )
+
+        from src.services.teams_service import get_teams_service
+        teams = get_teams_service()
+        await teams.send_card_to_channel(
+            service_url=TEAMS_ALERTS_SERVICE_URL,
+            conversation_id=TEAMS_ALERTS_CONVERSATION_ID,
+            card=card,
+        )
+        logger.info(f"✅ Sent Teams collection notification for {candidate_name}")
+    except Exception as e:
+        logger.error(f"Failed to send Teams collection notification: {e}")
+
+
+def _build_collection_notification_card(
+    candidate_name: str,
+    vacancy_title: str,
+    docs_count: int,
+    attrs_count: int,
+    signing_url: Optional[str] = None,
+    review_flags: Optional[list] = None,
+) -> dict:
+    """Build an Adaptive Card for the collection completion notification."""
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "✅ Onboarding afgerond",
+                "weight": "Bolder",
+                "size": "Large",
+                "color": "Good",
+            },
+            {
+                "type": "TextBlock",
+                "text": f"De documenten en gegevens van {candidate_name} zijn verzameld.",
+                "wrap": True,
+                "spacing": "Small",
+            },
+            {
+                "type": "FactSet",
+                "facts": [
+                    {"title": "👤 Kandidaat", "value": candidate_name},
+                    {"title": "💼 Vacature", "value": vacancy_title},
+                    {"title": "📄 Documenten", "value": str(docs_count)},
+                    {"title": "📋 Gegevens", "value": str(attrs_count)},
+                ],
+                "spacing": "Medium",
+            },
+        ],
+        "actions": [
+            {
+                "type": "Action.OpenUrl",
+                "title": "🔍 Bekijk details",
+                "url": "https://taloo.be",
+            },
+        ],
+    }
+
+    # Recruiter verification warning
+    if review_flags:
+        reasons = "; ".join(f["reason"] for f in review_flags if f.get("reason"))
+        card["body"].append({
+            "type": "TextBlock",
+            "text": f"⚠️ **Verificatie nodig**: {reasons}",
+            "wrap": True,
+            "spacing": "Medium",
+            "color": "Warning",
+        })
+
+    # Contract link
+    if signing_url:
+        card["body"].append({
+            "type": "TextBlock",
+            "text": f"📝 [Bekijk getekend contract]({signing_url})",
+            "wrap": True,
+            "spacing": "Small",
+        })
+        card["actions"].append({
+            "type": "Action.OpenUrl",
+            "title": "📝 Bekijk getekend contract",
+            "url": signing_url,
+        })
+
+    return card
 
 
 async def _process_document_collection(
@@ -327,6 +525,16 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
     )
 
     logger.info(f"✅ Document collection started: {conversation_id}")
+
+    # Advance workflow to 'collecting'
+    try:
+        from src.workflows import get_orchestrator
+        orchestrator = await get_orchestrator()
+        wf = await orchestrator.find_by_context("collection_id", str(conversation_id))
+        if wf:
+            await orchestrator.service.update_step(wf["id"], "collecting")
+    except Exception as e:
+        logger.warning(f"Failed to advance workflow to collecting: {e}")
 
     return OutboundDocumentResponse(
         conversation_id=str(conversation_id),
@@ -574,11 +782,16 @@ async def document_webhook(
     if is_collection_complete(agent):
         logger.info(f"Document collection complete: {conversation_id}")
         await conversation_cache.invalidate(phone_normalized)
+        asyncio.create_task(_persist_collected_attributes(
+            pool, conv_row["candidate_id"], conv_row["workspace_id"],
+            agent.state.collected_attributes, conversation_id,
+        ))
         asyncio.create_task(_process_document_collection(
             pool, conversation_id, None,
             f"Collected: {list(agent.state.collected_documents.keys())}, "
             f"Attributes: {list(agent.state.collected_attributes.keys())}"
         ))
+        asyncio.create_task(_notify_recruiter_team(pool, conversation_id))
 
         # Advance workflow
         try:
@@ -586,9 +799,22 @@ async def document_webhook(
             orchestrator = await get_orchestrator()
             wf = await orchestrator.find_by_context("collection_id", str(conversation_id))
             if wf:
-                await orchestrator.service.update_step(wf["id"], "collection_complete")
+                await orchestrator.service.update_step(wf["id"], "complete", new_status="completed")
         except Exception as e:
             logger.error(f"Failed to advance workflow for collection {conversation_id}: {e}")
+
+        # Persist review flags (e.g. non-Belgian IBAN) to candidacy record
+        if agent.state.review_flags and conv_row["candidacy_id"]:
+            try:
+                reason = "; ".join(f["reason"] for f in agent.state.review_flags)
+                await pool.execute(
+                    "UPDATE ats.candidacies SET recruiter_verification = true, recruiter_verification_reason = $1 WHERE id = $2",
+                    reason,
+                    conv_row["candidacy_id"],
+                )
+                logger.info(f"Set recruiter_verification for candidacy {conv_row['candidacy_id']} ({len(agent.state.review_flags)} flags)")
+            except Exception as e:
+                logger.error(f"Failed to set recruiter_verification: {e}")
 
     # Send TwiML response
     resp = MessagingResponse()

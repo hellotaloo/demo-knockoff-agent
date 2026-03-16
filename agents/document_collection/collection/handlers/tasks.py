@@ -142,12 +142,14 @@ async def _create_contract_signing(agent: DocumentCollectionAgent) -> str | None
     return None
 
 
-async def enter_task(agent: DocumentCollectionAgent, step: dict) -> str:
+async def enter_task(agent: DocumentCollectionAgent, step: dict) -> str | list[str]:
     """Generate the opening message for a task step."""
     step_type = step.get("type", "")
 
     if step_type == "contract_signing":
         start_date_text = f" voor een start op **{_format_date_eu(agent.state.start_date)}**" if agent.state.start_date else ""
+
+        teaser = "Super, dan maak ik nu je **contract** aan voor ondertekening! Klein ogenblikje... ⏳"
 
         # Create Yousign signature request
         signing_url = await _create_contract_signing(agent)
@@ -155,26 +157,18 @@ async def enter_task(agent: DocumentCollectionAgent, step: dict) -> str:
         if signing_url:
             msg = f"Goed nieuws! Je **contract**{start_date_text} staat klaar om digitaal te ondertekenen. 📝\n\n👉 [Onderteken hier]({signing_url})"
             agent.state.last_agent_message = msg
-            return msg
+            return [teaser, msg]
 
         # Fallback if Yousign fails
         msg = f"Je **contract** wordt klaargemaakt{start_date_text}! 📝 Je ontvangt binnenkort een link om het digitaal te ondertekenen."
         agent.state.last_agent_message = msg
-        return msg
+        return [teaser, msg]
 
-    # Medical screening or other interactive task
-    description = step.get("description", "")
-    risks_text = ""
-    if step.get("risks"):
-        risks_text = f"\nRisico's: {', '.join(step['risks'])}"
-
-    return await agent._say(
-        f"""Informeer {agent.state.candidate_name} over het **medisch onderzoek** dat ingepland moet worden.
-{f'Context: {description}' if description else ''}{risks_text}
-
-Vraag wanneer de kandidaat beschikbaar is.
-Voorbeeld: "Wanneer zou je beschikbaar zijn voor je **medisch onderzoek**? Bv. 'volgende week maandag en dinsdag, tussen 8u en 17u' 📋"
-Max 2-3 zinnen. Vriendelijk."""
+    # Medical screening — hardcoded message
+    return (
+        "Voor deze functie moet er voor je opstart nog een **medisch onderzoek** ingepland worden.\n"
+        "**Wanneer zou dat voor jou passen?** Je mag bijvoorbeeld iets doorgeven zoals: "
+        "volgende week dinsdag en donderdag tussen 8u en 16u 📋"
     )
 
 
@@ -206,7 +200,8 @@ Feliciteer {state.candidate_name} hartelijk.{start_info}{recruiter_info}
 Bevestig dat er verder contact volgt voor de praktische details.
 Max 3 zinnen. Warm en enthousiast."""
         )
-        return response + "\n\n" + await agent._advance_step()
+        advance_msg = await agent._advance_step()
+        return [response, advance_msg]
 
     # Not signed yet — remind with link if available
     signing_url = state.context.get("yousign_signing_url", "")
@@ -218,23 +213,75 @@ Max 3 zinnen. Warm en enthousiast."""
     return msg
 
 
-async def _handle_interactive_task(agent: DocumentCollectionAgent, message: str, step: dict) -> str:
+async def _extract_availability(agent: DocumentCollectionAgent, message: str) -> dict:
+    """Extract availability from candidate message. Returns {"valid": bool, "availability": str | None}."""
+    from src.utils.llm import generate
+    import json as _json
+
+    prompt = f"""De kandidaat werd gevraagd wanneer die beschikbaar is voor een medisch onderzoek.
+Antwoord van de kandidaat: "{message}"
+
+Beoordeel of het antwoord VOLDOENDE beschikbaarheid bevat om een afspraak in te plannen.
+
+GOED (valid=true):
+- Meerdere dagen of dagdelen: "maandag en dinsdag", "volgende week woensdag tot vrijdag"
+- Hele dagen: "dinsdag ben ik vrij", "volgende week maandag en woensdag"
+- Brede tijdvensters: "volgende week, voormiddag", "maandag en dinsdag tussen 8u en 17u"
+
+ONVOLDOENDE (valid=false):
+- Slechts één specifiek tijdstip: "maandag om 10u" (te beperkt, minstens een volledige dag of meerdere opties nodig)
+- Vaag zonder dagen: "binnenkort", "als het kan"
+- Onzin of niet-gerelateerd
+
+Antwoord ALLEEN met valid JSON:
+{{"valid": true, "availability": "samenvatting van de beschikbaarheid"}}
+of:
+{{"valid": false, "reason": "too_narrow|unclear|unrelated"}}"""
+
+    try:
+        result = await generate(prompt=prompt, temperature=0)
+        text = result.strip()
+        if text.startswith("```"):
+            text = "\n".join(l for l in text.split("\n") if not l.strip().startswith("```"))
+        return _json.loads(text)
+    except Exception as e:
+        logger.warning(f"[MEDICAL] Availability extraction failed: {e}")
+        return {"valid": False}
+
+
+async def _handle_interactive_task(agent: DocumentCollectionAgent, message: str, step: dict) -> str | list[str]:
     """Handle medical screening or other interactive tasks."""
     state = agent.state
     task_slug = step.get("type", "task")
+
+    # Validate that the message contains actual availability
+    extraction = await _extract_availability(agent, message)
+    if not extraction.get("valid"):
+        reason = extraction.get("reason", "unclear")
+        if reason == "too_narrow":
+            hint = "Het opgegeven tijdstip is te beperkt. Vraag om meerdere dagen of dagdelen op te geven zodat er voldoende keuze is voor de planning."
+        else:
+            hint = "Het antwoord bevat geen bruikbare beschikbaarheid."
+        return await agent._say(
+            f"""{hint}
+Vraag opnieuw wanneer de kandidaat beschikbaar is voor het **medisch onderzoek**.
+Geef een voorbeeld: "bv. volgende week maandag en dinsdag, tussen 8u en 17u".
+GEEN begroeting. Max 2 zinnen."""
+        )
 
     # Collect availability and schedule
     await schedule_task(
         task_slug=task_slug,
         task_name=step.get("description", task_slug),
-        availability=message,
+        availability=extraction.get("availability", message),
         collection_id=state.collection_id,
     )
 
     response = await agent._say(
         f"""De beschikbaarheid voor het **medisch onderzoek** is genoteerd ✅
 Bevestig dat je de beschikbaarheid hebt doorgegeven en dat de kandidaat hierover nog bericht krijgt.
-Max 1-2 zinnen."""
+Max 1-2 zinnen. GEEN begroeting."""
     )
 
-    return response + "\n\n" + await agent._advance_step()
+    advance_msg = await agent._advance_step()
+    return [response, advance_msg]

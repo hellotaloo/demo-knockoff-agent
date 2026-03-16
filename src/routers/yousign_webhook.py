@@ -121,6 +121,12 @@ async def _handle_contract_signed(request_id: str, request_name: str, data: dict
     # Update agent_state context to mark contract as signed
     context["contract_signed"] = True
     agent_state["context"] = context
+
+    # Mark contract_signing step as completed so frontend progress updates
+    completed = agent_state.get("completed_steps", [])
+    if "contract_signing" not in completed:
+        completed.append("contract_signing")
+        agent_state["completed_steps"] = completed
     await pool.execute(
         """UPDATE agents.document_collections
         SET agent_state = $1::jsonb, updated_at = NOW()
@@ -131,6 +137,74 @@ async def _handle_contract_signed(request_id: str, request_name: str, data: dict
 
     # Push confirmation message to playground session (if active)
     push_playground_message(str(collection_id), confirmation_msg)
+
+    # Mark collection as completed
+    await pool.execute(
+        "UPDATE agents.document_collections SET status = 'completed', completed_at = NOW() WHERE id = $1",
+        collection_id,
+    )
+
+    # Advance workflow to complete
+    try:
+        from src.workflows import get_orchestrator
+        orchestrator = await get_orchestrator()
+        wf = await orchestrator.find_by_context("collection_id", str(collection_id))
+        if wf:
+            await orchestrator.service.update_step(wf["id"], "complete", new_status="completed")
+            logger.info("[YOUSIGN] Workflow advanced to complete for collection=%s", collection_id)
+    except Exception as e:
+        logger.warning("[YOUSIGN] Workflow advancement failed: %s", e)
+
+    # Transition candidacy
+    candidacy_row = await pool.fetchrow(
+        "SELECT candidacy_id FROM agents.document_collections WHERE id = $1", collection_id
+    )
+    if candidacy_row and candidacy_row["candidacy_id"]:
+        try:
+            from src.services.candidacy_transition_service import CandidacyStageTransitionService
+            from src.models.candidacy import CandidacyStage
+            service = CandidacyStageTransitionService(pool)
+            await service.transition(
+                candidacy_id=candidacy_row["candidacy_id"],
+                to_stage=CandidacyStage.PLACED,
+                triggered_by="yousign_webhook",
+            )
+            logger.info("[YOUSIGN] Candidacy transitioned to PLACED")
+        except Exception as e:
+            logger.warning("[YOUSIGN] Candidacy transition failed: %s", e)
+
+        # Store contract URL on candidacy
+        if signing_url:
+            try:
+                await pool.execute(
+                    "UPDATE ats.candidacies SET contract_url = $1 WHERE id = $2",
+                    signing_url, candidacy_row["candidacy_id"],
+                )
+            except Exception as e:
+                logger.warning("[YOUSIGN] Contract URL update failed: %s", e)
+
+    # Notify recruiter team
+    try:
+        from src.routers.document_collection import _notify_recruiter_team
+        await _notify_recruiter_team(pool, collection_id)
+    except Exception as e:
+        logger.warning("[YOUSIGN] Teams notification failed: %s", e)
+
+    # Persist review flags to candidacy record
+    review_flags = agent_state.get("review_flags", [])
+    if review_flags:
+        candidacy_row = await pool.fetchrow(
+            "SELECT candidacy_id FROM agents.document_collections WHERE id = $1", collection_id
+        )
+        if candidacy_row and candidacy_row["candidacy_id"]:
+            try:
+                reason = "; ".join(f["reason"] for f in review_flags)
+                await pool.execute(
+                    "UPDATE ats.candidacies SET recruiter_verification = true, recruiter_verification_reason = $1 WHERE id = $2",
+                    reason, candidacy_row["candidacy_id"],
+                )
+            except Exception as e:
+                logger.warning("[YOUSIGN] Recruiter verification flag update failed: %s", e)
 
     logger.info("[YOUSIGN] ✅ Contract signed for collection=%s, candidate=%s", collection_id, candidate_name)
 

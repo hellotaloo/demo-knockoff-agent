@@ -183,7 +183,6 @@ class DocumentCollectionAgent:
             "--address--": "address_collection",
             "--documents--": "collect_documents",
             "--attributes--": "collect_attributes",
-            "--closing--": "closing",
         }
         target_type = tag_map.get(tag)
         if not target_type:
@@ -245,8 +244,40 @@ class DocumentCollectionAgent:
         return await self._advance_step()
 
     async def _handle_done(self) -> str:
-        """Called when all steps are complete."""
-        return "Bedankt! Je dossier is volledig. Tot binnenkort! 👍"
+        """Called when all steps are complete. Generates a warm closing with summary."""
+        state = self.state
+
+        collected_docs = [slug for slug, v in state.collected_documents.items() if v.get("status") == "verified"]
+        collected_attrs = list(state.collected_attributes.keys())
+        skipped = [i.get("name", i.get("slug", "")) for i in state.skipped_items]
+
+        parts = []
+        if collected_docs:
+            parts.append(f"Documenten ontvangen: {', '.join(collected_docs)}")
+        if collected_attrs:
+            parts.append(f"Gegevens ontvangen: {', '.join(collected_attrs)}")
+
+        skipped_note = ""
+        if skipped:
+            skipped_note = f"\nEr zijn nog items die niet verzameld konden worden: {', '.join(skipped)}. Een medewerker zal hiervoor contact opnemen."
+
+        recruiter_info = ""
+        if state.recruiter_name:
+            recruiter_info = f"\nNoem **{state.recruiter_name}** als contactpersoon voor verdere vragen"
+            if state.recruiter_email:
+                recruiter_info += f" ({state.recruiter_email})"
+            elif state.recruiter_phone:
+                recruiter_info += f" ({state.recruiter_phone})"
+            recruiter_info += "."
+
+        closing_msg = await self._say(
+            f"""Sluit het gesprek af. Bedank {state.candidate_name} hartelijk.
+Samenvatting: {'; '.join(parts) if parts else 'Alle items verwerkt.'}{skipped_note}{recruiter_info}
+Max 3 zinnen. Warme afsluiting."""
+        )
+
+        state.current_step_index = len(state.conversation_flow)
+        return closing_msg
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -272,6 +303,37 @@ class DocumentCollectionAgent:
         advance_msg = await self._advance_step()
         return [advance_msg]
 
+    async def _handle_question(self, question: str) -> str | None:
+        """Detect and answer candidate questions. Returns answer or None if not a question."""
+        from src.utils.llm import generate as llm_generate
+
+        detection = await llm_generate(
+            prompt=f"""De kandidaat stuurt het volgende bericht tijdens een onboarding-gesprek:
+"{question}"
+
+Is dit een VRAAG die de kandidaat stelt (over het proces, de job, het bedrijf, documenten, etc.)?
+Antwoord ALLEEN "JA" of "NEE".""",
+            temperature=0,
+            max_output_tokens=5,
+        )
+
+        if "JA" not in detection.strip().upper():
+            return None
+
+        step = self._current_step()
+        step_context = step.get("description", "") if step else ""
+
+        answer = await self._say(
+            f"""De kandidaat stelt een vraag: "{question}"
+Context: we zijn bezig met een onboarding-gesprek voor de functie {self.state.vacancy_title} bij {self.state.company_name}.
+Huidige stap: {step_context}
+
+Beantwoord de vraag kort en vriendelijk. Als je het antwoord niet weet, zeg dat de recruiter hierover meer info kan geven.
+Stuur daarna het gesprek terug naar de huidige stap.
+GEEN begroeting. Max 2-3 zinnen."""
+        )
+        return answer
+
     async def process_message(self, user_message: str, has_image: bool = False) -> str:
         """Main entry point — route to the appropriate step handler."""
         self.state.message_count += 1
@@ -284,6 +346,12 @@ class DocumentCollectionAgent:
 
         if not step:
             return await self._handle_done()
+
+        # Handle candidate questions before routing to step handler
+        if not has_image and len(user_message.strip()) > 5:
+            question_answer = await self._handle_question(user_message)
+            if question_answer:
+                return question_answer
 
         step_type = step.get("type", "")
         handler_pair = STEP_HANDLERS.get(step_type)

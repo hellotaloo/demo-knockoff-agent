@@ -92,6 +92,9 @@ def _build_response(row) -> CandidacyResponse:
         vacancy=vacancy,
         latest_application=latest_app,
         linked_vacancies=linked_vacancies,
+        recruiter_verification=row["recruiter_verification"] or False,
+        recruiter_verification_reason=row["recruiter_verification_reason"],
+        contract_url=row["contract_url"],
     )
 
 

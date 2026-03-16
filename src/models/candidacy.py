@@ -75,6 +75,10 @@ class CandidacyResponse(BaseModel):
     latest_application: Optional[CandidacyApplicationSummary] = None
     linked_vacancies: list[CandidacyVacancyLink] = []
 
+    recruiter_verification: bool = False
+    recruiter_verification_reason: Optional[str] = None
+    contract_url: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Request models

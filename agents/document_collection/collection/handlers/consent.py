@@ -50,7 +50,7 @@ def _build_intro_messages(state) -> list[str]:
     # ── Bubble 1: greeting ──
     if goal == "placement-collect":
         date_part = f" op **{start_date}**" if start_date else " binnenkort"
-        greeting = f"Hoi {first_name}, proficiat met je nieuwe contract! 🎉"
+        greeting = f"Hoi {first_name}, proficiat met je nieuwe opdracht! 🎉"
         if vacancy and company:
             greeting += f"\nJe start{date_part} als **{vacancy}** bij **{company}**."
         elif vacancy:
@@ -71,13 +71,13 @@ def _build_intro_messages(state) -> list[str]:
         consent = (
             "Om je dossier voor je opstart correct te verwerken, hebben we nog enkele "
             "**persoonlijke gegevens** en **documenten** nodig in het kader van je tewerkstelling.\n\n"
-            "👉🏻 **Kan je bevestigen dat je akkoord bent om deze gegevens via WhatsApp te delen?**"
+            "✅ **Kan je bevestigen dat je akkoord bent om deze gegevens via WhatsApp te delen?**"
         )
     else:
         consent = (
             "Om je profiel in orde te brengen, hebben we nog enkele "
             "**persoonlijke gegevens** nodig.\n\n"
-            "👉🏻 **Kan je bevestigen dat je akkoord bent om deze gegevens via WhatsApp te delen?**"
+            "✅ **Kan je bevestigen dat je akkoord bent om deze gegevens via WhatsApp te delen?**"
         )
 
     return [greeting, consent]

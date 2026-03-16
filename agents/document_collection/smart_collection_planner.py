@@ -56,7 +56,6 @@ STAP TYPES:
 6. "contract_signing" — Contract ter ondertekening aanbieden.
    ALLEEN toevoegen als candidacy_stage="offer" EN er een regime is (full, flex, of day).
    Heeft altijd requires: ["identity_verification", "address_collection", "collect_attributes"].
-7. "closing" — Altijd de laatste stap. Samenvatting en afsluiting.
 
 REQUIRES (voorwaarden):
 - Een stap met requires wordt pas uitgevoerd als alle genoemde stap-types zijn afgerond.
@@ -205,11 +204,6 @@ Analyseer de vacature en het kandidaatprofiel. Maak een verzamelplan als JSON:
       "type": "contract_signing",
       "description": "Contract ter ondertekening aanbieden.",
       "requires": ["identity_verification", "address_collection", "collect_attributes"]
-    }},
-    {{
-      "step": 7,
-      "type": "closing",
-      "description": "Samenvatting en afsluiting."
     }}
   ],
   "attributes_from_documents": [
@@ -288,6 +282,8 @@ def build_attr_types_list(attr_types: list) -> str:
         if at["slug"] in HARDCODED_ATTR_SLUGS:
             continue
         parts = [at['data_type'], at['category']]
+        if at.get("collected_by"):
+            parts.append(f"collection_method={at['collected_by']}")
         line = f"- {at['slug']}: {at['name']} ({', '.join(parts)})"
         if at.get("is_default"):
             line += " [standaard]"

@@ -304,7 +304,7 @@ Kort en direct. Max 1 zin."""
 async def _advance_to_next_item(
     agent: DocumentCollectionAgent, step: dict,
     completed_item: dict, skipped: bool = False,
-) -> str:
+) -> str | list[str]:
     state = agent.state
     state.step_item_index += 1
     state.waiting_for_back = None
@@ -323,8 +323,8 @@ async def _advance_to_next_item(
     if next_item:
         enriched = _build_item_from_cache(agent, next_item)
         next_request = await _ask_document(agent, enriched)
-        return confirm + "\n\n" + next_request
+        return [confirm, next_request]
 
     # All items done
     advance_msg = await agent._advance_step()
-    return confirm + "\n\n" + advance_msg
+    return [confirm, advance_msg]

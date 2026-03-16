@@ -192,6 +192,65 @@ async def handle_identity(agent: DocumentCollectionAgent, message: str, has_imag
     return await agent._advance_step()
 
 
+_FIELD_TO_SLUG = {
+    "date_of_birth": "date_of_birth",
+    "nationality": "nationality",
+    "national_registry_number": "national_register_nr",
+    "holder_name": "holder_name",
+    "expiry_date": "expiry_date",
+    "document_number": "document_number",
+}
+
+
+def _normalize_date(value: str) -> str:
+    """Normalize date values to YYYY-MM-DD format.
+
+    Handles MRZ dates (YYMMDD like '870809'), European formats (DD.MM.YYYY, DD/MM/YYYY),
+    and passes through already correct YYYY-MM-DD values.
+    """
+    if not value or not isinstance(value, str):
+        return value
+    cleaned = value.strip().replace(" ", "")
+
+    # Already YYYY-MM-DD
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        return cleaned
+
+    # MRZ format: YYMMDD (6 digits)
+    if re.match(r"^\d{6}$", cleaned):
+        yy, mm, dd = int(cleaned[:2]), cleaned[2:4], cleaned[4:6]
+        # Assume 1900s for years > 30, 2000s for <= 30
+        yyyy = 1900 + yy if yy > 30 else 2000 + yy
+        return f"{yyyy}-{mm}-{dd}"
+
+    # European: DD.MM.YYYY or DD/MM/YYYY
+    m = re.match(r"^(\d{2})[./](\d{2})[./](\d{4})$", cleaned)
+    if m:
+        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+
+    # European short: DD.MM.YY or DD/MM/YY
+    m = re.match(r"^(\d{2})[./](\d{2})[./](\d{2})$", cleaned)
+    if m:
+        yy = int(m.group(3))
+        yyyy = 1900 + yy if yy > 30 else 2000 + yy
+        return f"{yyyy}-{m.group(2)}-{m.group(1)}"
+
+    return value
+
+
+def _auto_populate_attributes(state, doc_data: dict) -> None:
+    """Auto-populate collected_attributes from extracted identity fields."""
+    extracted = doc_data.get("extracted_fields") or {}
+    for field_key, attr_slug in _FIELD_TO_SLUG.items():
+        value = extracted.get(field_key)
+        if value and any(afd.get("slug") == attr_slug for afd in state.attributes_from_documents):
+            # Normalize date fields to YYYY-MM-DD
+            if field_key in ("date_of_birth", "expiry_date"):
+                value = _normalize_date(value)
+            state.collected_attributes[attr_slug] = {"value": value}
+            logger.info(f"[IDENTITY] Auto-extracted {attr_slug}={value}")
+
+
 async def _handle_id_phase(agent: DocumentCollectionAgent, message: str, has_image: bool) -> str:
     state = agent.state
 
@@ -241,6 +300,14 @@ Vraag vriendelijk om een nieuwe foto. Max 2 zinnen."""
     if verification.get("extracted_fields"):
         doc_data["extracted_fields"] = verification["extracted_fields"]
 
+    # Set EU citizenship early (available from front-side nationality extraction)
+    if "eu_citizen" in verification:
+        state.eu_citizen = verification["eu_citizen"]
+        if state.eu_citizen is True:
+            state.work_eligibility = True
+            state.collected_attributes["work_eligibility"] = {"value": "Ja"}
+            logger.info("EU citizen detected from front-side scan — work_eligibility=true")
+
     # Check if we need the back side
     if scan_mode == "front_back" and not state.waiting_for_back:
         doc_data["status"] = "front_verified"
@@ -248,6 +315,8 @@ Vraag vriendelijk om een nieuwe foto. Max 2 zinnen."""
         state.collected_documents[resolved_slug] = doc_data
         state.waiting_for_back = resolved_slug
         state.identity_phase = "waiting_id"
+        # Auto-populate attributes from front-side extraction
+        _auto_populate_attributes(state, doc_data)
         return await agent._say(
             f"""Voorkant van het identiteitsdocument is goed ontvangen ✅
 Vraag nu om de **achterkant**.
@@ -274,23 +343,8 @@ Kort en vriendelijk, max 1 zin."""
         doc_data["sides_collected"] = ["single"]
         state.collected_documents[resolved_slug] = doc_data
 
-    # Auto-populate attributes_from_documents with extracted fields
-    extracted = doc_data.get("extracted_fields") or {}
-    if extracted:
-        # Map recognition field names → attribute slugs
-        field_to_slug = {
-            "date_of_birth": "date_of_birth",
-            "nationality": "nationality",
-            "national_registry_number": "national_register_nr",
-            "holder_name": "holder_name",
-            "expiry_date": "expiry_date",
-            "document_number": "document_number",
-        }
-        for field_key, attr_slug in field_to_slug.items():
-            value = extracted.get(field_key)
-            if value and any(afd.get("slug") == attr_slug for afd in state.attributes_from_documents):
-                state.collected_attributes[attr_slug] = {"value": value}
-                logger.info(f"[IDENTITY] Auto-extracted {attr_slug}={value}")
+    # Auto-populate attributes from extracted fields
+    _auto_populate_attributes(state, doc_data)
 
     # Set EU citizenship
     if "eu_citizen" in verification:
@@ -299,7 +353,7 @@ Kort en vriendelijk, max 1 zin."""
     # Auto-extract attributes from identity document
     if state.eu_citizen is True:
         state.work_eligibility = True
-        state.collected_attributes["work_eligibility"] = {"value": True}
+        state.collected_attributes["work_eligibility"] = {"value": "Ja"}
         state.identity_phase = "done"
         logger.info("EU citizen — work_eligibility=true, skipping work permits")
         return await agent._advance_step()
@@ -397,7 +451,7 @@ Vraag vriendelijk om een nieuwe foto. Max 2 zinnen."""
 
     state.collected_documents[resolved_slug] = doc_data
     state.work_eligibility = True
-    state.collected_attributes["work_eligibility"] = {"value": True}
+    state.collected_attributes["work_eligibility"] = {"value": "Ja"}
     state.identity_phase = "done"
     logger.info(f"Work permit verified ({resolved_slug}) — work_eligibility=true")
     return await agent._advance_step()

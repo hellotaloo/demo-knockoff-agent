@@ -12,7 +12,6 @@ from agents.document_collection.collection.handlers.address import enter_address
 from agents.document_collection.collection.handlers.attributes import enter_attributes, handle_attributes
 from agents.document_collection.collection.handlers.documents import enter_documents, handle_documents
 from agents.document_collection.collection.handlers.tasks import enter_task, handle_task
-from agents.document_collection.collection.handlers.closing import enter_closing, handle_closing
 
 # Registry: step_type -> (enter_handler, message_handler)
 STEP_HANDLERS: dict[str, tuple] = {
@@ -23,5 +22,4 @@ STEP_HANDLERS: dict[str, tuple] = {
     "collect_documents": (enter_documents, handle_documents),
     "medical_screening": (enter_task, handle_task),
     "contract_signing": (enter_task, handle_task),
-    "closing": (enter_closing, handle_closing),
 }

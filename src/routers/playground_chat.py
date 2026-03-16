@@ -6,6 +6,7 @@ via a single endpoint with agent_type dispatch.
 
 Sessions are ephemeral (in-memory only) — no database persistence.
 """
+import asyncio
 import json
 import logging
 import uuid
@@ -44,8 +45,11 @@ class PlaygroundAgent:
     agent_type: str
     candidate_name: str
     context_id: str = ""
+    candidate_id: str = ""
+    candidacy_id: str = ""
+    live_mode: bool = False
 
-    async def process(self, message: str) -> str:
+    async def process(self, message: str) -> str | list[str]:
         if self.agent_type == "document_collection":
             has_image = (
                 self.agent.pending_image_data is not None
@@ -160,12 +164,11 @@ class PlaygroundAgent:
                     "name": _name("work_eligibility"),
                     "type": "document",
                     "collected": state.work_eligibility is True,
+                    "value": "Ja" if state.work_eligibility is True else ("Nee" if state.work_eligibility is False else None),
                 })
                 # Attributes extracted from identity document
                 for afd in state.attributes_from_documents:
                     afd_slug = afd.get("slug", "")
-                    if afd_slug == "work_eligibility":
-                        continue
                     afd_info = state.collected_attributes.get(afd_slug)
                     items.append({
                         "slug": afd_slug,
@@ -343,7 +346,7 @@ async def _bootstrap_document_collection(pool, collection_id: str, candidate_nam
     row = await pool.fetchrow(
         """
         SELECT dc.id, dc.candidate_name, dc.candidate_phone, dc.collection_plan,
-               dc.workspace_id,
+               dc.workspace_id, dc.candidate_id, dc.candidacy_id,
                v.title AS vacancy_title,
                ol.name AS office_name,
                p.start_date,
@@ -402,7 +405,117 @@ async def _bootstrap_document_collection(pool, collection_id: str, candidate_nam
         recruiter_phone=row["recruiter_phone"] or "",
     )
 
-    return PlaygroundAgent(agent=agent, agent_type="document_collection", candidate_name=name, context_id=collection_id)
+    return PlaygroundAgent(
+        agent=agent,
+        agent_type="document_collection",
+        candidate_name=name,
+        context_id=collection_id,
+        candidate_id=str(row["candidate_id"]) if row["candidate_id"] else "",
+        candidacy_id=str(row["candidacy_id"]) if row["candidacy_id"] else "",
+    )
+
+
+# =============================================================================
+# Live mode — persist collected data to real candidate records
+# =============================================================================
+
+async def _sync_live_mode(wrapper: PlaygroundAgent, pool):
+    """Persist collected attributes to ats.candidate_attributes (idempotent via upsert)."""
+    from src.repositories.candidate_attribute_repo import CandidateAttributeRepository
+
+    state = wrapper.agent.state
+    type_cache = wrapper.agent.type_cache
+    candidate_uuid = uuid.UUID(wrapper.candidate_id)
+    attr_repo = CandidateAttributeRepository(pool)
+
+    for slug, attr_data in state.collected_attributes.items():
+        attr_type = type_cache.get_attr_type(slug)
+        if not attr_type or "id" not in attr_type:
+            logger.debug(f"[LIVE] Skipping attribute '{slug}' — no type definition in TypeCache")
+            continue
+
+        value = attr_data.get("value")
+        if isinstance(value, dict):
+            value = json.dumps(value)
+        elif value is not None:
+            value = str(value)
+
+        try:
+            await attr_repo.upsert(
+                candidate_id=candidate_uuid,
+                attribute_type_id=attr_type["id"],
+                value=value,
+                source="document_collection_agent",
+                verified=False,
+            )
+        except Exception as e:
+            logger.warning(f"[LIVE] Failed to upsert attribute '{slug}': {e}")
+
+
+async def _sync_live_mode_completion(wrapper: PlaygroundAgent, pool):
+    """Transition candidacy to PLACED on collection completion."""
+    if not wrapper.candidacy_id:
+        return
+
+    try:
+        from src.services.candidacy_transition_service import CandidacyStageTransitionService
+        from src.models.candidacy import CandidacyStage
+
+        service = CandidacyStageTransitionService(pool)
+        await service.transition(
+            candidacy_id=uuid.UUID(wrapper.candidacy_id),
+            to_stage=CandidacyStage.PLACED,
+            triggered_by="document_collection_playground",
+        )
+        logger.info(f"[LIVE] Transitioned candidacy {wrapper.candidacy_id[:8]}... to PLACED")
+    except Exception as e:
+        logger.warning(f"[LIVE] Candidacy transition failed: {e}")
+
+    # Notify recruiter team via Teams
+    if wrapper.context_id:
+        try:
+            from src.routers.document_collection import _notify_recruiter_team
+            await _notify_recruiter_team(pool, uuid.UUID(wrapper.context_id))
+        except Exception as e:
+            logger.warning(f"[LIVE] Teams notification failed: {e}")
+
+    # Update collection status to completed
+    if wrapper.context_id:
+        try:
+            await pool.execute(
+                "UPDATE agents.document_collections SET status = 'completed', completed_at = NOW() WHERE id = $1",
+                uuid.UUID(wrapper.context_id),
+            )
+            logger.info(f"[LIVE] Collection {wrapper.context_id[:8]}... marked as completed")
+        except Exception as e:
+            logger.warning(f"[LIVE] Collection status update failed: {e}")
+
+    # Advance workflow
+    if wrapper.context_id:
+        try:
+            from src.workflows import get_orchestrator
+            orchestrator = await get_orchestrator()
+            wf = await orchestrator.find_by_context("collection_id", wrapper.context_id)
+            if wf:
+                await orchestrator.service.update_step(wf["id"], "complete", new_status="completed")
+                logger.info(f"[LIVE] Workflow advanced to collection_complete")
+        except Exception as e:
+            logger.warning(f"[LIVE] Workflow advancement failed: {e}")
+
+    # Persist review flags (e.g. non-Belgian IBAN) to candidacy record
+    if wrapper.candidacy_id and wrapper.agent_type == "document_collection":
+        review_flags = wrapper.agent.state.review_flags
+        if review_flags:
+            try:
+                reason = "; ".join(f["reason"] for f in review_flags)
+                await pool.execute(
+                    "UPDATE ats.candidacies SET recruiter_verification = true, recruiter_verification_reason = $1 WHERE id = $2",
+                    reason,
+                    uuid.UUID(wrapper.candidacy_id),
+                )
+                logger.info(f"[LIVE] Set recruiter_verification for candidacy {wrapper.candidacy_id[:8]}... ({len(review_flags)} flags)")
+            except Exception as e:
+                logger.warning(f"[LIVE] Recruiter verification flag update failed: {e}")
 
 
 # =============================================================================
@@ -417,6 +530,7 @@ async def stream_playground_chat(
     collection_id: Optional[str],
     candidate_name: Optional[str],
     image_base64: Optional[str] = None,
+    live_mode: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events for a playground chat turn."""
     global _chat_sessions
@@ -457,6 +571,7 @@ async def stream_playground_chat(
             yield "data: [DONE]\n\n"
             return
 
+        wrapper.live_mode = live_mode
         _chat_sessions[session_id] = wrapper
         if wrapper.context_id:
             _collection_to_session[wrapper.context_id] = session_id
@@ -467,8 +582,22 @@ async def stream_playground_chat(
         logger.info(f"👤 Candidate: {candidate_name} | Session: {session_id[:8]}...")
         logger.info("=" * 60)
 
+        # Advance workflow to 'collecting' when conversation starts
+        if wrapper.live_mode and wrapper.context_id and agent_type == "document_collection":
+            try:
+                from src.workflows import get_orchestrator
+                orchestrator = await get_orchestrator()
+                wf = await orchestrator.find_by_context("collection_id", wrapper.context_id)
+                if wf:
+                    await orchestrator.service.update_step(wf["id"], "collecting")
+                    logger.info(f"[LIVE] Workflow advanced to collecting")
+            except Exception as e:
+                logger.warning(f"[LIVE] Workflow advance to collecting failed: {e}")
+
     else:
         wrapper = _chat_sessions.get(session_id)
+        if wrapper:
+            wrapper.live_mode = live_mode
         if not wrapper:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found. Please start a new conversation.'})}\n\n"
             yield "data: [DONE]\n\n"
@@ -488,8 +617,15 @@ async def stream_playground_chat(
         else:
             result = await wrapper.process(message)
 
-        # get_initial_message may return list[str] (multiple bubbles) or str
-        messages_list = result if isinstance(result, list) else [result]
+        # Handlers may return str, list[str], or nested lists — flatten to list[str]
+        def _flatten(val):
+            if isinstance(val, str):
+                return [val]
+            out = []
+            for item in val:
+                out.extend(_flatten(item))
+            return out
+        messages_list = _flatten(result)
 
         # Persist agent state to DB for document_collection (needed for Yousign webhook lookup)
         if wrapper.agent_type == "document_collection" and wrapper.context_id:
@@ -505,13 +641,31 @@ async def stream_playground_chat(
             except Exception as e:
                 logger.warning(f"Failed to persist playground agent state: {e}")
 
+        # Live mode: persist collected attributes to candidate records
+        if wrapper.live_mode and wrapper.candidate_id and wrapper.agent_type == "document_collection":
+            logger.info(f"[LIVE] Syncing {len(wrapper.agent.state.collected_attributes)} attributes for candidate {wrapper.candidate_id}")
+            try:
+                await _sync_live_mode(wrapper, pool)
+            except Exception as e:
+                logger.warning(f"[LIVE] Sync failed: {e}")
+
         is_complete = wrapper.is_complete()
         collection_progress = wrapper.get_collection_progress()
 
-        if is_complete and session_id in _chat_sessions:
-            del _chat_sessions[session_id]
+        if is_complete:
+            # Live mode: transition candidacy to PLACED on completion
+            if wrapper.live_mode and wrapper.candidate_id:
+                try:
+                    await _sync_live_mode_completion(wrapper, pool)
+                except Exception as e:
+                    logger.warning(f"[LIVE] Completion sync failed: {e}")
+            if session_id in _chat_sessions:
+                del _chat_sessions[session_id]
 
-        for msg_text in messages_list:
+        for i, msg_text in enumerate(messages_list):
+            # Add delay between multiple messages for natural UX
+            if i > 0:
+                await asyncio.sleep(1.5)
             payload = {
                 'type': 'complete',
                 'message': msg_text,
@@ -538,12 +692,21 @@ def push_playground_message(collection_id: str, message: str):
     """Push a message into the playground session for a given collection_id.
 
     Called by the Yousign webhook to inject confirmation messages.
+    Also marks contract_signing as completed in the in-memory agent state.
     """
     session_id = _collection_to_session.get(collection_id)
     if not session_id:
         logger.warning(f"[PLAYGROUND] No active session for collection_id={collection_id}")
         return False
     _pending_messages.setdefault(session_id, []).append(message)
+
+    # Update in-memory agent state so collection_progress reflects the change
+    wrapper = _chat_sessions.get(session_id)
+    if wrapper and wrapper.agent_type == "document_collection":
+        state = wrapper.agent.state
+        if "contract_signing" not in state.completed_steps:
+            state.completed_steps.append("contract_signing")
+
     logger.info(f"[PLAYGROUND] Pushed message to session {session_id[:8]}... for collection {collection_id[:8]}...")
     return True
 
@@ -552,7 +715,17 @@ def push_playground_message(collection_id: str, message: str):
 async def playground_chat_pending(session_id: str):
     """Return and clear any pending messages for this session (e.g. from webhooks)."""
     messages = _pending_messages.pop(session_id, [])
-    return {"messages": messages}
+    result = {"messages": messages}
+
+    # Include collection_progress if available so frontend updates the checklist
+    if messages:
+        wrapper = _chat_sessions.get(session_id)
+        if wrapper:
+            progress = wrapper.get_collection_progress()
+            if progress is not None:
+                result["collection_progress"] = progress
+
+    return result
 
 
 @router.delete("/playground/chat/{session_id}")
@@ -583,6 +756,7 @@ async def playground_chat(request: PlaygroundChatRequest):
             collection_id=request.collection_id,
             candidate_name=request.candidate_name,
             image_base64=request.image_base64,
+            live_mode=request.live_mode,
         ),
         media_type="text/event-stream",
         headers={

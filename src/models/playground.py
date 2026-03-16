@@ -17,3 +17,5 @@ class PlaygroundChatRequest(BaseModel):
     # Image upload (base64-encoded)
     image_base64: Optional[str] = None
     image_mime_type: Optional[str] = None
+    # Live mode — persist collected data to candidate records & transition candidacy
+    live_mode: bool = False

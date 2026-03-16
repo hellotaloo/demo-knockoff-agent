@@ -105,18 +105,41 @@ IMPORTANT: If first name AND last name match, it's partial_match even with extra
 ### 4. DOCUMENT-SPECIFIC FIELDS
 {extra_fields_instruction}
 
-### 5. FRAUD DETECTION
+### 5. DOCUMENT COMPLETENESS (CRITICAL)
+The document MUST be **fully visible** in the image. REJECT the image if:
+- Any **edge or corner** of the document is cut off or outside the frame
+- The document is **partially covered** by fingers, objects, or shadows that hide text
+- Any **required field** is not readable or extractable (set to null in extracted_fields)
+
+If the document is not fully visible, set image_quality to "poor" and add specific issues to readability_issues.
+
+For the extracted_fields: every requested field MUST be extracted. If a field cannot be read, set it to null.
+If more than 1 required field is null, the image quality should be "poor" at best.
+
+### 6. FRAUD DETECTION
 Check for: AI-generated portraits, digital manipulation, font mismatches, inconsistent resolution, tampered data.
 For each indicator: type, description, severity (low/medium/high), confidence (0-1).
 
-### 6. IMAGE QUALITY
-- **excellent**: High res, well-lit, full document visible
-- **good**: Clear, minor issues, usable for OCR
-- **acceptable**: Readable despite slight angle/glare
-- **poor**: Difficult to read
+### 7. IMAGE QUALITY
+- **excellent**: High res, well-lit, full document visible, all fields readable
+- **good**: Clear, minor issues, full document visible, all fields readable
+- **acceptable**: Readable despite slight angle/glare, document fully visible
+- **poor**: Document partially visible, fields missing, too dark/blurry, or significant issues
 - **unreadable**: Cannot extract meaningful information
 
-Be PRAGMATIC: slight glare and angles are NORMAL. Only reject if genuinely unusable.
+Be PRAGMATIC about minor glare and slight angles — these are NORMAL.
+Be STRICT about: document edges cut off, fields not readable, document not fully in frame.
+
+### 8. FEEDBACK MESSAGE (REQUIRED when image_quality is "poor" or "unreadable")
+Provide a short, friendly feedback message in **Dutch** explaining what is wrong with the photo and how to fix it.
+The message should be specific about the problem (not generic). Examples:
+- "Het document is niet volledig zichtbaar — zorg dat alle randen van het document in beeld zijn."
+- "De foto is te donker, de tekst is niet leesbaar. Probeer het opnieuw met meer licht."
+- "Er valt een schaduw over het document waardoor sommige gegevens niet leesbaar zijn."
+- "De foto is onscherp — houd je telefoon stil en zorg voor voldoende licht."
+- "Een deel van het document is afgesneden. Zorg dat het volledige document in beeld is."
+
+Set feedback_message to null when image_quality is "excellent", "good", or "acceptable".
 
 ## OUTPUT FORMAT
 Respond ONLY with a JSON object:
@@ -139,6 +162,7 @@ Respond ONLY with a JSON object:
   "overall_fraud_confidence": 0.05,
   "image_quality": "good",
   "readability_issues": [],
+  "feedback_message": null,
   "verification_summary": "Belgian ID card for Jan de Vries. No fraud indicators. Document appears authentic."
 }}
 ```
@@ -149,8 +173,8 @@ IMPORTANT: Respond ONLY with JSON, no additional text.
 EXTRA_FIELDS_BY_TYPE = {
     "id_card": (
         "Extract these fields from the Belgian ID card:\n"
-        "- date_of_birth (DD.MM.YYYY or as shown)\n"
-        "- expiry_date (DD.MM.YYYY or as shown)\n"
+        "- date_of_birth (ALWAYS output as YYYY-MM-DD, e.g. '1987-08-09'. Convert from any format on the document.)\n"
+        "- expiry_date (ALWAYS output as YYYY-MM-DD)\n"
         "- national_registry_number (rijksregisternummer, format: XX.XX.XX-XXX.XX)\n"
         "- nationality\n"
         "- place_of_birth\n"
@@ -158,16 +182,16 @@ EXTRA_FIELDS_BY_TYPE = {
     ),
     "driver_license": (
         "Extract these fields from the driving license:\n"
-        "- date_of_birth (DD.MM.YYYY or as shown)\n"
-        "- expiry_date\n"
+        "- date_of_birth (ALWAYS output as YYYY-MM-DD)\n"
+        "- expiry_date (ALWAYS output as YYYY-MM-DD)\n"
         "- license_categories (e.g. 'B, BE')\n"
-        "- issue_date\n"
+        "- issue_date (ALWAYS output as YYYY-MM-DD)\n"
         "Set to null if not visible."
     ),
     "passport": (
         "Extract these fields from the passport:\n"
-        "- date_of_birth\n"
-        "- expiry_date\n"
+        "- date_of_birth (ALWAYS output as YYYY-MM-DD)\n"
+        "- expiry_date (ALWAYS output as YYYY-MM-DD)\n"
         "- passport_number\n"
         "- nationality\n"
         "- place_of_birth\n"
@@ -176,9 +200,9 @@ EXTRA_FIELDS_BY_TYPE = {
 }
 
 EXAMPLE_FIELDS_BY_TYPE = {
-    "id_card": '    "date_of_birth": "01.01.1990",\n    "expiry_date": "01.01.2030",\n    "national_registry_number": "90.01.01-123.45",\n    "nationality": "Belg",\n    "place_of_birth": "Gent"',
-    "driver_license": '    "date_of_birth": "01.01.1990",\n    "expiry_date": "01.01.2030",\n    "license_categories": "B",\n    "issue_date": "01.01.2020"',
-    "passport": '    "date_of_birth": "01.01.1990",\n    "expiry_date": "01.01.2030",\n    "passport_number": "AB123456",\n    "nationality": "Belgian",\n    "place_of_birth": "Gent"',
+    "id_card": '    "date_of_birth": "1990-01-01",\n    "expiry_date": "2030-01-01",\n    "national_registry_number": "90.01.01-123.45",\n    "nationality": "BEL",\n    "place_of_birth": "Gent"',
+    "driver_license": '    "date_of_birth": "1990-01-01",\n    "expiry_date": "2030-01-01",\n    "license_categories": "B",\n    "issue_date": "2020-01-01"',
+    "passport": '    "date_of_birth": "1990-01-01",\n    "expiry_date": "2030-01-01",\n    "passport_number": "AB123456",\n    "nationality": "BEL",\n    "place_of_birth": "Gent"',
 }
 
 
@@ -372,19 +396,43 @@ async def verify_document(
     ]
 
     # Determine verification passed
+    image_quality = parsed.get("image_quality", "unreadable")
     verification_passed = (
         parsed.get("document_category") not in ["unknown", "unreadable"] and
         parsed.get("fraud_risk_level") != "high" and
-        parsed.get("image_quality") not in ["unreadable"]
+        image_quality not in ["unreadable", "poor"]
     )
     # Leniency for Belgian/Dutch partial name match
     if candidate_name and parsed.get("name_match_result") == "partial_match":
         if parsed.get("fraud_risk_level") != "high":
             verification_passed = True
 
-    image_quality = parsed.get("image_quality", "unreadable")
+    # Reject if name on document doesn't match the expected candidate name
+    if candidate_name and parsed.get("name_match_result") == "no_match":
+        verification_passed = False
+        logger.info(f"[RECOGNITION] Rejecting: name mismatch — expected '{candidate_name}', found '{parsed.get('extracted_name')}'")
+
+    # Reject if too many required fields are missing
+    extracted_fields = parsed.get("extracted_fields", {})
+    null_fields = [k for k, v in extracted_fields.items() if v is None]
+    if len(null_fields) > 1:
+        verification_passed = False
+        logger.info(f"[RECOGNITION] Rejecting: {len(null_fields)} fields missing: {null_fields}")
+
     readability_issues = parsed.get("readability_issues", [])
-    feedback = _generate_feedback(image_quality, readability_issues)
+
+    # Prefer Gemini's feedback message (specific to the actual issue), fall back to generic
+    feedback = parsed.get("feedback_message") or _generate_feedback(image_quality, readability_issues)
+    # Name mismatch feedback takes priority
+    if candidate_name and parsed.get("name_match_result") == "no_match":
+        extracted = parsed.get("extracted_name", "onbekend")
+        feedback = (
+            f"De naam op het document ({extracted}) komt niet overeen met de naam in ons systeem ({candidate_name}). "
+            "Stuur een identiteitsdocument op jouw naam."
+        )
+    # Also generate feedback for missing fields even when Gemini didn't provide one
+    elif not feedback and not verification_passed and null_fields:
+        feedback = "Niet alle gegevens op het document zijn leesbaar. Zorg dat het volledige document goed zichtbaar is met voldoende licht."
 
     result = DocumentVerificationResult(
         document_category=parsed.get("document_category", "unknown"),
@@ -417,6 +465,8 @@ async def verify_document(
     if result.extracted_fields:
         logger.info(f"Fields     : {result.extracted_fields}")
     logger.info(f"✅ PASSED  : {result.verification_passed}")
+    if result.feedback_message:
+        logger.info(f"Feedback   : {result.feedback_message}")
     logger.info(f"Summary    : {result.verification_summary}")
     logger.info("=" * 80)
 

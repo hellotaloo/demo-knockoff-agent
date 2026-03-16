@@ -14,6 +14,7 @@ import re
 from typing import TYPE_CHECKING
 
 from agents.document_collection.collection.rules import validate_iban, validate_phone
+from agents.document_collection.collection.handlers._iban_image import extract_iban_from_image
 
 if TYPE_CHECKING:
     from agents.document_collection.collection.agent import DocumentCollectionAgent
@@ -76,6 +77,12 @@ async def handle_attributes(agent: DocumentCollectionAgent, message: str, has_im
     enriched = _build_item_from_cache(agent, item)
     slug = enriched["slug"]
     fields = enriched.get("fields")
+
+    # IBAN: extract from bank card photo
+    if slug == "iban" and has_image and agent.pending_image_data:
+        iban_text = await extract_iban_from_image(agent.pending_image_data)
+        if iban_text:
+            message = iban_text
 
     # Check skip intent
     if _SKIP_PATTERNS.search(message):
@@ -202,7 +209,7 @@ Gebruik **bold** rond het sleutelwoord. Kort en direct. Max 1 zin."""
     )
 
 
-async def _advance_to_next_item(agent: DocumentCollectionAgent, step: dict, completed_item: dict) -> str:
+async def _advance_to_next_item(agent: DocumentCollectionAgent, step: dict, completed_item: dict) -> str | list[str]:
     """Move to next item in this step, or advance to next step."""
     state = agent.state
     state.step_item_index += 1
@@ -218,8 +225,8 @@ async def _advance_to_next_item(agent: DocumentCollectionAgent, step: dict, comp
         if next_item:
             enriched = _build_item_from_cache(agent, next_item)
             next_request = await _ask_attribute(agent, enriched)
-            return confirm + "\n\n" + next_request
+            return [confirm, next_request]
 
     # All items done
     advance_msg = await agent._advance_step()
-    return confirm + "\n\n" + advance_msg
+    return [confirm, advance_msg]

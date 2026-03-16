@@ -404,8 +404,6 @@ class DocumentCollectionService:
                 # Attributes extracted from identity document
                 for afd in attrs_from_docs:
                     afd_slug = afd.get("slug", "")
-                    if afd_slug == "work_eligibility":
-                        continue  # Already shown above
                     afd_info = collected_attributes.get(afd_slug)
                     items.append(CollectionItemStatusResponse(
                         slug=afd_slug,
@@ -559,8 +557,7 @@ class DocumentCollectionService:
         step_sequence = [
             ("generating_plan", "Plan genereren"),
             ("plan_generated", "Plan opgesteld"),
-            ("collecting", "Documenten verzamelen"),
-            ("reviewing_skipped", "Opvolging"),
+            ("collecting", "Documenten & contract (optioneel)"),
             ("complete", "Afgerond"),
         ]
 

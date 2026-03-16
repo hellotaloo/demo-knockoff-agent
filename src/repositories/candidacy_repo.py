@@ -95,7 +95,11 @@ _SELECT_COLS = """
     app.completed_at         AS app_completed_at,
     app.interview_scheduled_at AS app_interview_scheduled_at,
 
-    lv.linked_vacancies
+    lv.linked_vacancies,
+
+    c.recruiter_verification,
+    c.recruiter_verification_reason,
+    c.contract_url
 """
 
 

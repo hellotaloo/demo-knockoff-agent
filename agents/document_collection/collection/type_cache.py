@@ -40,6 +40,7 @@ class TypeCache:
             if isinstance(fields, str):
                 fields = json.loads(fields)
             self._attr_types[row["slug"]] = {
+                "id": row["id"],
                 "slug": row["slug"],
                 "name": row["name"],
                 "data_type": row["data_type"],
@@ -54,6 +55,7 @@ class TypeCache:
             if isinstance(verification_config, str):
                 verification_config = json.loads(verification_config)
             self._doc_types[row["slug"]] = {
+                "id": row["id"],
                 "slug": row["slug"],
                 "name": row["name"],
                 "requires_front_back": row["requires_front_back"],

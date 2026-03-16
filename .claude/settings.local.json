@@ -226,7 +226,10 @@
       "Bash(head -200 \"/Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\(dashboard\\)/pre-screening/detail/[id]/page.tsx\")",
       "Bash(ls /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/)",
       "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend -type f \\\\\\(-name *.sql -o -name *migration* \\\\\\) ! -path ./.venv/* ! -path */node_modules/*)",
-      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend -type f \\\\\\(-name migrations* -o -name *schema* -o -name *init* \\\\\\))"
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend -type f \\\\\\(-name migrations* -o -name *schema* -o -name *init* \\\\\\))",
+      "Bash(find /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app -type f \\\\\\(-name *playground* -o -name *document-collection* \\\\\\))",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/playground/)",
+      "Bash(grep -B 5 -A 20 \"Online/Offline toggle\" /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/document-collection/vacancy/[id]/page.tsx)"
     ],
     "defaultMode": "acceptEdits"
   },
