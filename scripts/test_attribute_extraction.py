@@ -149,7 +149,7 @@ async def test_extraction(conversation_id: str, save: bool = False):
         """
         SELECT cat.slug, cat.name, ca.value, ca.source
         FROM ats.candidate_attributes ca
-        JOIN ats.types_attributes cat ON cat.id = ca.attribute_type_id
+        JOIN ontology.types_attributes cat ON cat.id = ca.attribute_type_id
         WHERE ca.candidate_id = $1 AND cat.is_active = true
         ORDER BY cat.sort_order
         """,

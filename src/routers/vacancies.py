@@ -455,7 +455,7 @@ async def list_medical_risks(search: Optional[str] = Query(None, description="Se
         rows = await pool.fetch(
             """
             SELECT id, name
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE parent_id = $1 AND name ILIKE $2
             ORDER BY name
             LIMIT 50
@@ -467,7 +467,7 @@ async def list_medical_risks(search: Optional[str] = Query(None, description="Se
         rows = await pool.fetch(
             """
             SELECT id, name
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE parent_id = $1
             ORDER BY name
             LIMIT 50

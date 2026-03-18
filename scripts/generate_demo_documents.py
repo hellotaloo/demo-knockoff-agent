@@ -25,7 +25,7 @@ CATEGORY_LABELS = {
     "other": "Overige",
 }
 
-# All top-level document types from ats.types_documents (deduplicated)
+# All top-level document types from ontology.types_documents (deduplicated)
 # Format: (slug, Dutch name, category, requires_back)
 DOCUMENT_TYPES = [
     # ── Identity ────────────────────────────────────────────────────────

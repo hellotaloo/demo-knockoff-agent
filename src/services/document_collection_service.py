@@ -12,7 +12,7 @@ import asyncpg
 # ─── Plan enrichment ─────────────────────────────────────────────────────────
 
 async def enrich_plan_documents(pool: asyncpg.Pool, workspace_id: UUID, documents: list[dict]) -> list[dict]:
-    """Enrich plan documents with metadata from ats.types_documents.
+    """Enrich plan documents with metadata from ontology.types_documents.
 
     Stored collection plans may be missing scan_mode, verification_config, etc.
     This patches them in from the document types table so the collection agent
@@ -24,7 +24,7 @@ async def enrich_plan_documents(pool: asyncpg.Pool, workspace_id: UUID, document
     slugs = [d["slug"] for d in documents]
     rows = await pool.fetch(
         """SELECT slug, scan_mode, is_verifiable, verification_config, ai_hint, category
-           FROM ats.types_documents
+           FROM ontology.types_documents
            WHERE workspace_id = $1 AND slug = ANY($2)""",
         workspace_id, slugs
     )
@@ -504,10 +504,10 @@ class DocumentCollectionService:
 
         slug_list = list(slugs)
         rows = await self.pool.fetch(
-            """SELECT slug, name FROM ats.types_documents
+            """SELECT slug, name FROM ontology.types_documents
                WHERE workspace_id = $1 AND slug = ANY($2)
                UNION ALL
-               SELECT slug, name FROM ats.types_attributes
+               SELECT slug, name FROM ontology.types_attributes
                WHERE workspace_id = $1 AND slug = ANY($2)""",
             workspace_id, slug_list
         )

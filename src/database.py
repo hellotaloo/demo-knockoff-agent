@@ -60,7 +60,8 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         # Create schemas if they don't exist
         await pool.execute("CREATE SCHEMA IF NOT EXISTS ats;")
         await pool.execute("CREATE SCHEMA IF NOT EXISTS adk;")
-        logger.info("Database schemas (ats, adk) ensured")
+        await pool.execute("CREATE SCHEMA IF NOT EXISTS ontology;")
+        logger.info("Database schemas (ats, adk, ontology) ensured")
 
         # Initialize Google ADK session tables
         # Check if tables exist in adk schema first (post-migration), else use public (pre-migration)
@@ -280,28 +281,43 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
 
         # Rename tables for consistency (existing DBs)
+        # Move types tables from ats to ontology schema
         await pool.execute("""
             DO $$
             BEGIN
+                -- Migrate ats.document_types → ontology.types_documents
                 IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'document_types')
-                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'types_documents') THEN
-                    ALTER TABLE ats.document_types RENAME TO types_documents;
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ontology' AND table_name = 'types_documents') THEN
+                    ALTER TABLE ats.document_types SET SCHEMA ontology;
+                    ALTER TABLE ontology.document_types RENAME TO types_documents;
+                END IF;
+                -- Migrate ats.types_documents → ontology.types_documents
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'types_documents')
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ontology' AND table_name = 'types_documents') THEN
+                    ALTER TABLE ats.types_documents SET SCHEMA ontology;
                 END IF;
                 -- Revert candidate_certificates back to candidate_documents if renamed
                 IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'candidate_certificates')
                    AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'candidate_documents') THEN
                     ALTER TABLE ats.candidate_certificates RENAME TO candidate_documents;
                 END IF;
+                -- Migrate ats.candidate_attribute_types → ontology.types_attributes
                 IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'candidate_attribute_types')
-                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'types_attributes') THEN
-                    ALTER TABLE ats.candidate_attribute_types RENAME TO types_attributes;
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ontology' AND table_name = 'types_attributes') THEN
+                    ALTER TABLE ats.candidate_attribute_types SET SCHEMA ontology;
+                    ALTER TABLE ontology.candidate_attribute_types RENAME TO types_attributes;
+                END IF;
+                -- Migrate ats.types_attributes → ontology.types_attributes
+                IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ats' AND table_name = 'types_attributes')
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'ontology' AND table_name = 'types_attributes') THEN
+                    ALTER TABLE ats.types_attributes SET SCHEMA ontology;
                 END IF;
             END $$;
         """)
 
         # 1. Document types reference table
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.types_documents (
+            CREATE TABLE IF NOT EXISTS ontology.types_documents (
                 id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 workspace_id    UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 slug            VARCHAR(50) NOT NULL,
@@ -321,9 +337,9 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
         await pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_types_documents_workspace
-            ON ats.types_documents(workspace_id);
+            ON ontology.types_documents(workspace_id);
             CREATE INDEX IF NOT EXISTS idx_types_documents_workspace_active
-            ON ats.types_documents(workspace_id) WHERE is_active = true;
+            ON ontology.types_documents(workspace_id) WHERE is_active = true;
         """)
 
         # 2. Document collection configs
@@ -358,7 +374,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             CREATE TABLE IF NOT EXISTS agents.document_collection_requirements (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 config_id           UUID NOT NULL REFERENCES agents.document_collection_configs(id) ON DELETE CASCADE,
-                document_type_id    UUID NOT NULL REFERENCES ats.types_documents(id) ON DELETE CASCADE,
+                document_type_id    UUID NOT NULL REFERENCES ontology.types_documents(id) ON DELETE CASCADE,
                 position            INTEGER NOT NULL DEFAULT 0,
                 is_required         BOOLEAN NOT NULL DEFAULT true,
                 notes               TEXT,
@@ -421,7 +437,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 collection_id       UUID NOT NULL REFERENCES agents.document_collections(id) ON DELETE CASCADE,
                 application_id      UUID REFERENCES ats.applications(id) ON DELETE SET NULL,
-                document_type_id    UUID REFERENCES ats.types_documents(id) ON DELETE SET NULL,
+                document_type_id    UUID REFERENCES ontology.types_documents(id) ON DELETE SET NULL,
                 document_side       VARCHAR(20) NOT NULL DEFAULT 'single',
                 image_hash          VARCHAR(64),
                 storage_path        VARCHAR(500),
@@ -442,7 +458,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             CREATE TABLE IF NOT EXISTS ats.candidate_documents (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 candidate_id        UUID NOT NULL REFERENCES ats.candidates(id) ON DELETE CASCADE,
-                document_type_id    UUID NOT NULL REFERENCES ats.types_documents(id) ON DELETE CASCADE,
+                document_type_id    UUID NOT NULL REFERENCES ontology.types_documents(id) ON DELETE CASCADE,
                 workspace_id        UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 document_number     VARCHAR(100),
                 metadata            JSONB DEFAULT '{}',
@@ -472,7 +488,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
 
         # 1. Attribute types catalog (workspace-scoped, like types_documents)
         await pool.execute("""
-            CREATE TABLE IF NOT EXISTS ats.types_attributes (
+            CREATE TABLE IF NOT EXISTS ontology.types_attributes (
                 id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 workspace_id            UUID NOT NULL REFERENCES system.workspaces(id) ON DELETE CASCADE,
                 slug                    VARCHAR(50) NOT NULL,
@@ -494,9 +510,9 @@ async def run_schema_migrations(pool: asyncpg.Pool):
         """)
         await pool.execute("""
             CREATE INDEX IF NOT EXISTS idx_types_attributes_workspace
-            ON ats.types_attributes(workspace_id);
+            ON ontology.types_attributes(workspace_id);
             CREATE INDEX IF NOT EXISTS idx_types_attributes_ws_active
-            ON ats.types_attributes(workspace_id) WHERE is_active = true;
+            ON ontology.types_attributes(workspace_id) WHERE is_active = true;
         """)
 
         # Drop linked_document_type_slug if it exists (removed in refactor)
@@ -505,10 +521,10 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             BEGIN
                 IF EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_schema = 'ats' AND table_name = 'types_attributes'
+                    WHERE table_schema = 'ontology' AND table_name = 'types_attributes'
                     AND column_name = 'linked_document_type_slug'
                 ) THEN
-                    ALTER TABLE ats.types_attributes DROP COLUMN linked_document_type_slug;
+                    ALTER TABLE ontology.types_attributes DROP COLUMN linked_document_type_slug;
                 END IF;
             END $$;
         """)
@@ -518,7 +534,7 @@ async def run_schema_migrations(pool: asyncpg.Pool):
             CREATE TABLE IF NOT EXISTS ats.candidate_attributes (
                 id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 candidate_id        UUID NOT NULL REFERENCES ats.candidates(id) ON DELETE CASCADE,
-                attribute_type_id   UUID NOT NULL REFERENCES ats.types_attributes(id) ON DELETE CASCADE,
+                attribute_type_id   UUID NOT NULL REFERENCES ontology.types_attributes(id) ON DELETE CASCADE,
                 value               TEXT,
                 source              VARCHAR(50),
                 source_session_id   VARCHAR(200),

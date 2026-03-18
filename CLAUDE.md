@@ -137,73 +137,69 @@ All agents are Google ADK agents using Gemini models.
 
 ## Database
 
-PostgreSQL hosted on Supabase with branch-based environments.
+PostgreSQL hosted on Supabase. Migrations are managed via **Git** through the Supabase GitHub integration.
 
-### Supabase Environments
+### Supabase Projects
+
+| Environment | Project Ref | Use For |
+|-------------|-------------|---------|
+| **Main** | `beniqwbanoqhxyrjwulg` | Production/staging DB — linked to GitHub |
+| **Preview** | Auto-created per PR | Testing migrations before merge |
+
+### Migration Workflow (Git-based)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  ALWAYS USE THE LOCAL BRANCH FOR DDL CHANGES                                │
-│  Project ID: vrpdzvattqlrtbaowapx                                           │
+│  NEVER use `apply_migration` via Supabase MCP for DDL changes!              │
+│  ALL schema changes go through Git → PR → Merge in the taloo-database repo  │
 │                                                                             │
-│  NEVER modify the staging (main) branch schema directly!                    │
+│  Database repo path: /Users/lunar/Desktop/sites/taloo-workspace/taloo-database │
+│  Migration files: supabase/migrations/                                      │
+│  Remote: https://github.com/hellotaloo/taloo-database.git                   │
+│  Production branch: master                                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-| Environment | Branch | Project Ref | Use For |
-|-------------|--------|-------------|---------|
-| **Local dev** | local | `vrpdzvattqlrtbaowapx` | All development, testing, and DDL changes |
-| **Staging/Demo** | main | `beniqwbanoqhxyrjwulg` | Cloud Run demos - migrate via merge only |
-| **Production** | (future) | TBD | Not set up yet |
+**When schema changes are needed, Claude Code should:**
 
-### Creating & Modifying Tables (CRITICAL)
-
-**ALWAYS use `apply_migration` via the Supabase MCP** for any DDL changes (CREATE TABLE, ALTER TABLE, etc.).
-This ensures changes are tracked as Supabase migrations and can be merged from local → main.
-
-**NEVER use `execute_sql` for DDL changes** — it bypasses the migration system and changes won't be included in branch merges.
-
-**Example — Creating a new table:**
-```
-mcp__plugin_supabase_supabase__apply_migration(
-    project_id="vrpdzvattqlrtbaowapx",
-    name="create_office_locations",
-    query="CREATE TABLE ats.office_locations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), ...);"
-)
+1. Generate a timestamped migration file directly:
+```bash
+# Create migration file with timestamp (format: YYYYMMDDHHmmss)
+TIMESTAMP=$(date -u +"%Y%m%d%H%M%S")
+FILE="/Users/lunar/Desktop/sites/taloo-workspace/taloo-database/supabase/migrations/${TIMESTAMP}_<descriptive_name>.sql"
 ```
 
-**Example — Adding a column:**
-```
-mcp__plugin_supabase_supabase__apply_migration(
-    project_id="vrpdzvattqlrtbaowapx",
-    name="add_analysis_result_to_pre_screenings",
-    query="ALTER TABLE ats.pre_screenings ADD COLUMN analysis_result JSONB;"
-)
+2. Write the SQL to that file using the Write tool
+
+3. Commit and push from the database repo:
+```bash
+cd /Users/lunar/Desktop/sites/taloo-workspace/taloo-database
+git checkout -b feature/<branch_name>
+git add supabase/migrations/
+git commit -m "<descriptive message>"
+git push -u origin feature/<branch_name>
 ```
 
-### Migration Workflow
+4. Create a PR using `gh pr create` in the taloo-database repo
 
-**Step 1: Develop on local branch**
-- Use `apply_migration` with `project_id: vrpdzvattqlrtbaowapx` for ALL schema changes
-- Use `execute_sql` with `project_id: vrpdzvattqlrtbaowapx` for data queries/inserts only
+5. After user approves, merge the PR → Supabase auto-applies the migration
 
-**Step 2: Deploy to staging**
-- Merge local → main via Supabase MCP:
+**For quick/safe migrations** (e.g. adding a column), push directly to master:
+```bash
+cd /Users/lunar/Desktop/sites/taloo-workspace/taloo-database
+git checkout master && git pull
+# create migration file, write SQL
+git add supabase/migrations/
+git commit -m "<message>"
+git push origin master
 ```
-mcp__plugin_supabase_supabase__merge_branch(branch_id="23001d49-d5ee-4820-8186-5e6d4b6c869a")
-```
-- This applies all tracked migrations from local → staging (main)
-
-**Step 3: Verify**
-- Test on Cloud Run staging environment
-- If issues, fix on local branch and merge again
 
 ### MCP Tool Usage
 
 When using Supabase MCP tools:
-- `apply_migration` → **ALWAYS** use `project_id: vrpdzvattqlrtbaowapx` (local) — for ALL DDL changes
-- `execute_sql` → Use `vrpdzvattqlrtbaowapx` for dev, `beniqwbanoqhxyrjwulg` only for read-only queries. **NEVER for DDL.**
-- `list_tables` → Either project is fine for inspection
+- `execute_sql` → Use `beniqwbanoqhxyrjwulg` for **read-only queries only**. NEVER for DDL.
+- `list_tables` → Fine for inspection
+- `apply_migration` → **DO NOT USE** — migrations go through Git
 
 ## When Making Changes
 

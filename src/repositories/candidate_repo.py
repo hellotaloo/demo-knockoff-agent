@@ -574,7 +574,7 @@ class CandidateRepository:
         doc_types = {}
         if doc_type_ids:
             rows = await self.pool.fetch(
-                "SELECT id, name, icon FROM ats.types_documents WHERE id = ANY($1)",
+                "SELECT id, name, icon FROM ontology.types_documents WHERE id = ANY($1)",
                 list(doc_type_ids),
             )
             doc_types = {row["id"]: row for row in rows}
@@ -657,7 +657,7 @@ class CandidateRepository:
                 cd.created_at,
                 cd.updated_at
             FROM ats.candidate_documents cd
-            JOIN ats.types_documents dt ON dt.id = cd.document_type_id
+            JOIN ontology.types_documents dt ON dt.id = cd.document_type_id
             WHERE cd.candidate_id = $1
             ORDER BY cd.created_at DESC
             """,

@@ -232,7 +232,7 @@ async def get_ontology_stats(
     """
     Dashboard stats for the ontology overview page.
 
-    Dynamically discovers all ats.types_* tables and computes:
+    Dynamically discovers all ontology.types_* tables and computes:
     - object_types: number of registered object types
     - categories: total unique categories across all types
     - total_items: total parent entities across all types
@@ -242,10 +242,10 @@ async def get_ontology_stats(
     type_tables = await pool.fetch("""
         SELECT table_name
         FROM information_schema.tables t
-        WHERE table_schema = 'ats' AND table_name LIKE 'types_%'
-          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ats' AND c.table_name = t.table_name AND c.column_name = 'workspace_id')
-          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ats' AND c.table_name = t.table_name AND c.column_name = 'is_active')
-          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ats' AND c.table_name = t.table_name AND c.column_name = 'category')
+        WHERE table_schema = 'ontology' AND table_name LIKE 'types_%'
+          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ontology' AND c.table_name = t.table_name AND c.column_name = 'workspace_id')
+          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ontology' AND c.table_name = t.table_name AND c.column_name = 'is_active')
+          AND EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema = 'ontology' AND c.table_name = t.table_name AND c.column_name = 'category')
         ORDER BY table_name
     """)
 
@@ -260,7 +260,7 @@ async def get_ontology_stats(
         has_parent = await pool.fetchval("""
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.columns
-                WHERE table_schema = 'ats' AND table_name = $1 AND column_name = 'parent_id'
+                WHERE table_schema = 'ontology' AND table_name = $1 AND column_name = 'parent_id'
             )
         """, table_name)
 
@@ -270,7 +270,7 @@ async def get_ontology_stats(
                 SELECT
                     COUNT(*) FILTER (WHERE parent_id IS NULL) AS parents,
                     COUNT(*) FILTER (WHERE parent_id IS NOT NULL) AS subtypes
-                FROM ats.{table_name}
+                FROM ontology.{table_name}
                 WHERE workspace_id = $1 AND is_active = true
             """, workspace_id)
             total_items += counts["parents"]
@@ -278,14 +278,14 @@ async def get_ontology_stats(
         else:
             # Flat table — all rows are top-level items
             count = await pool.fetchval(f"""
-                SELECT COUNT(*) FROM ats.{table_name}
+                SELECT COUNT(*) FROM ontology.{table_name}
                 WHERE workspace_id = $1 AND is_active = true
             """, workspace_id)
             total_items += count
 
         # Collect categories
         categories = await pool.fetch(f"""
-            SELECT DISTINCT category FROM ats.{table_name}
+            SELECT DISTINCT category FROM ontology.{table_name}
             WHERE workspace_id = $1 AND is_active = true AND category IS NOT NULL
         """, workspace_id)
         all_categories.update(r["category"] for r in categories)

@@ -58,7 +58,7 @@ class CandidateAttributeRepository:
             f"""
             SELECT {_COLUMNS_WITH_TYPE}
             FROM ats.candidate_attributes ca
-            JOIN ats.types_attributes cat ON cat.id = ca.attribute_type_id
+            JOIN ontology.types_attributes cat ON cat.id = ca.attribute_type_id
             WHERE {where}
             ORDER BY cat.sort_order, cat.name
             """,
@@ -76,7 +76,7 @@ class CandidateAttributeRepository:
             f"""
             SELECT {_COLUMNS_WITH_TYPE}
             FROM ats.candidate_attributes ca
-            JOIN ats.types_attributes cat ON cat.id = ca.attribute_type_id
+            JOIN ontology.types_attributes cat ON cat.id = ca.attribute_type_id
             WHERE ca.candidate_id = ANY($1) AND cat.is_active = true
             ORDER BY ca.candidate_id, cat.sort_order, cat.name
             """,
@@ -89,7 +89,7 @@ class CandidateAttributeRepository:
             f"""
             SELECT {_COLUMNS_WITH_TYPE}
             FROM ats.candidate_attributes ca
-            JOIN ats.types_attributes cat ON cat.id = ca.attribute_type_id
+            JOIN ontology.types_attributes cat ON cat.id = ca.attribute_type_id
             WHERE ca.id = $1
             """,
             attr_id,

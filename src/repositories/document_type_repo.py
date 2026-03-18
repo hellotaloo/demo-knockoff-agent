@@ -18,7 +18,7 @@ _COLUMNS = """
 
 
 class DocumentTypeRepository:
-    """CRUD operations for ats.types_documents."""
+    """CRUD operations for ontology.types_documents."""
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
@@ -52,7 +52,7 @@ class DocumentTypeRepository:
         return await self.pool.fetch(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE {where}
             ORDER BY sort_order, name
             """,
@@ -78,7 +78,7 @@ class DocumentTypeRepository:
         return await self.pool.fetch(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE {where}
             ORDER BY sort_order, name
             """,
@@ -121,11 +121,11 @@ class DocumentTypeRepository:
         return await self.pool.fetch(
             f"""
             WITH matched_parents AS (
-                SELECT id FROM ats.types_documents
+                SELECT id FROM ontology.types_documents
                 WHERE {parent_where}
             )
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE (
                 id IN (SELECT id FROM matched_parents)
                 OR
@@ -144,7 +144,7 @@ class DocumentTypeRepository:
         return await self.pool.fetchrow(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE id = $1
             """,
             doc_type_id,
@@ -155,7 +155,7 @@ class DocumentTypeRepository:
         return await self.pool.fetchrow(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE workspace_id = $1 AND slug = $2
             """,
             workspace_id, slug,
@@ -166,7 +166,7 @@ class DocumentTypeRepository:
         return await self.pool.fetch(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE workspace_id = $1 AND is_default = true AND is_active = true
             ORDER BY sort_order, name
             """,
@@ -180,7 +180,7 @@ class DocumentTypeRepository:
         return await self.pool.fetch(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE workspace_id = $1 AND slug = ANY($2) AND is_active = true
             ORDER BY sort_order, name
             """,
@@ -194,7 +194,7 @@ class DocumentTypeRepository:
         return await self.pool.fetch(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_documents
+            FROM ontology.types_documents
             WHERE id = ANY($1)
             ORDER BY sort_order, name
             """,
@@ -207,7 +207,7 @@ class DocumentTypeRepository:
         config = kwargs.get("verification_config")
         return await self.pool.fetchrow(
             f"""
-            INSERT INTO ats.types_documents
+            INSERT INTO ontology.types_documents
                 (workspace_id, slug, name, description, category,
                  requires_front_back, is_verifiable, icon, is_default, sort_order,
                  parent_id, prato_flex_type_id, prato_flex_detail_type_id,
@@ -263,7 +263,7 @@ class DocumentTypeRepository:
 
         return await self.pool.fetchrow(
             f"""
-            UPDATE ats.types_documents
+            UPDATE ontology.types_documents
             SET {", ".join(updates)}
             WHERE id = ${idx}
             RETURNING {_COLUMNS}
@@ -274,7 +274,7 @@ class DocumentTypeRepository:
     async def soft_delete(self, doc_type_id: uuid.UUID) -> bool:
         """Soft-delete a document type (set is_active=false)."""
         result = await self.pool.execute(
-            "UPDATE ats.types_documents SET is_active = false, updated_at = NOW() WHERE id = $1",
+            "UPDATE ontology.types_documents SET is_active = false, updated_at = NOW() WHERE id = $1",
             doc_type_id,
         )
         return result == "UPDATE 1"

@@ -8,7 +8,7 @@ from typing import Optional
 
 
 class SyncWithRepository:
-    """CRUD operations for ats.types_sync_with and system.integrations."""
+    """CRUD operations for ontology.types_sync_with and system.integrations."""
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
@@ -48,7 +48,7 @@ class SyncWithRepository:
             """
             SELECT sw.id, sw.integration_id, sw.external_id, sw.external_metadata,
                    i.slug AS integration_slug, i.name AS integration_name
-            FROM ats.types_sync_with sw
+            FROM ontology.types_sync_with sw
             JOIN system.integrations i ON i.id = sw.integration_id
             WHERE sw.table_name = $1 AND sw.record_id = $2
             ORDER BY i.name
@@ -64,7 +64,7 @@ class SyncWithRepository:
             """
             SELECT sw.id, sw.record_id, sw.integration_id, sw.external_id, sw.external_metadata,
                    i.slug AS integration_slug, i.name AS integration_name
-            FROM ats.types_sync_with sw
+            FROM ontology.types_sync_with sw
             JOIN system.integrations i ON i.id = sw.integration_id
             WHERE sw.table_name = $1 AND sw.record_id = ANY($2)
             ORDER BY i.name
@@ -83,7 +83,7 @@ class SyncWithRepository:
         """Add a sync_with link."""
         return await self.pool.fetchrow(
             """
-            INSERT INTO ats.types_sync_with (table_name, record_id, integration_id, external_id, external_metadata)
+            INSERT INTO ontology.types_sync_with (table_name, record_id, integration_id, external_id, external_metadata)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING id, table_name, record_id, integration_id, external_id, external_metadata, created_at
             """,
@@ -97,7 +97,7 @@ class SyncWithRepository:
     async def remove(self, sync_with_id: uuid.UUID) -> bool:
         """Remove a sync_with link by its ID."""
         result = await self.pool.execute(
-            "DELETE FROM ats.types_sync_with WHERE id = $1",
+            "DELETE FROM ontology.types_sync_with WHERE id = $1",
             sync_with_id,
         )
         return result == "DELETE 1"
@@ -107,7 +107,7 @@ class SyncWithRepository:
     ) -> bool:
         """Remove a sync_with link by record + integration combo."""
         result = await self.pool.execute(
-            "DELETE FROM ats.types_sync_with WHERE table_name = $1 AND record_id = $2 AND integration_id = $3",
+            "DELETE FROM ontology.types_sync_with WHERE table_name = $1 AND record_id = $2 AND integration_id = $3",
             table_name, record_id, integration_id,
         )
         return result == "DELETE 1"

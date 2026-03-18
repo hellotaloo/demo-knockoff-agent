@@ -16,7 +16,7 @@ _COLUMNS = """
 
 
 class CandidateAttributeTypeRepository:
-    """CRUD operations for ats.types_attributes."""
+    """CRUD operations for ontology.types_attributes."""
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
@@ -52,7 +52,7 @@ class CandidateAttributeTypeRepository:
         return await self.pool.fetch(
             f"""
             SELECT {_COLUMNS}
-            FROM ats.types_attributes
+            FROM ontology.types_attributes
             WHERE {where}
             ORDER BY sort_order, name
             """,
@@ -62,14 +62,14 @@ class CandidateAttributeTypeRepository:
     async def get_by_id(self, attr_type_id: uuid.UUID) -> Optional[asyncpg.Record]:
         """Get a single attribute type by ID."""
         return await self.pool.fetchrow(
-            f"SELECT {_COLUMNS} FROM ats.types_attributes WHERE id = $1",
+            f"SELECT {_COLUMNS} FROM ontology.types_attributes WHERE id = $1",
             attr_type_id,
         )
 
     async def get_by_slug(self, workspace_id: uuid.UUID, slug: str) -> Optional[asyncpg.Record]:
         """Get an attribute type by workspace + slug."""
         return await self.pool.fetchrow(
-            f"SELECT {_COLUMNS} FROM ats.types_attributes WHERE workspace_id = $1 AND slug = $2",
+            f"SELECT {_COLUMNS} FROM ontology.types_attributes WHERE workspace_id = $1 AND slug = $2",
             workspace_id, slug,
         )
 
@@ -78,7 +78,7 @@ class CandidateAttributeTypeRepository:
         if not ids:
             return []
         return await self.pool.fetch(
-            f"SELECT {_COLUMNS} FROM ats.types_attributes WHERE id = ANY($1) ORDER BY sort_order, name",
+            f"SELECT {_COLUMNS} FROM ontology.types_attributes WHERE id = ANY($1) ORDER BY sort_order, name",
             ids,
         )
 
@@ -88,7 +88,7 @@ class CandidateAttributeTypeRepository:
         fields = kwargs.get("fields")
         return await self.pool.fetchrow(
             f"""
-            INSERT INTO ats.types_attributes
+            INSERT INTO ontology.types_attributes
                 (workspace_id, slug, name, description, category,
                  data_type, options, fields, icon, is_default, sort_order,
                  collected_by)
@@ -145,7 +145,7 @@ class CandidateAttributeTypeRepository:
 
         return await self.pool.fetchrow(
             f"""
-            UPDATE ats.types_attributes
+            UPDATE ontology.types_attributes
             SET {", ".join(updates)}
             WHERE id = ${idx}
             RETURNING {_COLUMNS}
@@ -156,7 +156,7 @@ class CandidateAttributeTypeRepository:
     async def soft_delete(self, attr_type_id: uuid.UUID) -> bool:
         """Soft-delete an attribute type (set is_active=false)."""
         result = await self.pool.execute(
-            "UPDATE ats.types_attributes SET is_active = false, updated_at = NOW() WHERE id = $1",
+            "UPDATE ontology.types_attributes SET is_active = false, updated_at = NOW() WHERE id = $1",
             attr_type_id,
         )
         return result == "UPDATE 1"
