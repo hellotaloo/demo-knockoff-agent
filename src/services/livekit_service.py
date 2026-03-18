@@ -118,7 +118,7 @@ class LiveKitService:
         existing_booking_date: Optional[str] = None,
         require_consent: bool = False,
         allow_escalation: bool = True,
-        persona_name: str = "Anna",
+        persona_name: str = "Liv",
     ) -> dict:
         """
         Map backend DB questions to pre_screening_voice_agent SessionInput format.

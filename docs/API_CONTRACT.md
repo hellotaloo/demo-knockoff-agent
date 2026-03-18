@@ -4,6 +4,7 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-18** — Added External Integrations system: `GET /integrations` (catalog of available providers), `GET /integrations/connections` (workspace connections with status), `PUT /integrations/connections/connexys` and `PUT /integrations/connections/microsoft` (save provider credentials), `PATCH /integrations/connections/{id}` (update settings/toggle), `DELETE /integrations/connections/{id}` (remove connection), `POST /integrations/connections/{id}/health-check` (test connectivity). New types: `IntegrationResponse`, `ConnectionResponse`, `HealthCheckResponse`, `ConnexysCredentialsRequest`, `MicrosoftCredentialsRequest`. Database: `system.integration_connections` table
 - **2026-03-15** — **BREAKING**: `NavigationCountsResponse.prescreening` and `.preonboarding` now return `{active, stuck}` (per-type workflow activity counts) instead of vacancy-status counts (`new/generated/published/archived`). Combined `activities` field unchanged
 - **2026-03-15** — Refactored agent vacancy endpoints to unified `AgentVacancyResponse` shape. Removed `?status=` query param from both endpoints — all non-archived vacancies returned with `agent_status` field per item. Added `GET /agents/prescreening/stats` and `GET /agents/preonboarding/stats` dashboard stats endpoints. Migrated prescreening `is_online` to `vacancy_agents` table (same as document_collection). Response now uses self-describing `AgentStatItem` lists for agent-specific data
 - **2026-03-15** — Removed `document_collection_configs` system entirely. Online/offline toggle for document collection agent now uses `ats.vacancy_agents.is_online`. Added `GET /vacancies/{vacancy_id}/agents/{agent_type}/status` and `PATCH /vacancies/{vacancy_id}/agents/{agent_type}/status` endpoints. Removed all `/configs` endpoints and related types (`CollectionConfigResponse`, `CollectionConfigCreate`, etc.). Simplified document resolution to workspace defaults only. Added `POST /collections/{collection_id}/tasks/{task_slug}/trigger` endpoint
@@ -2643,7 +2644,7 @@ Creates a LiveKit access token with embedded agent dispatch. When the browser co
 interface PlaygroundStartRequest {
   vacancy_id: string;
   candidate_name?: string;     // Default: "Playground Kandidaat"
-  persona_name?: string;       // Default: "Anna" — voice persona name used in prompts and voicemail (e.g. "Eva", "Sophie")
+  persona_name?: string;       // Default: "Liv" — voice persona name used in prompts and voicemail (e.g. "Eva", "Sophie")
   start_agent?: string;        // Skip to specific step: "greeting" | "screening" | "open_questions" | "scheduling"
   require_consent?: boolean;   // Default: false
   candidate_known?: boolean;   // Default: false — known candidate with existing data

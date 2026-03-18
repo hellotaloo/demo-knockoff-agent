@@ -71,10 +71,17 @@ Vraag: "{question_text}"
         userdata = self.session.userdata
         userdata.silence_count = 0
         userdata.suppress_silence = True
+
+        rules = (
+            "Je bent midden in een screeningsgesprek. "
+            "Begin NOOIT met een begroeting zoals 'Hoi', 'Hey', 'Hallo' of 'Goedemiddag'. "
+            "Houd je antwoord kort en natuurlijk, zoals een recruiter in een telefoongesprek.\n\n"
+        )
+
         if self._transition:
-            intro = f"{self._transition} Stel vervolgens deze vraag op een natuurlijke manier: {self._question_text}"
+            intro = f"{rules}{self._transition} Stel vervolgens deze vraag op een natuurlijke manier: {self._question_text}"
         else:
-            intro = f"Stel deze vraag op een natuurlijke manier: {self._question_text}"
+            intro = f"{rules}Stel deze vraag op een natuurlijke manier: {self._question_text}"
         await self.session.generate_reply(instructions=intro, allow_interruptions=False)
         userdata.suppress_silence = False
 

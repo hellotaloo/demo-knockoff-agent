@@ -13,7 +13,7 @@ from livekit.agents.inference import stt as inference_stt
 from livekit.plugins import elevenlabs, openai, noise_cancellation, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-logger = logging.getLogger("usage")
+logger = logging.getLogger("usage") # hello
 
 # Load env files before reading config — .env.local first (local overrides), then parent .env (fallback).
 # load_dotenv does NOT override already-set vars, so .env.local values take precedence.

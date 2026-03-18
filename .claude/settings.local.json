@@ -238,7 +238,9 @@
       "Bash(brew install:*)",
       "Bash(/opt/homebrew/opt/libpq/bin/pg_dump --version)",
       "Bash(/opt/homebrew/opt/libpq/bin/pg_dump \"postgresql://postgres.vrpdzvattqlrtbaowapx:kKPbmSz8zFEwEslX@aws-1-eu-west-1.pooler.supabase.com:5432/postgres\" --schema=ats --schema=agents --schema=system --no-owner --no-privileges --format=custom -f /tmp/taloo_local_dump.dump)",
-      "Bash(/opt/homebrew/opt/libpq/bin/pg_restore --no-owner --no-privileges -d \"postgresql://postgres:Mu5kuMqQObXqG8HO@db.beniqwbanoqhxyrjwulg.supabase.co:5432/postgres\" /tmp/taloo_local_dump.dump)"
+      "Bash(/opt/homebrew/opt/libpq/bin/pg_restore --no-owner --no-privileges -d \"postgresql://postgres:Mu5kuMqQObXqG8HO@db.beniqwbanoqhxyrjwulg.supabase.co:5432/postgres\" /tmp/taloo_local_dump.dump)",
+      "Bash(gh pr:*)",
+      "Bash(gtimeout 15 uvicorn app:app --port 8080)"
     ],
     "defaultMode": "acceptEdits"
   },

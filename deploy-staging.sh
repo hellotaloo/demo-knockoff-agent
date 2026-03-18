@@ -9,3 +9,6 @@ gcloud run deploy taloo-agent \
     --project knockoff-bot-demo
 
 echo "✅ Deployment complete!"
+
+
+# gcloud run deploy taloo-agent --source . --region europe-west1 --project knockoff-bot-demo

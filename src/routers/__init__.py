@@ -34,6 +34,7 @@ from .redirect import router as redirect_router
 from .yousign_webhook import router as yousign_webhook_router
 from .candidacy import router as candidacy_router
 from .candidate_attributes import router as candidate_attributes_router
+from .integrations import router as integrations_router
 
 __all__ = [
     "health_router",
@@ -69,4 +70,5 @@ __all__ = [
     "yousign_webhook_router",
     "candidacy_router",
     "candidate_attributes_router",
+    "integrations_router",
 ]

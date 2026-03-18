@@ -69,7 +69,7 @@
 - Candidate name is used throughout the conversation for a personal touch
 - Pre-loaded CRM data (known answers, existing bookings) reduces call duration
 - All results are stored per candidate: knockout answers, open question summaries, consent status, chosen timeslot, recruiter notes
-- Voicemail detection — if the candidate doesn't pick up and an answering machine is detected, Anna leaves a short callback message and hangs up
+- Voicemail detection — if the candidate doesn't pick up and an answering machine is detected, Liv leaves a short callback message and hangs up
 
 ## Usage Tracking & Cost
 

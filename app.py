@@ -122,6 +122,7 @@ from src.routers import (
     yousign_webhook_router,
     candidacy_router,
     candidate_attributes_router,
+    integrations_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -328,6 +329,7 @@ app.include_router(redirect_router)
 app.include_router(yousign_webhook_router)
 app.include_router(candidacy_router)
 app.include_router(candidate_attributes_router)
+app.include_router(integrations_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

@@ -16,7 +16,7 @@ taloo-prescreening/
 ├── prompts.py                  # All prompt strings centralized (new)
 ├── agents/
 │   ├── __init__.py
-│   ├── greeting.py             # Waits for user, introduces Anna
+│   ├── greeting.py             # Waits for user, introduces Liv
 │   ├── screening.py            # Runs knockout questions in a loop
 │   ├── open_questions.py       # Runs open questions via TaskGroup
 │   ├── scheduling.py           # Interview slot booking
@@ -35,7 +35,7 @@ Update agent.py to use AgentSession[CandidateData] with userdata=CandidateData()
 Test: Agent still starts and works as before
 
 ### Step 2: Greeting Agent
-Create agents/greeting.py — waits for user to speak, introduces Anna, asks if they have time
+Create agents/greeting.py — waits for user to speak, introduces Liv, asks if they have time
 Two function tools: candidate_ready (→ handoff to screening) and candidate_not_available (→ goodbye)
 Update agent.py to start with GreetingAgent instead of Assistant
 Test: Connect, speak first, agent introduces itself. Say "ja" → logs show handoff attempt. Say "nee" → polite goodbye.

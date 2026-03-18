@@ -478,7 +478,7 @@ async def _send_appointment_confirmation_whatsapp(
         f"📅 {slot_display}{location_line}\n\n"
         f"Tip: neem je identiteitskaart mee!\n\n"
         f"Kun je toch niet? Geen probleem, stuur ons tijdig een berichtje via deze chat om je afspraak te verzetten.\n\n"
-        f"Veel succes,\nAnna van Its You"
+        f"Veel succes,\nLiv van Its You"
     )
     message_sid = await send_whatsapp_message(phone, message)
     return message_sid is not None
