@@ -4,8 +4,9 @@ Monitoring router - provides global activity feed / event log.
 Historical view of agent actions, candidate interactions, and recruiter actions.
 """
 from typing import Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.database import get_db_pool
 from src.services import ActivityService
 from src.models.common import PaginatedResponse
@@ -28,6 +29,7 @@ async def list_activities(
     vacancy_id: Optional[str] = Query(None, description="Filter by vacancy ID"),
     limit: int = Query(50, ge=1, le=100, description="Number of activities to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """
     Get all activities across the system for the global activities feed.
@@ -44,6 +46,7 @@ async def list_activities(
         channel=channel,
         candidate_id=candidate_id,
         vacancy_id=vacancy_id,
+        workspace_id=ctx.workspace_id,
         limit=limit,
         offset=offset
     )

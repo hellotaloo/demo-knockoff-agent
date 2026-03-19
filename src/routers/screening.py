@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from typing import AsyncGenerator, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from agents.pre_screening.whatsapp import (
@@ -17,6 +17,7 @@ from agents.pre_screening.whatsapp import (
 from agents.candidate_simulator.agent import SimulationPersona, build_simulator_instruction
 from src.utils.random_candidate import generate_random_candidate
 from src.models.screening import ScreeningChatRequest, SimulateInterviewRequest
+from src.auth.dependencies import AuthContext, require_workspace
 from src.repositories import ConversationRepository, CandidateRepository, ApplicationRepository, CandidacyRepository
 from src.database import get_db_pool
 from src.services.livekit_service import fetch_scheduling_config
@@ -34,7 +35,8 @@ async def stream_screening_chat(
     message: str,
     session_id: Optional[str],
     candidate_name: Optional[str],
-    is_test: bool = False
+    is_test: bool = False,
+    workspace_id: Optional[uuid.UUID] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream SSE events during screening chat using pre_screening_whatsapp_agent."""
     global _web_chat_sessions
@@ -55,6 +57,11 @@ async def stream_screening_chat(
         vacancy_uuid
     )
     if not vacancy:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    if workspace_id and vacancy["workspace_id"] != workspace_id:
         yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
         yield "data: [DONE]\n\n"
         return
@@ -225,7 +232,7 @@ async def stream_screening_chat(
 
 
 @router.post("/screening/chat")
-async def screening_chat(request: ScreeningChatRequest):
+async def screening_chat(request: ScreeningChatRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Chat with the screening agent for a specific vacancy.
 
@@ -242,7 +249,8 @@ async def screening_chat(request: ScreeningChatRequest):
             request.message,
             request.session_id,
             request.candidate_name,
-            request.is_test
+            request.is_test,
+            workspace_id=ctx.workspace_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -386,7 +394,8 @@ async def stream_interview_simulation(
     vacancy_id: str,
     persona: str,
     custom_persona: Optional[str],
-    candidate_name: str
+    candidate_name: str,
+    workspace_id: Optional[uuid.UUID] = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream SSE events during an interview simulation.
@@ -406,10 +415,15 @@ async def stream_interview_simulation(
         return
 
     vacancy = await pool.fetchrow(
-        "SELECT id, title FROM ats.vacancies WHERE id = $1",
+        "SELECT id, title, workspace_id FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
     if not vacancy:
+        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    if workspace_id and vacancy["workspace_id"] != workspace_id:
         yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
         yield "data: [DONE]\n\n"
         return
@@ -604,7 +618,7 @@ Geef je antwoord als kandidaat. Volg je persona-instructies. MAX 1-2 zinnen!"""
 
 
 @router.post("/vacancies/{vacancy_id}/simulate")
-async def simulate_interview(vacancy_id: str, request: SimulateInterviewRequest):
+async def simulate_interview(vacancy_id: str, request: SimulateInterviewRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Run an automated interview simulation for testing.
 
@@ -632,7 +646,8 @@ async def simulate_interview(vacancy_id: str, request: SimulateInterviewRequest)
             vacancy_id=vacancy_id,
             persona=request.persona,
             custom_persona=request.custom_persona,
-            candidate_name=candidate_name
+            candidate_name=candidate_name,
+            workspace_id=ctx.workspace_id,
         ),
         media_type="text/event-stream",
         headers={

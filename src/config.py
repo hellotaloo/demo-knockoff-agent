@@ -3,7 +3,9 @@ Configuration module for Taloo Backend.
 Centralizes environment variables, logging setup, and constants.
 """
 import os
+import json
 import logging
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load .env file for local development
@@ -35,6 +37,7 @@ TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")  # e.g., "what
 TWILIO_MESSAGING_SERVICE_SID = os.environ.get("TWILIO_MESSAGING_SERVICE_SID")  # e.g., "MGxxxxxxxx"
 TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION = os.environ.get("TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION")  # e.g., "HXxxxxxxxx"
 TWILIO_TEMPLATE_INITIATE_PRE_SCREENING = os.environ.get("TWILIO_TEMPLATE_INITIATE_PRE_SCREENING")  # e.g., "HXxxxxxxxx"
+TWILIO_TEMPLATE_HEALTH_ALERT = os.environ.get("TWILIO_TEMPLATE_HEALTH_ALERT")  # e.g., "HXxxxxxxxx"
 
 # ElevenLabs Configuration
 ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
@@ -72,6 +75,11 @@ LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "pre-screening")
 LIVEKIT_WEBHOOK_SECRET = os.environ.get("LIVEKIT_WEBHOOK_SECRET", "")
 BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "")
 
+# Health Alert Configuration
+ALERT_WHATSAPP_NUMBER = os.environ.get("ALERT_WHATSAPP_NUMBER")  # e.g., "whatsapp:+32xxxxxxxxx"
+HEALTH_CHECK_INTERVAL = int(os.environ.get("HEALTH_CHECK_INTERVAL", "300"))  # seconds (default: 5 min)
+ALERT_COOLDOWN = int(os.environ.get("ALERT_COOLDOWN", "3600"))  # seconds between repeat alerts per service (default: 1h)
+
 # Prato Flex Configuration
 PRATO_FLEX_API_URL = os.environ.get("PRATO_FLEX_API_URL", "https://salesdemo.prato.be/webservice")
 PRATO_FLEX_API_TOKEN = os.environ.get("PRATO_FLEX_API_TOKEN", "")  # WB token for auth
@@ -83,10 +91,37 @@ ATS_SIMULATOR_URL = os.environ.get("ATS_SIMULATOR_URL", "http://localhost:8080/a
 # Logging Configuration
 # ============================================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+
+class CloudRunFormatter(logging.Formatter):
+    """JSON formatter compatible with Google Cloud Logging.
+
+    Cloud Logging parses the 'severity' field automatically for log levels
+    and 'timestamp' for accurate timing.
+    """
+
+    def format(self, record):
+        log_entry = {
+            "severity": record.levelname,
+            "message": record.getMessage(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "module": record.module,
+            "logger": record.name,
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+
+if ENVIRONMENT == "local":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+else:
+    handler = logging.StreamHandler()
+    handler.setFormatter(CloudRunFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
 logger = logging.getLogger(__name__)
 
 # ============================================================================

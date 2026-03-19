@@ -1,5 +1,5 @@
 """
-Authentication router - handles Google OAuth login and token management.
+Authentication router - handles OAuth login (Google, Microsoft) and token management.
 """
 import logging
 import os
@@ -24,9 +24,6 @@ from src.models import (
     UserProfileResponse,
     WorkspaceSummary,
 )
-
-# Default workspace for dev login
-DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 # Dev user constants
 DEV_USER_EMAIL = "laurijn@taloo.be"
@@ -63,6 +60,21 @@ async def login_google(
     After authentication, the user is redirected to /auth/callback.
     """
     auth_url = service.get_google_login_url(redirect_to)
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/login/microsoft")
+async def login_microsoft(
+    redirect_to: Optional[str] = Query(None, description="URL to redirect after login"),
+    service: AuthService = Depends(get_auth_service),
+):
+    """
+    Initiate Microsoft OAuth login.
+
+    Redirects the user to Microsoft's OAuth consent page.
+    After authentication, the user is redirected to /auth/callback.
+    """
+    auth_url = service.get_microsoft_login_url(redirect_to)
     return RedirectResponse(url=auth_url)
 
 

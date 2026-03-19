@@ -17,6 +17,7 @@ class VacancyRepository:
         self,
         status: Optional[str] = None,
         source: Optional[str] = None,
+        workspace_id: Optional[uuid.UUID] = None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
@@ -31,20 +32,25 @@ class VacancyRepository:
         params = []
         param_idx = 1
 
+        if workspace_id:
+            conditions.append(f"v.workspace_id = ${param_idx}")
+            params.append(workspace_id)
+            param_idx += 1
+
         if status:
-            conditions.append(f"status = ${param_idx}")
+            conditions.append(f"v.status = ${param_idx}")
             params.append(status)
             param_idx += 1
 
         if source:
-            conditions.append(f"source = ${param_idx}")
+            conditions.append(f"v.source = ${param_idx}")
             params.append(source)
             param_idx += 1
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         # Get total count
-        count_query = f"SELECT COUNT(*) FROM ats.vacancies {where_clause}"
+        count_query = f"SELECT COUNT(*) FROM ats.vacancies v {where_clause}"
         total = await self.pool.fetchval(count_query, *params)
 
         # Get vacancies with application stats, recruiter info, and client info
@@ -112,6 +118,7 @@ class VacancyRepository:
         """Get a single vacancy by ID with stats, recruiter info, and client info."""
         query = """
             SELECT v.id, v.title, v.company, v.location, v.description, v.status,
+                   v.workspace_id,
                    v.created_at, v.archived_at, v.source, v.source_id, v.start_date,
                    v.recruiter_id,
                    r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
@@ -214,21 +221,36 @@ class VacancyRepository:
 
         return await self.pool.fetchrow(stats_query, vacancy_id)
 
-    async def get_dashboard_stats(self) -> Optional[asyncpg.Record]:
+    async def get_dashboard_stats(self, workspace_id: Optional[uuid.UUID] = None) -> Optional[asyncpg.Record]:
         """Get dashboard-level aggregate statistics across all vacancies."""
-        stats_query = """
-            SELECT
-                COUNT(*) as total,
-                COUNT(*) FILTER (WHERE started_at >= NOW() - INTERVAL '7 days') as this_week,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-                COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
-                COUNT(*) FILTER (WHERE channel = 'cv') as cv_count
-            FROM ats.applications
-        """
-
-        return await self.pool.fetchrow(stats_query)
+        if workspace_id:
+            stats_query = """
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE a.started_at >= NOW() - INTERVAL '7 days') as this_week,
+                    COUNT(*) FILTER (WHERE a.status = 'completed') as completed_count,
+                    COUNT(*) FILTER (WHERE a.qualified = true) as qualified_count,
+                    COUNT(*) FILTER (WHERE a.channel = 'voice') as voice_count,
+                    COUNT(*) FILTER (WHERE a.channel = 'whatsapp') as whatsapp_count,
+                    COUNT(*) FILTER (WHERE a.channel = 'cv') as cv_count
+                FROM ats.applications a
+                JOIN ats.vacancies v ON v.id = a.vacancy_id
+                WHERE v.workspace_id = $1
+            """
+            return await self.pool.fetchrow(stats_query, workspace_id)
+        else:
+            stats_query = """
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE started_at >= NOW() - INTERVAL '7 days') as this_week,
+                    COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+                    COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
+                    COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
+                    COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
+                    COUNT(*) FILTER (WHERE channel = 'cv') as cv_count
+                FROM ats.applications
+            """
+            return await self.pool.fetchrow(stats_query)
 
     async def get_applicants_by_vacancy_ids(
         self, vacancy_ids: list[uuid.UUID]

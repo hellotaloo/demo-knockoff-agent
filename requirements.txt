@@ -17,3 +17,4 @@ httpx>=0.25.0
 livekit
 livekit-api
 phonenumbers
+sentry-sdk[fastapi]

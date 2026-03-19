@@ -164,6 +164,7 @@ class ActivityService:
         channel: Optional[ActivityChannel] = None,
         candidate_id: Optional[str] = None,
         vacancy_id: Optional[str] = None,
+        workspace_id=None,
         limit: int = 50,
         offset: int = 0
     ) -> GlobalActivitiesResponse:
@@ -190,6 +191,7 @@ class ActivityService:
             channel=channel.value if channel else None,
             candidate_id=candidate_id,
             vacancy_id=vacancy_id,
+            workspace_id=workspace_id,
             limit=limit,
             offset=offset
         )

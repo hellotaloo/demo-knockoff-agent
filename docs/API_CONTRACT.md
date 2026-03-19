@@ -4,6 +4,14 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-19** — Added `GET /auth/login/microsoft` endpoint for Microsoft OAuth login. Mirrors the existing Google OAuth flow — redirects to Microsoft consent page via Supabase Auth. Existing `/auth/callback` handles both providers
+- **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 3). Extended workspace isolation to activities and audit trail: `GET /api/activities/tasks`, `POST /api/activities/tasks/{id}/complete`, `GET /monitoring`. All now require `Authorization` + `X-Workspace-ID` headers. Activities filter workflows by `workspace_id` column (added to `agents.workflows` table). Audit trail filters through vacancy/candidate workspace ownership. Added `GET /clients` endpoint for workspace-scoped client listing with vacancy/candidate counts
+- **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 2). Extended workspace isolation to all data listing endpoints: `GET /vacancies`, `GET /vacancies/stats`, `GET /candidates`, `GET /agents/counts`, `GET /agents/prescreening/vacancies`, `GET /agents/preonboarding/vacancies`, `GET /agents/prescreening/stats`, `GET /agents/preonboarding/stats`. All now require `Authorization` + `X-Workspace-ID` headers and filter data by workspace. Navigation counts (`GET /agents/counts`) no longer hardcodes a workspace UUID — reads from auth context
+- **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 1). All `/integrations/connections/*` endpoints and `/pre-screening/config`, `/pre-screening/auto-generate` endpoints now require `Authorization: Bearer <token>` and `X-Workspace-ID: <uuid>` headers. Requests without these headers will receive 401/400 errors. Connection-by-ID operations now verify the connection belongs to the caller's workspace (returns 404 for cross-workspace access). Removed hardcoded `DEFAULT_WORKSPACE_ID` from integrations router. Added reusable `require_workspace` auth dependency
+- **2026-03-19** — `PATCH /integrations/connections/{id}` now merges incoming settings with existing settings instead of replacing them. Added `sf_object` setting for Connexys connections to configure which Salesforce object to query for field discovery (defaults to `cxsrec__cxsPosition__c`)
+- **2026-03-19** — Added `POST /integrations/connections/{id}/discover-fields` endpoint for dynamic source field discovery. Calls the external system's describe/metadata API (Salesforce `sobjects/describe`) to fetch all available fields including relationship sub-fields. Results are cached in `settings.field_cache` and served by `GET mapping-schema`. Falls back to hardcoded defaults when no cache exists. Added optional `sf_type` field to `SourceFieldInfo`. Frontend mapping page now has a "Velden ophalen" button to trigger discovery
+- **2026-03-19** — Added `GET /pre-screening/auto-generate` and `PUT /pre-screening/auto-generate` endpoints to toggle automatic pre-screening question generation for newly imported vacancies. Setting stored in `agents.agent_config` under `general.auto_generate`. When disabled, ATS import only imports vacancies without generating questions (they show "Genereren" button in the UI)
+- **2026-03-19** — Added `GET /health/status` aggregated system status endpoint for frontend status dropdown. Returns overall health, per-service status (Platform, LLM, Voice, WhatsApp), and dynamically loaded integration statuses. New types: `ServiceStatusItem`, `IntegrationStatusItem`, `SystemStatusResponse`. Added `GET /integrations/connections/{id}/mapping-schema` endpoint for field mapping configuration UI. Returns target fields (Taloo), source fields (provider-specific), default mapping, and current saved mapping. New types: `MappingFieldInfo`, `SourceFieldInfo`, `MappingSchemaResponse`. Mapping saved via existing `PATCH /integrations/connections/{id}` in `settings.field_mapping`
 - **2026-03-18** — Added External Integrations system: `GET /integrations` (catalog of available providers), `GET /integrations/connections` (workspace connections with status), `PUT /integrations/connections/connexys` and `PUT /integrations/connections/microsoft` (save provider credentials), `PATCH /integrations/connections/{id}` (update settings/toggle), `DELETE /integrations/connections/{id}` (remove connection), `POST /integrations/connections/{id}/health-check` (test connectivity). New types: `IntegrationResponse`, `ConnectionResponse`, `HealthCheckResponse`, `ConnexysCredentialsRequest`, `MicrosoftCredentialsRequest`. Database: `system.integration_connections` table
 - **2026-03-15** — **BREAKING**: `NavigationCountsResponse.prescreening` and `.preonboarding` now return `{active, stuck}` (per-type workflow activity counts) instead of vacancy-status counts (`new/generated/published/archived`). Combined `activities` field unchanged
 - **2026-03-15** — Refactored agent vacancy endpoints to unified `AgentVacancyResponse` shape. Removed `?status=` query param from both endpoints — all non-archived vacancies returned with `agent_status` field per item. Added `GET /agents/prescreening/stats` and `GET /agents/preonboarding/stats` dashboard stats endpoints. Migrated prescreening `is_online` to `vacancy_agents` table (same as document_collection). Response now uses self-describing `AgentStatItem` lists for agent-specific data
@@ -97,6 +105,7 @@ Complete API reference for the Taloo recruitment screening platform.
 24. [ATS Simulator](#ats-simulator)
 25. [Demo](#demo)
 26. [Error Reference](#error-reference)
+27. [External Integrations](#external-integrations)
 
 ---
 
@@ -202,6 +211,22 @@ Initiate Google OAuth login flow. Redirects user to Google consent page.
 | `redirect_to` | string | No | URL to redirect after login |
 
 **Response:** HTTP 302 redirect to Google OAuth
+
+---
+
+#### GET /auth/login/microsoft
+
+Initiate Microsoft OAuth login flow. Redirects user to Microsoft consent page.
+
+**Auth:** None
+
+**Query Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `redirect_to` | string | No | URL to redirect after login |
+
+**Response:** HTTP 302 redirect to Microsoft OAuth
 
 ---
 
@@ -373,6 +398,64 @@ interface HealthResponse {
 {
   "status": "ok",
   "service": "taloo-backend"
+}
+```
+
+### GET /health/status
+
+Aggregated system status for the frontend status dropdown. Returns overall health, individual service statuses, and dynamically loaded integration connection statuses.
+
+**Auth:** None
+
+**Response:**
+
+```typescript
+interface ServiceStatusItem {
+  name: string;                    // Display name (e.g. "Platform", "LLM")
+  slug: string;                    // Identifier (e.g. "platform", "llm")
+  status: "online" | "offline" | "degraded" | "not_configured" | "unknown";
+  description: string;             // Human-readable status text (Dutch)
+}
+
+interface IntegrationStatusItem {
+  name: string;                    // Display name (e.g. "Connexys")
+  slug: string;                    // Identifier (e.g. "connexys")
+  status: "online" | "offline" | "not_configured" | "unknown";
+  description: string;             // Human-readable status text (Dutch)
+  last_checked_at: string | null;  // ISO timestamp of last health check
+}
+
+interface SystemStatusResponse {
+  overall: "online" | "degraded" | "offline";
+  services: ServiceStatusItem[];
+  integrations: IntegrationStatusItem[];
+}
+```
+
+**Services returned:** Platform (API + database), LLM, Voice, WhatsApp.
+
+**Integrations:** Dynamically loaded from configured integration connections in the workspace.
+
+```json
+{
+  "overall": "online",
+  "services": [
+    {
+      "name": "Platform",
+      "slug": "platform",
+      "status": "online",
+      "description": "API & database operationeel"
+    }
+  ],
+  "integrations": [
+    {
+      "name": "Connexys",
+      "slug": "connexys",
+      "status": "online",
+      "description": "Verbonden",
+      "last_checked_at": "2026-03-18T17:32:20.415310+00:00"
+    }
+  ]
 }
 ```
 
@@ -1763,7 +1846,7 @@ interface PreScreeningSettingsUpdateRequest {
 
 Get the global pre-screening agent configuration (single row, applies to all screenings).
 
-**Auth:** None
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
 
 **Response:**
 
@@ -1793,7 +1876,7 @@ interface PreScreeningConfigResponse {
 
 Update the global pre-screening agent configuration. All fields optional.
 
-**Auth:** None
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
 
 **Request Body:**
 
@@ -1818,6 +1901,46 @@ interface PreScreeningConfigUpdateRequest {
 |--------|-------|
 | 400 | No fields to update |
 | 404 | Pre-screening config not found |
+
+### GET /pre-screening/auto-generate
+
+Get the current auto-generate toggle state. When enabled (default), newly imported vacancies automatically get pre-screening questions generated.
+
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
+
+**Response:**
+
+```json
+{
+  "auto_generate": true
+}
+```
+
+### PUT /pre-screening/auto-generate
+
+Toggle auto-generate for pre-screening on/off.
+
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `enabled` | boolean | Yes | `true` to enable, `false` to disable |
+
+**Response:**
+
+```json
+{
+  "auto_generate": false
+}
+```
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 404 | No workspace found |
 
 ---
 
@@ -5120,5 +5243,202 @@ Now includes `attributes` array in the response:
       "created_at": "datetime"
     }
   ]
+}
+```
+
+---
+
+## External Integrations
+
+Manage connections to external systems (Connexys/Salesforce, Microsoft). Supports credential storage, health checks, and field mapping configuration.
+
+### Types
+
+**IntegrationResponse**
+```json
+{
+  "id": "uuid",
+  "slug": "connexys",
+  "name": "Connexys",
+  "vendor": "Salesforce",
+  "description": "Connexys ATS integration",
+  "icon": "salesforce.svg",
+  "is_active": true
+}
+```
+
+**ConnectionResponse**
+```json
+{
+  "id": "uuid",
+  "integration": { "...IntegrationResponse" },
+  "is_active": true,
+  "has_credentials": true,
+  "health_status": "healthy",
+  "last_health_check_at": "datetime",
+  "settings": {},
+  "created_at": "datetime",
+  "updated_at": "datetime"
+}
+```
+
+**HealthCheckResponse**
+```json
+{
+  "connection_id": "uuid",
+  "provider": "connexys",
+  "health_status": "healthy",
+  "message": "Connected to Salesforce (https://company.my.salesforce.com)",
+  "checked_at": "datetime"
+}
+```
+
+**MappingFieldInfo**
+```json
+{
+  "name": "title",
+  "label": "Vacaturenaam",
+  "type": "text",
+  "required": true,
+  "description": "Titel van de vacature"
+}
+```
+
+**SourceFieldInfo**
+```json
+{
+  "name": "cxsrec__Job_description__c",
+  "label": "Functieomschrijving",
+  "category": "vacancy"
+}
+```
+
+**MappingSchemaResponse**
+```json
+{
+  "target_fields": [ "...MappingFieldInfo[]" ],
+  "source_fields": [ "...SourceFieldInfo[]" ],
+  "default_mapping": {
+    "title": { "template": "{{Name}}" },
+    "description": { "template": "{{cxsrec__Job_description__c}}\n{{cxsrec__Job_requirements__c}}" }
+  },
+  "current_mapping": null
+}
+```
+
+### GET /integrations
+
+List all available integration providers from the catalog.
+
+**Response:** `IntegrationResponse[]`
+
+### GET /integrations/connections
+
+List all connections for the current workspace.
+
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
+
+**Response:** `ConnectionResponse[]`
+
+### GET /integrations/connections/{connection_id}
+
+Get a single connection by ID.
+
+**Response:** `ConnectionResponse`
+
+### PUT /integrations/connections/connexys
+
+Save or update Connexys (Salesforce) credentials.
+
+**Request:** `ConnexysCredentialsRequest`
+```json
+{
+  "instance_url": "https://company.my.salesforce.com",
+  "consumer_key": "3MVG9...",
+  "consumer_secret": "ABC123..."
+}
+```
+
+**Response:** `ConnectionResponse`
+
+### PUT /integrations/connections/microsoft
+
+Save or update Microsoft Graph API credentials.
+
+**Request:** `MicrosoftCredentialsRequest`
+```json
+{
+  "tenant_id": "uuid",
+  "client_id": "uuid",
+  "client_secret": "secret"
+}
+```
+
+**Response:** `ConnectionResponse`
+
+### PATCH /integrations/connections/{connection_id}
+
+Update connection settings or active status. Also used to save field mapping configuration.
+
+**Request:** `UpdateConnectionSettingsRequest`
+```json
+{
+  "settings": {
+    "field_mapping": {
+      "version": 1,
+      "mappings": {
+        "title": { "template": "{{Name}}" },
+        "company": { "template": "{{cxsrec__Account_name__c}}" }
+      }
+    }
+  },
+  "is_active": true
+}
+```
+
+**Response:** `ConnectionResponse`
+
+### DELETE /integrations/connections/{connection_id}
+
+Delete a connection and its credentials.
+
+**Response:** 204 No Content
+
+### POST /integrations/connections/{connection_id}/health-check
+
+Run a health check on a connection (tests OAuth + API access).
+
+**Response:** `HealthCheckResponse`
+
+### GET /integrations/connections/{connection_id}/mapping-schema
+
+Get the field mapping schema for a connection. Returns all available target fields (Taloo side), source fields (provider side grouped by category), default mapping templates, and the currently saved mapping (if any).
+
+Templates use N8N-style `{{field_name}}` syntax with dot-path traversal for relationship fields (e.g. `{{Owner.Email}}`). Multiple fields can be combined in one template.
+
+**Response:** `MappingSchemaResponse`
+
+```json
+{
+  "target_fields": [
+    { "name": "title", "label": "Vacaturenaam", "type": "text", "required": true, "description": "Titel van de vacature" },
+    { "name": "description", "label": "Omschrijving", "type": "html", "required": false, "description": "Volledige vacaturetekst" }
+  ],
+  "source_fields": [
+    { "name": "Name", "label": "Vacaturenaam", "category": "vacancy" },
+    { "name": "Owner.Email", "label": "Eigenaar e-mail", "category": "owner" },
+    { "name": "job_office__r.office_email__c", "label": "Kantoor e-mail", "category": "office" }
+  ],
+  "default_mapping": {
+    "title": { "template": "{{Name}}" },
+    "company": { "template": "{{cxsrec__Account_name__c}}" },
+    "description": { "template": "{{cxsrec__Job_description__c}}\n{{cxsrec__Job_requirements__c}}\n{{cxsrec__Compensation_benefits__c}}" },
+    "source_id": { "template": "{{Id}}" },
+    "recruiter_email": { "template": "{{Owner.Email}}" },
+    "office_email": { "template": "{{job_office__r.office_email__c}}" },
+    "sync_filter": { "template": "{{sync_to_taloo}}" },
+    "is_online": { "template": "{{cbx_itzu_website__c}}" }
+  },
+  "current_mapping": null
 }
 ```

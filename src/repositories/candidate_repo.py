@@ -5,9 +5,6 @@ import asyncpg
 import uuid
 from typing import Optional, List
 
-# Default workspace ID for backwards compatibility
-DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
 
 class CandidateRepository:
     """Repository for candidate database operations."""
@@ -15,22 +12,37 @@ class CandidateRepository:
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
 
-    async def get_by_id(self, candidate_id: uuid.UUID) -> Optional[asyncpg.Record]:
-        """Get a candidate by ID."""
+    async def get_by_id(self, candidate_id: uuid.UUID, workspace_id: Optional[uuid.UUID] = None) -> Optional[asyncpg.Record]:
+        """Get a candidate by ID, optionally scoped to a workspace."""
+        if workspace_id:
+            return await self.pool.fetchrow(
+                "SELECT * FROM ats.candidates WHERE id = $1 AND workspace_id = $2",
+                candidate_id, workspace_id
+            )
         return await self.pool.fetchrow(
             "SELECT * FROM ats.candidates WHERE id = $1",
             candidate_id
         )
 
-    async def get_by_phone(self, phone: str) -> Optional[asyncpg.Record]:
-        """Get a candidate by phone number."""
+    async def get_by_phone(self, phone: str, workspace_id: Optional[uuid.UUID] = None) -> Optional[asyncpg.Record]:
+        """Get a candidate by phone number, optionally scoped to a workspace."""
+        if workspace_id:
+            return await self.pool.fetchrow(
+                "SELECT * FROM ats.candidates WHERE phone = $1 AND workspace_id = $2",
+                phone, workspace_id
+            )
         return await self.pool.fetchrow(
             "SELECT * FROM ats.candidates WHERE phone = $1",
             phone
         )
 
-    async def get_by_email(self, email: str) -> Optional[asyncpg.Record]:
-        """Get a candidate by email."""
+    async def get_by_email(self, email: str, workspace_id: Optional[uuid.UUID] = None) -> Optional[asyncpg.Record]:
+        """Get a candidate by email, optionally scoped to a workspace."""
+        if workspace_id:
+            return await self.pool.fetchrow(
+                "SELECT * FROM ats.candidates WHERE email = $1 AND workspace_id = $2 LIMIT 1",
+                email, workspace_id
+            )
         return await self.pool.fetchrow(
             "SELECT * FROM ats.candidates WHERE email = $1 LIMIT 1",
             email
@@ -57,11 +69,10 @@ class CandidateRepository:
             first_name: First name (optional, parsed from full_name if not provided)
             last_name: Last name (optional, parsed from full_name if not provided)
             is_test: Flag indicating this is a test candidate (admin testing)
-            workspace_id: Workspace ID (defaults to DEFAULT_WORKSPACE_ID)
+            workspace_id: Workspace ID (required for new candidates)
         """
-        # Use default workspace if not provided
         if workspace_id is None:
-            workspace_id = DEFAULT_WORKSPACE_ID
+            raise ValueError("workspace_id is required for find_or_create")
 
         # Test candidates always get a fresh record (same phone is reused across test runs)
         if not is_test:
@@ -143,8 +154,18 @@ class CandidateRepository:
             *params
         )
 
-    async def list_all(self, limit: int = 100, offset: int = 0) -> List[asyncpg.Record]:
-        """List all candidates with pagination."""
+    async def list_all(self, limit: int = 100, offset: int = 0, workspace_id: Optional[uuid.UUID] = None) -> List[asyncpg.Record]:
+        """List all candidates with pagination, optionally scoped to a workspace."""
+        if workspace_id:
+            return await self.pool.fetch(
+                """
+                SELECT * FROM ats.candidates
+                WHERE workspace_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                workspace_id, limit, offset
+            )
         return await self.pool.fetch(
             """
             SELECT * FROM ats.candidates
@@ -154,13 +175,29 @@ class CandidateRepository:
             limit, offset
         )
 
-    async def count(self) -> int:
-        """Get total candidate count."""
+    async def count(self, workspace_id: Optional[uuid.UUID] = None) -> int:
+        """Get total candidate count, optionally scoped to a workspace."""
+        if workspace_id:
+            return await self.pool.fetchval(
+                "SELECT COUNT(*) FROM ats.candidates WHERE workspace_id = $1",
+                workspace_id
+            )
         return await self.pool.fetchval("SELECT COUNT(*) FROM ats.candidates")
 
-    async def search(self, query: str, limit: int = 20) -> List[asyncpg.Record]:
-        """Search candidates by name, phone, or email."""
+    async def search(self, query: str, limit: int = 20, workspace_id: Optional[uuid.UUID] = None) -> List[asyncpg.Record]:
+        """Search candidates by name, phone, or email, optionally scoped to a workspace."""
         search_pattern = f"%{query}%"
+        if workspace_id:
+            return await self.pool.fetch(
+                """
+                SELECT * FROM ats.candidates
+                WHERE workspace_id = $1
+                  AND (full_name ILIKE $2 OR phone ILIKE $2 OR email ILIKE $2)
+                ORDER BY full_name
+                LIMIT $3
+                """,
+                workspace_id, search_pattern, limit
+            )
         return await self.pool.fetch(
             """
             SELECT * FROM ats.candidates
@@ -194,6 +231,7 @@ class CandidateRepository:
         availability: Optional[str] = None,
         search: Optional[str] = None,
         is_test: Optional[bool] = None,
+        workspace_id: Optional[uuid.UUID] = None,
         sort_by: str = "status",
         sort_order: str = "asc"
     ) -> tuple[List[asyncpg.Record], int]:
@@ -203,6 +241,7 @@ class CandidateRepository:
 
         Args:
             is_test: Filter by test flag. True = test candidates only, False = real candidates only, None = all
+            workspace_id: Filter by workspace
 
         Returns:
             Tuple of (rows, total_count)
@@ -211,6 +250,11 @@ class CandidateRepository:
         conditions = []
         params = []
         param_idx = 1
+
+        if workspace_id:
+            conditions.append(f"c.workspace_id = ${param_idx}")
+            params.append(workspace_id)
+            param_idx += 1
 
         if status:
             conditions.append(f"c.status = ${param_idx}")

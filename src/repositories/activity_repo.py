@@ -210,6 +210,7 @@ class ActivityRepository:
         channel: Optional[str] = None,
         candidate_id: Optional[str] = None,
         vacancy_id: Optional[str] = None,
+        workspace_id=None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
@@ -249,11 +250,20 @@ class ActivityRepository:
             params.append(vacancy_id)
             param_idx += 1
 
+        if workspace_id:
+            conditions.append(f"COALESCE(v.workspace_id, c.workspace_id) = ${param_idx}")
+            params.append(workspace_id)
+            param_idx += 1
+
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-        # Get total count
+        # Get total count (needs the same joins for workspace filtering)
         total = await self.pool.fetchval(
-            f"SELECT COUNT(*) FROM system.activity_log a WHERE {where_clause}",
+            f"""SELECT COUNT(*)
+                FROM system.activity_log a
+                LEFT JOIN ats.candidates c ON a.candidate_id = c.id
+                LEFT JOIN ats.vacancies v ON a.vacancy_id = v.id
+                WHERE {where_clause}""",
             *params
         )
 

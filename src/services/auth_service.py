@@ -1,5 +1,5 @@
 """
-Authentication service - handles Google OAuth and user management.
+Authentication service - handles OAuth (Google, Microsoft) and user management.
 """
 import logging
 from typing import Optional, Dict, Any, Tuple
@@ -34,6 +34,18 @@ class AuthService:
             The OAuth authorization URL
         """
         return supabase_auth.get_google_oauth_url(redirect_to)
+
+    def get_microsoft_login_url(self, redirect_to: Optional[str] = None) -> str:
+        """
+        Get the Microsoft OAuth login URL.
+
+        Args:
+            redirect_to: Optional URL to redirect after successful auth
+
+        Returns:
+            The OAuth authorization URL
+        """
+        return supabase_auth.get_microsoft_oauth_url(redirect_to)
 
     async def handle_oauth_callback(self, code: str) -> Dict[str, Any]:
         """

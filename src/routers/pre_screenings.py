@@ -11,6 +11,9 @@ from google.adk.events import Event, EventActions
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
 from google.adk.errors.already_exists_error import AlreadyExistsError
 
+from fastapi import Depends
+
+from src.auth.dependencies import AuthContext, require_workspace
 from src.models.pre_screening import (
     PreScreeningRequest,
     PreScreeningQuestionResponse,
@@ -28,6 +31,15 @@ from src.database import get_db_pool
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Pre-Screening"])
+
+
+async def _verify_vacancy_workspace(pool, vacancy_id, workspace_id):
+    """Verify a vacancy exists and belongs to the given workspace. Raises 404 if not."""
+    row = await pool.fetchrow(
+        "SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_id
+    )
+    if not row or row["workspace_id"] != workspace_id:
+        raise HTTPException(status_code=404, detail="Vacancy not found")
 
 # Will be set during app startup
 session_manager = None
@@ -95,7 +107,7 @@ async def _run_background_analysis(pre_screening_id: uuid.UUID, vacancy_id: str)
 
 
 @router.put("/vacancies/{vacancy_id}/pre-screening")
-async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, background_tasks: BackgroundTasks):
+async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, background_tasks: BackgroundTasks, ctx: AuthContext = Depends(require_workspace)):
     """
     Save or update pre-screening configuration for a vacancy.
     Creates pre_screening record and inserts questions into pre_screening_questions.
@@ -110,10 +122,8 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, backg
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
 
-    # Verify vacancy exists
-    vacancy_repo = VacancyRepository(pool)
-    if not await vacancy_repo.exists(vacancy_uuid):
-        raise HTTPException(status_code=404, detail="Vacancy not found")
+    # Verify vacancy exists and belongs to workspace
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     # Prepare question lists
     knockout_questions = [
@@ -175,7 +185,7 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, backg
 
 
 @router.get("/vacancies/{vacancy_id}/pre-screening/analysis")
-async def get_vacancy_analysis(vacancy_id: str):
+async def get_vacancy_analysis(vacancy_id: str, ctx: AuthContext = Depends(require_workspace)):
     """
     Get the interview analysis report for a vacancy's pre-screening.
 
@@ -195,6 +205,8 @@ async def get_vacancy_analysis(vacancy_id: str):
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     ps_repo = PreScreeningRepository(pool)
     ps_row = await ps_repo.get_for_vacancy(vacancy_uuid)
@@ -217,7 +229,7 @@ async def get_vacancy_analysis(vacancy_id: str):
 
 
 @router.get("/vacancies/{vacancy_id}/pre-screening")
-async def get_pre_screening(vacancy_id: str):
+async def get_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_workspace)):
     """
     Get pre-screening configuration for a vacancy.
 
@@ -232,6 +244,8 @@ async def get_pre_screening(vacancy_id: str):
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     # Get pre-screening
     ps_repo = PreScreeningRepository(pool)
@@ -375,7 +389,7 @@ async def get_pre_screening(vacancy_id: str):
 
 
 @router.delete("/vacancies/{vacancy_id}/pre-screening")
-async def delete_pre_screening(vacancy_id: str):
+async def delete_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_workspace)):
     """Delete pre-screening configuration for a vacancy. Resets status to 'new'."""
     pool = await get_db_pool()
 
@@ -384,6 +398,8 @@ async def delete_pre_screening(vacancy_id: str):
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     # Delete pre-screening
     ps_repo = PreScreeningRepository(pool)
@@ -401,7 +417,7 @@ async def delete_pre_screening(vacancy_id: str):
 
 
 @router.post("/vacancies/{vacancy_id}/pre-screening/publish")
-async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningRequest):
+async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Publish a pre-screening configuration by creating the AI agents.
 
@@ -420,12 +436,11 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
 
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
+
     # Get vacancy title
     vacancy_repo = VacancyRepository(pool)
     vacancy_row = await vacancy_repo.get_basic_info(vacancy_uuid)
-    if not vacancy_row:
-        raise HTTPException(status_code=404, detail=f"Vacancy not found: {vacancy_id}")
-
     vacancy_title = vacancy_row["title"]
 
     # Get pre-screening with questions
@@ -510,7 +525,7 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
 
 
 @router.patch("/vacancies/{vacancy_id}/pre-screening/status")
-async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequest):
+async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Update the online/offline status and channel toggles for a pre-screening.
 
@@ -529,12 +544,11 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
 
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
+
     # Get vacancy title (needed for agent creation)
     vacancy_repo = VacancyRepository(pool)
     vacancy_row = await vacancy_repo.get_basic_info(vacancy_uuid)
-    if not vacancy_row:
-        raise HTTPException(status_code=404, detail=f"Vacancy not found: {vacancy_id}")
-
     vacancy_title = vacancy_row["title"]
 
     # Get pre-screening
@@ -657,7 +671,7 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
 
 
 @router.get("/vacancies/{vacancy_id}/pre-screening/settings", response_model=PreScreeningSettingsResponse)
-async def get_pre_screening_settings(vacancy_id: str):
+async def get_pre_screening_settings(vacancy_id: str, ctx: AuthContext = Depends(require_workspace)):
     """Get pre-screening settings (consent, escalation, channel flags)."""
     pool = await get_db_pool()
 
@@ -665,6 +679,8 @@ async def get_pre_screening_settings(vacancy_id: str):
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     from src.services.pre_screening_service import PreScreeningService
     service = PreScreeningService(pool)
@@ -677,7 +693,7 @@ async def get_pre_screening_settings(vacancy_id: str):
 
 
 @router.patch("/vacancies/{vacancy_id}/pre-screening/settings", response_model=PreScreeningSettingsResponse)
-async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSettingsUpdateRequest):
+async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSettingsUpdateRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Update pre-screening settings. All fields are optional — only provided fields will be updated.
 
@@ -691,6 +707,8 @@ async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSe
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
+
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     # Check at least one field is provided
     update_data = request.model_dump(exclude_none=True)
@@ -736,17 +754,12 @@ def _order_settings(settings: dict) -> dict:
 
 
 @router.get("/pre-screening/config", response_model=AgentConfigResponse)
-async def get_pre_screening_config():
+async def get_pre_screening_config(ctx: AuthContext = Depends(require_workspace)):
     """Get the active pre-screening agent configuration."""
     pool = await get_db_pool()
     repo = AgentConfigRepository(pool)
 
-    # Get workspace (single-tenant for now)
-    workspace = await pool.fetchrow("SELECT id FROM system.workspaces LIMIT 1")
-    if not workspace:
-        raise HTTPException(status_code=404, detail="No workspace found")
-
-    row = await repo.get_active(workspace["id"], "pre_screening")
+    row = await repo.get_active(ctx.workspace_id, "pre_screening")
     if not row:
         raise HTTPException(status_code=404, detail="Pre-screening config not found")
 
@@ -761,7 +774,7 @@ async def get_pre_screening_config():
 
 
 @router.patch("/pre-screening/config", response_model=AgentConfigResponse)
-async def update_pre_screening_config(request: AgentConfigUpdateRequest):
+async def update_pre_screening_config(request: AgentConfigUpdateRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Update the pre-screening agent configuration.
     Creates a new version with merged settings — previous versions are preserved.
@@ -773,20 +786,15 @@ async def update_pre_screening_config(request: AgentConfigUpdateRequest):
     if not update_data:
         raise HTTPException(status_code=400, detail="No settings to update")
 
-    # Get workspace (single-tenant for now)
-    workspace = await pool.fetchrow("SELECT id FROM system.workspaces LIMIT 1")
-    if not workspace:
-        raise HTTPException(status_code=404, detail="No workspace found")
-
     # Merge with current settings
-    current = await repo.get_active(workspace["id"], "pre_screening")
+    current = await repo.get_active(ctx.workspace_id, "pre_screening")
     import json
     current_settings = {}
     if current:
         current_settings = current["settings"] if isinstance(current["settings"], dict) else json.loads(current["settings"])
 
     merged = _order_settings({**current_settings, **update_data})
-    row = await repo.save(workspace["id"], "pre_screening", merged)
+    row = await repo.save(ctx.workspace_id, "pre_screening", merged)
 
     settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
     return AgentConfigResponse(
@@ -795,3 +803,57 @@ async def update_pre_screening_config(request: AgentConfigUpdateRequest):
         version=row["version"],
         settings=_order_settings(settings),
     )
+
+
+# ---------------------------------------------------------------------------
+# Auto-generate toggle
+# ---------------------------------------------------------------------------
+
+@router.get("/pre-screening/auto-generate")
+async def get_auto_generate(ctx: AuthContext = Depends(require_workspace)):
+    """
+    Get the current auto-generate setting for pre-screening.
+
+    When enabled, newly imported vacancies automatically get pre-screening
+    questions generated. When disabled, vacancies are imported without
+    generating questions (they show "Genereren" button in the UI).
+    """
+    pool = await get_db_pool()
+    repo = AgentConfigRepository(pool)
+
+    row = await repo.get_active(ctx.workspace_id, "pre_screening")
+    if not row:
+        return {"auto_generate": True}
+
+    import json
+    settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
+    general = settings.get("general", {})
+    return {"auto_generate": general.get("auto_generate", True)}
+
+
+@router.put("/pre-screening/auto-generate")
+async def set_auto_generate(enabled: bool, ctx: AuthContext = Depends(require_workspace)):
+    """
+    Toggle auto-generate for pre-screening.
+
+    When enabled (default), newly imported vacancies automatically get
+    pre-screening questions generated. When disabled, vacancies are
+    imported but remain in "Genereren" state.
+    """
+    pool = await get_db_pool()
+    repo = AgentConfigRepository(pool)
+
+    import json
+    current = await repo.get_active(ctx.workspace_id, "pre_screening")
+    current_settings = {}
+    if current:
+        current_settings = current["settings"] if isinstance(current["settings"], dict) else json.loads(current["settings"])
+
+    general = current_settings.get("general", {})
+    general["auto_generate"] = enabled
+    current_settings["general"] = general
+
+    await repo.save(ctx.workspace_id, "pre_screening", current_settings)
+
+    logger.info(f"Auto-generate toggled to {enabled}")
+    return {"auto_generate": enabled}

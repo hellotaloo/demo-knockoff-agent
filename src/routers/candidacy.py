@@ -9,8 +9,9 @@ import uuid
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.database import get_db_pool
 from src.exceptions import InvalidTransitionError, NotFoundError
 from src.repositories.candidacy_repo import CandidacyRepository
@@ -32,8 +33,6 @@ from src.services.candidacy_transition_service import CandidacyStageTransitionSe
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/candidacies", tags=["Candidacies"])
-
-DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 def _build_response(row) -> CandidacyResponse:
@@ -102,8 +101,8 @@ def _build_response(row) -> CandidacyResponse:
 async def list_candidacies(
     vacancy_id: Optional[uuid.UUID] = Query(None, description="Filter to one vacancy (Kanban view)"),
     candidate_id: Optional[uuid.UUID] = Query(None, description="Filter to one candidate (candidate detail panel)"),
-    workspace_id: uuid.UUID = Query(DEFAULT_WORKSPACE_ID, description="Workspace ID"),
     stage: Optional[CandidacyStage] = Query(None, description="Filter by stage"),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """
     List candidacies with nested candidate, vacancy, and latest application summary.
@@ -115,7 +114,7 @@ async def list_candidacies(
     repo = CandidacyRepository(pool)
 
     rows = await repo.list(
-        workspace_id=workspace_id,
+        workspace_id=ctx.workspace_id,
         vacancy_id=vacancy_id,
         candidate_id=candidate_id,
         stage=stage.value if stage else None,
@@ -127,7 +126,7 @@ async def list_candidacies(
 @router.post("", response_model=CandidacyResponse, status_code=201)
 async def create_candidacy(
     body: CandidacyCreate,
-    workspace_id: uuid.UUID = Query(DEFAULT_WORKSPACE_ID, description="Workspace ID"),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """
     Add a candidate to a vacancy pipeline (or talent pool if vacancy_id omitted).
@@ -159,7 +158,7 @@ async def create_candidacy(
             )
 
     row = await repo.create(
-        workspace_id=workspace_id,
+        workspace_id=ctx.workspace_id,
         candidate_id=candidate_id,
         vacancy_id=vacancy_id,
         stage=body.stage.value,
@@ -176,6 +175,7 @@ async def update_stage(
     candidacy_id: uuid.UUID,
     stage: CandidacyStage = Query(..., description="New stage value"),
     placement: Optional[PlacementCreate] = Body(None),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """
     Move a candidacy to a different stage (drag-and-drop or dropdown).
@@ -187,19 +187,27 @@ async def update_stage(
     """
     pool = await get_db_pool()
 
-    # Create placement BEFORE transition so the background planner can read it
-    if stage == CandidacyStage.OFFER and placement:
-        repo = CandidacyRepository(pool)
-        full_row = await repo.get_by_id(candidacy_id)
-        if not full_row:
+    # Verify candidacy exists and belongs to workspace
+    repo = CandidacyRepository(pool)
+    check_row = await repo.get_by_id(candidacy_id)
+    if not check_row:
+        raise HTTPException(status_code=404, detail="Candidacy not found")
+    # Verify workspace ownership via the vacancy
+    if check_row["vac_id"]:
+        vac_row = await pool.fetchrow(
+            "SELECT workspace_id FROM ats.vacancies WHERE id = $1", check_row["vac_id"]
+        )
+        if not vac_row or vac_row["workspace_id"] != ctx.workspace_id:
             raise HTTPException(status_code=404, detail="Candidacy not found")
 
+    # Create placement BEFORE transition so the background planner can read it
+    if stage == CandidacyStage.OFFER and placement:
         placement_repo = PlacementRepository(pool)
         await placement_repo.create(
-            workspace_id=DEFAULT_WORKSPACE_ID,
+            workspace_id=ctx.workspace_id,
             candidate_id=uuid.UUID(placement.candidate_id),
             vacancy_id=uuid.UUID(placement.vacancy_id),
-            application_id=full_row["app_id"] if full_row["app_id"] else None,
+            application_id=check_row["app_id"] if check_row["app_id"] else None,
             client_id=uuid.UUID(placement.client_id) if placement.client_id else None,
             start_date=placement.start_date,
             regime=placement.regime.value if placement.regime else None,

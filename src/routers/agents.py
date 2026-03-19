@@ -17,6 +17,7 @@ from src.models.vacancy import (
     AgentVacancyResponse,
     AgentDashboardStatsResponse,
 )
+from src.auth.dependencies import AuthContext, require_workspace
 from src.repositories.agent_vacancy_repo import AgentVacancyRepository
 from src.database import get_db_pool
 
@@ -117,7 +118,9 @@ def _build_preonboarding_vacancy(row: asyncpg.Record) -> AgentVacancyResponse:
 
 
 @router.get("/counts", response_model=NavigationCountsResponse)
-async def get_navigation_counts():
+async def get_navigation_counts(
+    ctx: AuthContext = Depends(require_workspace),
+):
     """
     Get lightweight counts for navigation sidebar.
     Reads from denormalized ats.navigation_counts table (kept in sync by DB triggers).
@@ -126,8 +129,8 @@ async def get_navigation_counts():
 
     row = await pool.fetchrow("""
         SELECT * FROM ats.navigation_counts
-        WHERE workspace_id = '00000000-0000-0000-0000-000000000001'
-    """)
+        WHERE workspace_id = $1
+    """, ctx.workspace_id)
 
     if not row:
         return NavigationCountsResponse(
@@ -171,6 +174,7 @@ async def get_navigation_counts():
 async def list_prescreening_vacancies(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
 ):
     """
@@ -181,7 +185,7 @@ async def list_prescreening_vacancies(
     - **generated**: Has pre-screening record but not published
     - **published**: Pre-screening is published
     """
-    rows, total = await repo.list_prescreening_vacancies(limit=limit, offset=offset)
+    rows, total = await repo.list_prescreening_vacancies(workspace_id=ctx.workspace_id, limit=limit, offset=offset)
     vacancies = [_build_prescreening_vacancy(row) for row in rows]
 
     return {
@@ -196,6 +200,7 @@ async def list_prescreening_vacancies(
 async def list_preonboarding_vacancies(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
 ):
     """
@@ -205,7 +210,7 @@ async def list_preonboarding_vacancies(
     - **new**: Document collection agent not registered
     - **generated**: Document collection agent registered
     """
-    rows, total = await repo.list_preonboarding_vacancies(limit=limit, offset=offset)
+    rows, total = await repo.list_preonboarding_vacancies(workspace_id=ctx.workspace_id, limit=limit, offset=offset)
     vacancies = [_build_preonboarding_vacancy(row) for row in rows]
 
     return {
@@ -223,10 +228,11 @@ async def list_preonboarding_vacancies(
 
 @router.get("/prescreening/stats", response_model=AgentDashboardStatsResponse)
 async def get_prescreening_stats(
+    ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
 ):
     """Aggregate dashboard stats for the pre-screening overview page."""
-    row = await repo.get_prescreening_dashboard_stats()
+    row = await repo.get_prescreening_dashboard_stats(workspace_id=ctx.workspace_id)
 
     total = row["total"]
     completed = row["completed_count"]
@@ -259,10 +265,11 @@ async def get_prescreening_stats(
 
 @router.get("/preonboarding/stats", response_model=AgentDashboardStatsResponse)
 async def get_preonboarding_stats(
+    ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
 ):
     """Aggregate dashboard stats for the document collection overview page."""
-    row = await repo.get_preonboarding_dashboard_stats()
+    row = await repo.get_preonboarding_dashboard_stats(workspace_id=ctx.workspace_id)
 
     total = row["total"]
     completed = row["completed"]

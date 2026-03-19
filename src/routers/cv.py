@@ -4,8 +4,9 @@ CV Analysis Router
 Handles CV analysis endpoints including analyzing CVs against pre-screening questions.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from src.auth.dependencies import AuthContext, require_workspace
 from agents.cv_analyzer import analyze_cv_base64
 from src.models.cv import (
     CVAnalyzeRequest,
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/cv", tags=["CV Analysis"])
 
 
 @router.post("/analyze", response_model=CVAnalyzeResponse)
-async def analyze_cv_endpoint(request: CVAnalyzeRequest):
+async def analyze_cv_endpoint(request: CVAnalyzeRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Analyze a PDF CV against interview questions.
 

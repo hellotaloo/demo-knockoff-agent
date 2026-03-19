@@ -100,6 +100,7 @@ class WorkflowOrchestrator:
         context: dict,
         initial_step: str = "in_progress",
         timeout_seconds: Optional[int] = None,
+        workspace_id=None,
     ) -> str:
         """
         Create a new workflow instance.
@@ -109,6 +110,7 @@ class WorkflowOrchestrator:
             context: Workflow context (conversation_id, candidate_name, etc.)
             initial_step: Starting step (default: "in_progress")
             timeout_seconds: Override timeout (default: use step config)
+            workspace_id: Workspace UUID for tenant isolation
 
         Returns:
             The created workflow ID
@@ -124,6 +126,7 @@ class WorkflowOrchestrator:
             context=context,
             initial_step=initial_step,
             timeout_seconds=timeout_seconds,
+            workspace_id=workspace_id,
         )
         logger.info(
             f"🆕 WORKFLOW CREATED: {workflow_type} | step={initial_step} | SLA={timeout_seconds}s | "

@@ -184,15 +184,7 @@ git push -u origin feature/<branch_name>
 
 5. After user approves, merge the PR → Supabase auto-applies the migration
 
-**For quick/safe migrations** (e.g. adding a column), push directly to master:
-```bash
-cd /Users/lunar/Desktop/sites/taloo-workspace/taloo-database
-git checkout master && git pull
-# create migration file, write SQL
-git add supabase/migrations/
-git commit -m "<message>"
-git push origin master
-```
+**IMPORTANT: NEVER push directly to master.** All migrations must go through a feature branch + PR, regardless of complexity.
 
 ### MCP Tool Usage
 

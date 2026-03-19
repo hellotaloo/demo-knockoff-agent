@@ -24,15 +24,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-
-async def _get_config_setting(dotted_key: str, default=None):
+async def _get_config_setting(dotted_key: str, workspace_id: uuid.UUID, default=None):
     """
     Read a setting from agents.agent_config (pre_screening config).
 
     Args:
         dotted_key: Dot-separated path, e.g. "publishing.require_review"
+        workspace_id: Workspace UUID for tenant-scoped config lookup
         default: Value to return if key is not found
     """
     from src.database import get_db_pool
@@ -42,7 +41,7 @@ async def _get_config_setting(dotted_key: str, default=None):
     try:
         pool = await get_db_pool()
         repo = AgentConfigRepository(pool)
-        row = await repo.get_active(DEFAULT_WORKSPACE_ID, "pre_screening")
+        row = await repo.get_active(workspace_id, "pre_screening")
         if not row:
             return default
 
@@ -235,9 +234,13 @@ async def handle_run_analysis(
 
     # Decision: does this need recruiter review?
     # Check workflow context first, then fall back to agent config setting
+    # Resolve workspace_id from the vacancy for tenant-scoped config
+    ws_row = await pool.fetchrow("SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_uuid)
+    workspace_id = ws_row["workspace_id"] if ws_row else None
+
     require_review = context.get("require_review", False)
-    if not require_review:
-        require_review = await _get_config_setting("publishing.require_review", default=False)
+    if not require_review and workspace_id:
+        require_review = await _get_config_setting("publishing.require_review", workspace_id, default=False)
 
     if verdict == "poor":
         logger.info(f"Workflow {workflow['id']}: verdict=poor → awaiting_review")
@@ -307,12 +310,16 @@ async def handle_auto_publish(
 
     pre_screening_id = ps_row["id"]
 
+    # Resolve workspace_id from vacancy for tenant-scoped config
+    ws_row = await pool.fetchrow("SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_uuid)
+    workspace_id = ws_row["workspace_id"] if ws_row else None
+
     # Get default channels from agent config
-    default_channels = await _get_config_setting("publishing.default_channels", default={
-        "voice": True,
-        "whatsapp": True,
-        "cv": True,
-    })
+    default_channels_default = {"voice": True, "whatsapp": True, "cv": True}
+    if workspace_id:
+        default_channels = await _get_config_setting("publishing.default_channels", workspace_id, default=default_channels_default)
+    else:
+        default_channels = default_channels_default
     voice_enabled = default_channels.get("voice", True)
     whatsapp_enabled = default_channels.get("whatsapp", True)
     cv_enabled = default_channels.get("cv", True)

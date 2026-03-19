@@ -14,9 +14,86 @@ from src.models.integrations import (
     IntegrationResponse,
     ConnectionResponse,
     HealthCheckResponse,
+    MappingFieldInfo,
+    SourceFieldInfo,
+    MappingSchemaResponse,
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Mapping Configuration — Connexys (Salesforce)
+# =============================================================================
+
+# Default Salesforce object for Connexys vacancy data
+CONNEXYS_DEFAULT_SF_OBJECT = "cxsrec__cxsPosition__c"
+
+TALOO_TARGET_FIELDS = [
+    MappingFieldInfo(name="title", label="Vacaturenaam", type="text", required=True, description="Titel van de vacature"),
+    MappingFieldInfo(name="company", label="Bedrijfsnaam", type="text", required=True, description="Naam van het klantbedrijf"),
+    MappingFieldInfo(name="location", label="Locatie", type="text", required=False, description="Werklocatie (postcode + stad)"),
+    MappingFieldInfo(name="description", label="Omschrijving", type="html", required=False, description="Volledige vacaturetekst (functieomschrijving, eisen, voorwaarden)"),
+    MappingFieldInfo(name="source_id", label="Extern ID", type="text", required=True, description="Uniek ID uit het bronsysteem"),
+    MappingFieldInfo(name="start_date", label="Startdatum", type="date", required=False, description="Startdatum van de inzet"),
+    MappingFieldInfo(name="recruiter_email", label="Recruiter e-mail", type="text", required=False, description="E-mailadres van de recruiter/eigenaar"),
+    MappingFieldInfo(name="office_email", label="Kantoor e-mail", type="text", required=False, description="E-mailadres van het kantoor"),
+    MappingFieldInfo(name="sync_filter", label="Sync filter", type="boolean", required=False, description="Veld dat bepaalt of de vacature gesynchroniseerd wordt"),
+    MappingFieldInfo(name="is_online", label="Online pre-screening", type="boolean", required=False, description="true = online pre-screening, false = offline"),
+]
+
+CONNEXYS_SOURCE_FIELDS = [
+    # Vacancy fields
+    SourceFieldInfo(name="Id", label="Record ID", category="vacancy"),
+    SourceFieldInfo(name="Name", label="Vacaturenaam", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Status__c", label="Status", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Account__c", label="Klant ID", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Account_name__c", label="Klantnaam", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Job_description__c", label="Functieomschrijving", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Job_requirements__c", label="Functie-eisen", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Compensation_benefits__c", label="Arbeidsvoorwaarden", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Country__c", label="Land", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Contract_type__c", label="Soort contract", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Job_start_date__c", label="Startdatum inzet", category="vacancy"),
+    SourceFieldInfo(name="cxsrec__Number_of_employees_to_be_hired__c", label="Aantal te werven", category="vacancy"),
+    SourceFieldInfo(name="job_vdab_worklocation__c", label="Locatie (postcode + stad)", category="vacancy"),
+    SourceFieldInfo(name="job_sector__c", label="Sector", category="vacancy"),
+    SourceFieldInfo(name="job_section__c", label="Statuut", category="vacancy"),
+    SourceFieldInfo(name="job_language__c", label="Taal", category="vacancy"),
+    SourceFieldInfo(name="job_work_regime__c", label="Werkregime", category="vacancy"),
+    SourceFieldInfo(name="job_brand__c", label="Brand", category="vacancy"),
+    SourceFieldInfo(name="cbx_itzu_website__c", label="ITZU Website (online/offline)", category="vacancy"),
+    SourceFieldInfo(name="sync_to_taloo", label="Sync naar Taloo", category="vacancy"),
+    SourceFieldInfo(name="CreatedDate", label="Aanmaakdatum", category="vacancy"),
+    SourceFieldInfo(name="LastModifiedDate", label="Laatste wijziging", category="vacancy"),
+    # Owner (recruiter) fields
+    SourceFieldInfo(name="Owner.Email", label="Eigenaar e-mail", category="owner"),
+    SourceFieldInfo(name="Owner.Name", label="Eigenaar naam", category="owner"),
+    # Office fields
+    SourceFieldInfo(name="job_office__r.Name", label="Kantoornaam", category="office"),
+    SourceFieldInfo(name="job_office__r.office_email__c", label="Kantoor e-mail", category="office"),
+]
+
+CONNEXYS_DEFAULT_MAPPING = {
+    "title": {"template": "{{Name}}"},
+    "company": {"template": "{{cxsrec__Account_name__c}}"},
+    "location": {"template": "{{job_vdab_worklocation__c}}"},
+    "description": {"template": "{{cxsrec__Job_description__c}}\n{{cxsrec__Job_requirements__c}}\n{{cxsrec__Compensation_benefits__c}}"},
+    "source_id": {"template": "{{Id}}"},
+    "start_date": {"template": "{{cxsrec__Job_start_date__c}}"},
+    "recruiter_email": {"template": "{{Owner.Email}}"},
+    "office_email": {"template": "{{job_office__r.office_email__c}}"},
+    "sync_filter": {"template": "{{sync_to_taloo}}"},
+    "is_online": {"template": "{{cbx_itzu_website__c}}"},
+}
+
+PROVIDER_MAPPING_CONFIG = {
+    "connexys": {
+        "target_fields": TALOO_TARGET_FIELDS,
+        "source_fields": CONNEXYS_SOURCE_FIELDS,
+        "default_mapping": CONNEXYS_DEFAULT_MAPPING,
+    },
+}
 
 
 class IntegrationService:
@@ -50,8 +127,18 @@ class IntegrationService:
         rows = await self.repo.list_connections(workspace_id)
         return [self._build_connection_response(row) for row in rows]
 
-    async def get_connection(self, connection_id: UUID) -> Optional[ConnectionResponse]:
+    async def _verify_connection_ownership(self, connection_id: UUID, workspace_id: UUID) -> asyncpg.Record:
+        """Fetch a connection and verify it belongs to the given workspace."""
         row = await self.repo.get_connection(connection_id)
+        if not row or row["workspace_id"] != workspace_id:
+            raise ValueError("Connection not found")
+        return row
+
+    async def get_connection(self, connection_id: UUID, workspace_id: Optional[UUID] = None) -> Optional[ConnectionResponse]:
+        if workspace_id:
+            row = await self._verify_connection_ownership(connection_id, workspace_id)
+        else:
+            row = await self.repo.get_connection(connection_id)
         if not row:
             return None
         return self._build_connection_response(row)
@@ -78,29 +165,105 @@ class IntegrationService:
         return self._build_connection_response(connection)
 
     async def update_connection(
-        self, connection_id: UUID, settings: Optional[dict] = None, is_active: Optional[bool] = None
+        self, connection_id: UUID, settings: Optional[dict] = None, is_active: Optional[bool] = None,
+        workspace_id: Optional[UUID] = None,
     ) -> ConnectionResponse:
-        """Update settings and/or active status."""
-        settings_json = json.dumps(settings) if settings else None
+        """Update settings and/or active status. Merges incoming settings with existing ones."""
+        if workspace_id:
+            await self._verify_connection_ownership(connection_id, workspace_id)
 
-        if settings_json:
-            await self.repo.update_settings(connection_id, settings_json, is_active)
+        if settings:
+            # Merge with existing settings to avoid wiping field_cache, field_mapping, etc.
+            row = await self.repo.get_connection(connection_id)
+            if not row:
+                raise ValueError("Connection not found")
+            existing = json.loads(row["settings"]) if isinstance(row["settings"], str) else (row["settings"] or {})
+            existing.update(settings)
+            await self.repo.update_settings(connection_id, json.dumps(existing), is_active)
         elif is_active is not None:
-            await self.repo.update_settings(connection_id, "{}", is_active)
+            await self.repo.update_settings(connection_id, None, is_active)
 
         connection = await self.repo.get_connection(connection_id)
         return self._build_connection_response(connection)
 
-    async def delete_connection(self, connection_id: UUID) -> None:
+    async def delete_connection(self, connection_id: UUID, workspace_id: Optional[UUID] = None) -> None:
+        if workspace_id:
+            await self._verify_connection_ownership(connection_id, workspace_id)
         await self.repo.delete_connection(connection_id)
+
+    # =========================================================================
+    # Field Mapping
+    # =========================================================================
+
+    async def get_mapping_schema(self, connection_id: UUID, workspace_id: Optional[UUID] = None) -> MappingSchemaResponse:
+        """Return the mapping schema for the frontend editor."""
+        if workspace_id:
+            row = await self._verify_connection_ownership(connection_id, workspace_id)
+        else:
+            row = await self.repo.get_connection(connection_id)
+        if not row:
+            raise ValueError("Connection not found")
+
+        provider = row["slug"]
+        config = PROVIDER_MAPPING_CONFIG.get(provider)
+        if not config:
+            raise ValueError(f"No mapping configuration for provider: {provider}")
+
+        settings = json.loads(row["settings"]) if isinstance(row["settings"], str) else (row["settings"] or {})
+        current = settings.get("field_mapping", {}).get("mappings")
+
+        # Use cached source fields if available, otherwise fall back to hardcoded defaults
+        source_fields = config["source_fields"]
+        field_cache = settings.get("field_cache")
+        if field_cache and field_cache.get("source_fields"):
+            source_fields = [SourceFieldInfo(**f) for f in field_cache["source_fields"]]
+
+        return MappingSchemaResponse(
+            target_fields=config["target_fields"],
+            source_fields=source_fields,
+            default_mapping=config["default_mapping"],
+            current_mapping=current,
+        )
+
+    async def discover_source_fields(self, connection_id: UUID, workspace_id: Optional[UUID] = None) -> list[SourceFieldInfo]:
+        """Discover available source fields from the external system and cache them."""
+        if workspace_id:
+            row = await self._verify_connection_ownership(connection_id, workspace_id)
+        else:
+            row = await self.repo.get_connection(connection_id)
+        if not row:
+            raise ValueError("Connection not found")
+
+        provider = row["slug"]
+        credentials = json.loads(row["credentials"]) if isinstance(row["credentials"], str) else row["credentials"]
+        settings = json.loads(row["settings"]) if isinstance(row["settings"], str) else (row["settings"] or {})
+
+        if provider == "connexys":
+            sf_object = settings.get("sf_object", CONNEXYS_DEFAULT_SF_OBJECT)
+            fields = await self._discover_connexys_fields(credentials, sf_object)
+        else:
+            raise ValueError(f"Field discovery not supported for provider: {provider}")
+
+        # Save to settings.field_cache
+        settings = json.loads(row["settings"]) if isinstance(row["settings"], str) else (row["settings"] or {})
+        settings["field_cache"] = {
+            "source_fields": [f.model_dump() for f in fields],
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await self.repo.update_settings(connection_id, json.dumps(settings))
+
+        return fields
 
     # =========================================================================
     # Health Checks
     # =========================================================================
 
-    async def check_health(self, connection_id: UUID) -> HealthCheckResponse:
+    async def check_health(self, connection_id: UUID, workspace_id: Optional[UUID] = None) -> HealthCheckResponse:
         """Run a health check for a connection."""
-        row = await self.repo.get_connection(connection_id)
+        if workspace_id:
+            row = await self._verify_connection_ownership(connection_id, workspace_id)
+        else:
+            row = await self.repo.get_connection(connection_id)
         if not row:
             raise ValueError("Connection not found")
 
@@ -132,8 +295,9 @@ class IntegrationService:
             checked_at=datetime.now(timezone.utc),
         )
 
-    async def _check_connexys(self, credentials: dict) -> tuple[str, str]:
-        """Check Salesforce/Connexys connectivity via OAuth client_credentials flow."""
+    @staticmethod
+    async def _get_connexys_token(credentials: dict) -> tuple[str, str]:
+        """Authenticate to Salesforce and return (access_token, instance_url)."""
         import httpx
 
         instance_url = credentials["instance_url"].rstrip("/")
@@ -150,13 +314,21 @@ class IntegrationService:
 
             if resp.status_code != 200:
                 error = resp.json().get("error_description", "Authentication failed")
-                return "unhealthy", error
+                raise ConnectionError(error)
 
             token_data = resp.json()
-            access_token = token_data["access_token"]
-            sf_instance = token_data.get("instance_url", instance_url)
+            return token_data["access_token"], token_data.get("instance_url", instance_url)
 
-            # Verify API access with a simple query
+    async def _check_connexys(self, credentials: dict) -> tuple[str, str]:
+        """Check Salesforce/Connexys connectivity via OAuth client_credentials flow."""
+        import httpx
+
+        try:
+            access_token, sf_instance = await self._get_connexys_token(credentials)
+        except ConnectionError as e:
+            return "unhealthy", str(e)
+
+        async with httpx.AsyncClient() as client:
             api_resp = await client.get(
                 f"{sf_instance}/services/data/v62.0/limits",
                 headers={"Authorization": f"Bearer {access_token}"},
@@ -166,6 +338,57 @@ class IntegrationService:
                 return "healthy", f"Connected to Salesforce ({sf_instance})"
             else:
                 return "unhealthy", f"Auth OK but API call failed ({api_resp.status_code})"
+
+    async def _discover_connexys_fields(self, credentials: dict, sf_object: str) -> list[SourceFieldInfo]:
+        """Discover available fields from Salesforce by calling the describe API."""
+        import httpx
+
+        access_token, sf_instance = await self._get_connexys_token(credentials)
+        sf_api = f"{sf_instance}/services/data/v62.0"
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        # Salesforce field types we consider useful for mapping
+        USEFUL_TYPES = {
+            "string", "textarea", "email", "phone", "url", "picklist",
+            "multipicklist", "boolean", "date", "datetime", "double",
+            "currency", "int", "percent", "id", "reference",
+        }
+        # System fields to exclude
+        SYSTEM_FIELDS = {
+            "IsDeleted", "SystemModstamp", "MasterRecordId",
+        }
+
+        fields: list[SourceFieldInfo] = []
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{sf_api}/sobjects/{sf_object}/describe",
+                headers=headers,
+            )
+            if resp.status_code != 200:
+                raise ValueError(f"Salesforce describe failed for {sf_object}: {resp.status_code} {resp.text[:200]}")
+
+            describe = resp.json()
+
+            for sf_field in describe.get("fields", []):
+                if sf_field.get("deprecatedAndHidden"):
+                    continue
+                if sf_field["name"] in SYSTEM_FIELDS:
+                    continue
+
+                sf_type = sf_field.get("type", "")
+                if sf_type not in USEFUL_TYPES:
+                    continue
+
+                fields.append(SourceFieldInfo(
+                    name=sf_field["name"],
+                    label=sf_field.get("label", sf_field["name"]),
+                    category="vacancy",
+                    sf_type=sf_type,
+                ))
+
+        logger.info(f"Discovered {len(fields)} fields from Salesforce object {sf_object}")
+        return fields
 
     async def _check_microsoft(self, credentials: dict) -> tuple[str, str]:
         """Check Microsoft Graph API connectivity."""
@@ -191,6 +414,23 @@ class IntegrationService:
     # Helpers
     # =========================================================================
 
+    # Credential fields that should be shown in full (not masked)
+    UNMASKED_FIELDS = {"instance_url"}
+
+    @staticmethod
+    def _mask_value(value: str, field_name: str) -> str:
+        """Create a masked preview of a credential value for admin verification."""
+        if not value:
+            return ""
+        # Some fields are safe to show in full
+        if field_name in IntegrationService.UNMASKED_FIELDS:
+            return value
+        # For short values (< 8 chars), just show dots
+        if len(value) < 8:
+            return "••••••••"
+        # Show last 4 chars
+        return f"••••••••{value[-4:]}"
+
     @staticmethod
     def _build_connection_response(row: asyncpg.Record) -> ConnectionResponse:
         credentials = row["credentials"]
@@ -198,6 +438,13 @@ class IntegrationService:
             credentials = json.loads(credentials)
 
         has_credentials = bool(credentials and credentials != {})
+
+        # Build masked credential hints
+        credential_hints = {}
+        if has_credentials and isinstance(credentials, dict):
+            for key, val in credentials.items():
+                if isinstance(val, str) and val:
+                    credential_hints[key] = IntegrationService._mask_value(val, key)
 
         return ConnectionResponse(
             id=str(row["id"]),
@@ -212,6 +459,7 @@ class IntegrationService:
             ),
             is_active=row["is_active"],
             has_credentials=has_credentials,
+            credential_hints=credential_hints,
             health_status=row["health_status"],
             last_health_check_at=row["last_health_check_at"],
             settings=json.loads(row["settings"]) if isinstance(row["settings"], str) else row["settings"],

@@ -49,6 +49,21 @@ class WorkflowService:
             ON agents.workflows(next_action_at)
             WHERE status = 'active' AND next_action_at IS NOT NULL;
         """)
+        # Ensure workspace_id column exists (idempotent, matches migration)
+        await self.pool.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'agents' AND table_name = 'workflows' AND column_name = 'workspace_id'
+                ) THEN
+                    ALTER TABLE agents.workflows ADD COLUMN workspace_id UUID;
+                    UPDATE agents.workflows SET workspace_id = '00000000-0000-0000-0000-000000000001' WHERE workspace_id IS NULL;
+                    ALTER TABLE agents.workflows ALTER COLUMN workspace_id SET NOT NULL;
+                    CREATE INDEX IF NOT EXISTS idx_workflows_workspace_id ON agents.workflows(workspace_id);
+                END IF;
+            END $$;
+        """)
         logger.info("workflows table ensured")
 
     async def create(
@@ -57,6 +72,7 @@ class WorkflowService:
         context: Optional[dict] = None,
         initial_step: str = "in_progress",
         timeout_seconds: Optional[int] = None,
+        workspace_id: Optional[UUID] = None,
     ) -> dict:
         """
         Create a new workflow instance.
@@ -77,11 +93,14 @@ class WorkflowService:
             timeout_at = datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
             next_action_type = "timeout"
 
+        if not workspace_id:
+            raise ValueError("workspace_id is required when creating a workflow")
+
         row = await self.pool.fetchrow(
             """
             INSERT INTO agents.workflows
-            (workflow_type, current_step, status, context, next_action_at, next_action_type)
-            VALUES ($1, $2, 'active', $3::jsonb, $4, $5)
+            (workflow_type, current_step, status, context, next_action_at, next_action_type, workspace_id)
+            VALUES ($1, $2, 'active', $3::jsonb, $4, $5, $6)
             RETURNING id, workflow_type, current_step, status, context, next_action_at, created_at
             """,
             workflow_type,
@@ -89,6 +108,7 @@ class WorkflowService:
             json.dumps(context or {}),
             timeout_at,
             next_action_type,
+            workspace_id,
         )
 
         logger.info(f"Created workflow {row['id']} type={workflow_type} step={initial_step}")
@@ -417,32 +437,58 @@ class WorkflowService:
             "preonboarding_stuck": row["preonboarding_stuck"] if row else 0,
         }
 
-    async def list_active(self) -> list[dict]:
+    async def list_active(self, workspace_id: Optional[UUID] = None) -> list[dict]:
         """List all active workflows (for dashboard)."""
-        rows = await self.pool.fetch(
-            """
-            SELECT id, workflow_type, current_step, status, context,
-                   next_action_at, next_action_type, created_at, updated_at
-            FROM agents.workflows
-            WHERE status = 'active'
-            ORDER BY created_at DESC
-            LIMIT 50
-            """,
-        )
+        if workspace_id:
+            rows = await self.pool.fetch(
+                """
+                SELECT id, workflow_type, current_step, status, context,
+                       next_action_at, next_action_type, created_at, updated_at
+                FROM agents.workflows
+                WHERE status = 'active' AND workspace_id = $1
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                workspace_id,
+            )
+        else:
+            rows = await self.pool.fetch(
+                """
+                SELECT id, workflow_type, current_step, status, context,
+                       next_action_at, next_action_type, created_at, updated_at
+                FROM agents.workflows
+                WHERE status = 'active'
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+            )
 
         return [self._row_to_dict(row) for row in rows]
 
-    async def list_all(self) -> list[dict]:
+    async def list_all(self, workspace_id: Optional[UUID] = None) -> list[dict]:
         """List all workflows (active and completed)."""
-        rows = await self.pool.fetch(
-            """
-            SELECT id, workflow_type, current_step, status, context,
-                   next_action_at, next_action_type, created_at, updated_at
-            FROM agents.workflows
-            ORDER BY created_at DESC
-            LIMIT 100
-            """,
-        )
+        if workspace_id:
+            rows = await self.pool.fetch(
+                """
+                SELECT id, workflow_type, current_step, status, context,
+                       next_action_at, next_action_type, created_at, updated_at
+                FROM agents.workflows
+                WHERE workspace_id = $1
+                ORDER BY created_at DESC
+                LIMIT 100
+                """,
+                workspace_id,
+            )
+        else:
+            rows = await self.pool.fetch(
+                """
+                SELECT id, workflow_type, current_step, status, context,
+                       next_action_at, next_action_type, created_at, updated_at
+                FROM agents.workflows
+                ORDER BY created_at DESC
+                LIMIT 100
+                """,
+            )
 
         return [self._row_to_dict(row) for row in rows]
 

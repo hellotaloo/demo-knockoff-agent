@@ -363,6 +363,20 @@ async def get_auth_context(
     return AuthContext(user=user, workspace=workspace)
 
 
+async def require_workspace(
+    ctx: AuthContext = Depends(get_auth_context),
+) -> AuthContext:
+    """
+    Require workspace context.
+
+    Wraps get_auth_context and raises if X-Workspace-ID header is missing.
+    Use this for any endpoint that must be workspace-scoped.
+    """
+    if not ctx.workspace:
+        raise AuthenticationError("X-Workspace-ID header is required")
+    return ctx
+
+
 def require_role(*allowed_roles: str):
     """
     Dependency factory that requires specific roles.

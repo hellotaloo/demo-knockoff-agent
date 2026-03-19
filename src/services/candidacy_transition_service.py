@@ -209,11 +209,20 @@ class CandidacyStageTransitionService:
 
         logger.info(f"Triggering document collection planner for candidacy {candidacy_id}")
 
+        # Resolve workspace_id from vacancy
+        vacancy_row = await self.pool.fetchrow(
+            "SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_id
+        )
+        if not vacancy_row:
+            logger.error(f"Vacancy not found for document collection trigger: {vacancy_id}")
+            return
+
         planner = DocumentCollectionPlannerService(self.pool)
         collection_id = await planner.generate_and_store_plan(
             candidacy_id=candidacy_id,
             candidate_id=candidate_id,
             vacancy_id=vacancy_id,
+            workspace_id=vacancy_row["workspace_id"],
             triggered_by=f"stage_trigger:{triggered_by}",
             candidacy_stage="offer",
         )

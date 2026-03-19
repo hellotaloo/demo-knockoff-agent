@@ -19,8 +19,6 @@ from src.services.activity_service import ActivityService
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WORKSPACE_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
-
 
 class DocumentCollectionPlannerService:
     """Generates and stores smart collection plans for candidates."""
@@ -64,7 +62,7 @@ class DocumentCollectionPlannerService:
         candidacy_id: uuid.UUID,
         candidate_id: uuid.UUID,
         vacancy_id: uuid.UUID,
-        workspace_id: uuid.UUID = DEFAULT_WORKSPACE_ID,
+        workspace_id: uuid.UUID,
         triggered_by: str = "system",
         candidacy_stage: str = "offer",
     ) -> Optional[uuid.UUID]:
@@ -179,6 +177,7 @@ class DocumentCollectionPlannerService:
                 },
                 initial_step="generating_plan",
                 timeout_seconds=self._calculate_sla_seconds(start_date),
+                workspace_id=workspace_id,
             )
             logger.info(f"Created workflow {workflow_id} for document collection {collection_id}")
         except Exception as e:

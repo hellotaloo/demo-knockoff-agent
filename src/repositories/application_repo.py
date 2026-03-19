@@ -86,8 +86,25 @@ class ApplicationRepository:
 
         return rows, total
 
-    async def get_by_id(self, application_id: uuid.UUID) -> Optional[asyncpg.Record]:
-        """Get a single application by ID."""
+    async def get_by_id(self, application_id: uuid.UUID, workspace_id: Optional[uuid.UUID] = None) -> Optional[asyncpg.Record]:
+        """Get a single application by ID, optionally scoped to a workspace."""
+        if workspace_id:
+            return await self.pool.fetchrow(
+                """
+                SELECT a.id, a.vacancy_id, a.candidate_id,
+                       COALESCE(c.first_name || ' ' || c.last_name, a.candidate_name) as candidate_name,
+                       COALESCE(c.phone, a.candidate_phone) as candidate_phone,
+                       c.email as candidate_email,
+                       a.channel, a.status, a.qualified,
+                       a.started_at, a.completed_at, a.interaction_seconds,
+                       a.synced, a.synced_at, a.summary, a.interview_slot, a.is_test
+                FROM ats.applications a
+                LEFT JOIN ats.candidates c ON c.id = a.candidate_id
+                JOIN ats.vacancies v ON v.id = a.vacancy_id
+                WHERE a.id = $1 AND v.workspace_id = $2
+                """,
+                application_id, workspace_id
+            )
         return await self.pool.fetchrow(
             """
             SELECT a.id, a.vacancy_id, a.candidate_id,

@@ -90,20 +90,26 @@ class IntegrationRepository:
             WHERE id = $1
         """, connection_id, credentials)
 
-    async def update_settings(self, connection_id: UUID, settings: dict, is_active: Optional[bool] = None) -> None:
-        """Update settings and optionally is_active."""
-        if is_active is not None:
+    async def update_settings(self, connection_id: UUID, settings: Optional[str] = None, is_active: Optional[bool] = None) -> None:
+        """Update settings and/or is_active."""
+        if settings is not None and is_active is not None:
             await self.pool.execute("""
                 UPDATE system.integration_connections
                 SET settings = $2, is_active = $3, updated_at = now()
                 WHERE id = $1
             """, connection_id, settings, is_active)
-        else:
+        elif settings is not None:
             await self.pool.execute("""
                 UPDATE system.integration_connections
                 SET settings = $2, updated_at = now()
                 WHERE id = $1
             """, connection_id, settings)
+        elif is_active is not None:
+            await self.pool.execute("""
+                UPDATE system.integration_connections
+                SET is_active = $2, updated_at = now()
+                WHERE id = $1
+            """, connection_id, is_active)
 
     async def update_health_status(self, connection_id: UUID, status: str) -> None:
         """Update the health status after a check."""

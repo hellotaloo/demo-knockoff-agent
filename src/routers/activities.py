@@ -7,12 +7,14 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.database import get_db_pool
 from src.services.workflow_service import WorkflowService
 from src.workflows.pre_screening import STEP_CONFIG as PRE_SCREENING_STEP_CONFIG
@@ -389,6 +391,7 @@ async def get_tasks(
     stuck_only: bool = False,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """
     Get all tasks as a table.
@@ -404,9 +407,9 @@ async def get_tasks(
 
     # Get workflows based on status filter
     if status == "active":
-        workflows = await service.list_active()
+        workflows = await service.list_active(workspace_id=ctx.workspace_id)
     else:
-        workflows = await service.list_all()
+        workflows = await service.list_all(workspace_id=ctx.workspace_id)
         if status == "completed":
             workflows = [w for w in workflows if w["status"] == "completed"]
 
@@ -517,7 +520,11 @@ async def process_timers():
 
 
 @router.post("/tasks/{task_id}/complete", response_model=MarkCompleteResponse)
-async def mark_task_complete(task_id: str, request: MarkCompleteRequest):
+async def mark_task_complete(
+    task_id: str,
+    request: MarkCompleteRequest,
+    ctx: AuthContext = Depends(require_workspace),
+):
     """
     Mark a stuck or active task as manually completed by a recruiter.
 
@@ -532,9 +539,17 @@ async def mark_task_complete(task_id: str, request: MarkCompleteRequest):
     pool = await get_db_pool()
     service = WorkflowService(pool)
 
-    # Get the workflow
+    # Get the workflow and verify workspace ownership
     workflow = await service.get(task_id)
     if not workflow:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Check workspace ownership via DB
+    row = await pool.fetchrow(
+        "SELECT workspace_id FROM agents.workflows WHERE id = $1",
+        UUID(task_id),
+    )
+    if not row or row["workspace_id"] != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
     if workflow["status"] != "active":

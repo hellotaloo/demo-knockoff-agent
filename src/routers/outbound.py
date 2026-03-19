@@ -5,12 +5,12 @@ import json
 import logging
 import uuid
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
 from src.repositories import CandidateRepository, CandidacyRepository, ApplicationRepository
-from src.repositories.candidate_repo import DEFAULT_WORKSPACE_ID
 from src.services import ActivityService
 from src.database import get_db_pool
 from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
@@ -73,7 +73,7 @@ async def _clear_all_sessions_for_phone(pool, phone_normalized: str):
 
 
 @router.post("/screening/outbound", response_model=OutboundScreeningResponse)
-async def initiate_outbound_screening(request: OutboundScreeningRequest):
+async def initiate_outbound_screening(request: OutboundScreeningRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Initiate an outbound screening conversation with a candidate.
 
@@ -116,6 +116,9 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
     )
 
     if not row:
+        raise HTTPException(status_code=404, detail=f"Vacancy not found: {request.vacancy_id}")
+
+    if row["workspace_id"] != ctx.workspace_id:
         raise HTTPException(status_code=404, detail=f"Vacancy not found: {request.vacancy_id}")
 
     if not row["pre_screening_id"]:
@@ -163,7 +166,7 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
             candidacy_id = existing["id"]
         else:
             candidacy_row = await candidacy_repo.create(
-                workspace_id=DEFAULT_WORKSPACE_ID,
+                workspace_id=row["workspace_id"],
                 candidate_id=candidate_id,
                 vacancy_id=vacancy_uuid,
                 stage="pre_screening",
@@ -239,6 +242,7 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest):
             is_test=request.is_test,
             application_id=str(application_id),
             candidate_id=str(candidate_id),
+            workspace_id=row["workspace_id"],
         )
         response.application_id = str(application_id)
         return response
@@ -371,6 +375,7 @@ async def _initiate_voice_screening(
                     },
                     initial_step="in_progress",
                     timeout_seconds=4 * 3600,  # 4 hour SLA
+                    workspace_id=row["workspace_id"],
                 )
                 logger.info(f"Created workflow {workflow_id} for voice screening")
             except Exception as e:
@@ -406,6 +411,7 @@ async def _initiate_whatsapp_screening(
     is_test: bool = False,
     application_id: Optional[str] = None,
     candidate_id: Optional[str] = None,
+    workspace_id: Optional[uuid.UUID] = None,
 ) -> OutboundScreeningResponse:
     """Initiate a WhatsApp screening conversation using pre_screening_whatsapp_agent."""
 
@@ -593,6 +599,7 @@ async def _initiate_whatsapp_screening(
                 },
                 initial_step="in_progress",
                 timeout_seconds=4 * 3600,  # 4 hour SLA - item becomes stuck when breached
+                workspace_id=workspace_id,
             )
             logger.info(f"Created workflow {workflow_id} for WhatsApp screening")
         except Exception as e:

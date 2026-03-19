@@ -8,6 +8,7 @@ from typing import AsyncGenerator, Optional
 from datetime import datetime
 from enum import Enum
 import asyncpg
+import sentry_sdk
 from fastapi import FastAPI, Form, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -123,6 +124,7 @@ from src.routers import (
     candidacy_router,
     candidate_attributes_router,
     integrations_router,
+    clients_router,
 )
 import src.routers.pre_screenings as pre_screenings_router_module
 import src.routers.interviews as interviews_router_module
@@ -157,6 +159,9 @@ session_manager: Optional[SessionManager] = None
 
 # Background task for workflow timer processing
 _workflow_ticker_task: Optional[asyncio.Task] = None
+
+# Background task for health monitoring
+_health_monitor_task: Optional[asyncio.Task] = None
 
 
 # ============================================================================
@@ -209,7 +214,7 @@ async def _workflow_ticker_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle - create session services on startup."""
-    global session_manager, _workflow_ticker_task
+    global session_manager, _workflow_ticker_task, _health_monitor_task
 
     # Initialize SessionManager
     session_manager = SessionManager(DATABASE_URL)
@@ -265,9 +270,20 @@ async def lifespan(app: FastAPI):
     # Start background workflow ticker
     _workflow_ticker_task = asyncio.create_task(_workflow_ticker_loop())
 
+    # Start background health monitor (WhatsApp alerts on outages)
+    from src.services.health_monitor import health_monitor_loop
+    _health_monitor_task = asyncio.create_task(health_monitor_loop())
+
     yield
 
     # Cleanup on shutdown
+    if _health_monitor_task:
+        _health_monitor_task.cancel()
+        try:
+            await _health_monitor_task
+        except asyncio.CancelledError:
+            pass
+
     if _workflow_ticker_task:
         _workflow_ticker_task.cancel()
         try:
@@ -279,6 +295,20 @@ async def lifespan(app: FastAPI):
 
 
 # ============================================================================
+# Sentry Error Tracking
+# ============================================================================
+
+if os.getenv("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+        environment=os.getenv("ENVIRONMENT", "production"),
+    )
+    logger.info("Sentry initialized for error tracking")
+
+
+# ============================================================================
 # Application Initialization
 # ============================================================================
 
@@ -287,13 +317,19 @@ app = FastAPI(lifespan=lifespan)
 # Register custom exception handlers
 register_exception_handlers(app)
 
-# CORS middleware for cross-origin requests from job board
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+# CORS middleware — restrict origins by environment
+from src.config import ENVIRONMENT
+
+_cors_kwargs = {
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["*"],
+}
+if ENVIRONMENT == "local":
+    _cors_kwargs["allow_origins"] = ["http://localhost:3000", "http://localhost:8080"]
+else:
+    _cors_kwargs["allow_origin_regex"] = r"https://.*\.taloo\.eu|https://.*\.vercel\.app"
+
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 # Include all routers
 app.include_router(health_router)
@@ -330,6 +366,7 @@ app.include_router(yousign_webhook_router)
 app.include_router(candidacy_router)
 app.include_router(candidate_attributes_router)
 app.include_router(integrations_router)
+app.include_router(clients_router)
 
 # Twilio client for proactive messages
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

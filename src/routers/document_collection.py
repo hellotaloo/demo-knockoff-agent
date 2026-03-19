@@ -13,7 +13,7 @@ import base64
 import hashlib
 import asyncio
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Form
+from fastapi import APIRouter, Depends, HTTPException, Form
 from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
 
@@ -22,6 +22,7 @@ from src.models.document_collection import (
     OutboundDocumentResponse,
     DocumentCollectionDebugResponse
 )
+from src.auth.dependencies import AuthContext, require_workspace
 from src.database import get_db_pool
 from src.repositories import ApplicationRepository
 from src.config import (
@@ -375,7 +376,7 @@ async def _process_document_collection(
 # =============================================================================
 
 @router.post("/documents/collect", response_model=OutboundDocumentResponse)
-async def initiate_document_collection(request: OutboundDocumentRequest):
+async def initiate_document_collection(request: OutboundDocumentRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Start document collection conversation via WhatsApp.
 
@@ -399,12 +400,12 @@ async def initiate_document_collection(request: OutboundDocumentRequest):
     except ValueError:
         raise HTTPException(400, f"Invalid vacancy ID format: {request.vacancy_id}")
 
-    # Verify vacancy exists
+    # Verify vacancy exists and belongs to workspace
     vacancy_row = await pool.fetchrow(
-        "SELECT id FROM ats.vacancies WHERE id = $1",
+        "SELECT id, workspace_id FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
-    if not vacancy_row:
+    if not vacancy_row or vacancy_row["workspace_id"] != ctx.workspace_id:
         raise HTTPException(404, "Vacancy not found")
 
     # Build full candidate name

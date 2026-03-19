@@ -162,14 +162,23 @@ class ApplicationService:
         candidate_phone: Optional[str],
         channel: str,
         is_test: bool = False,
-        candidate_email: Optional[str] = None
+        candidate_email: Optional[str] = None,
+        workspace_id: Optional[uuid.UUID] = None,
     ) -> uuid.UUID:
         """Create a new application with linked candidate."""
+        # Resolve workspace_id from vacancy if not provided
+        if workspace_id is None:
+            row = await self.pool.fetchrow(
+                "SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_id
+            )
+            workspace_id = row["workspace_id"] if row else None
+
         # Find or create candidate in central candidates table
         candidate_id = await self.candidate_repo.find_or_create(
             full_name=candidate_name,
             phone=candidate_phone,
-            email=candidate_email
+            email=candidate_email,
+            workspace_id=workspace_id,
         )
 
         return await self.repo.create(

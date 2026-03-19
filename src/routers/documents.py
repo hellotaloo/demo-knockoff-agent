@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
 
+from src.auth.dependencies import AuthContext, require_workspace
 from agents.document_collection.recognition import verify_document_base64
 from src.models.document import (
     DocumentVerifyRequest,
@@ -28,7 +29,8 @@ router = APIRouter(prefix="/documents", tags=["Document Verification"])
 @router.post("/verify", response_model=DocumentVerifyResponse)
 async def verify_document_endpoint(
     request: DocumentVerifyRequest,
-    app_repo: ApplicationRepository = Depends(get_application_repo)
+    ctx: AuthContext = Depends(require_workspace),
+    app_repo: ApplicationRepository = Depends(get_application_repo),
 ):
     """
     Verify a document image with fraud detection.

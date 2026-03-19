@@ -5,9 +5,10 @@ import uuid
 import logging
 from typing import Optional
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from agents.pre_screening.transcript_processor import process_transcript
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.repositories import ApplicationRepository, VacancyRepository
 from src.services import ApplicationService
 from src.database import get_db_pool
@@ -25,7 +26,8 @@ async def list_applications(
     synced: Optional[bool] = Query(None),
     is_test: Optional[bool] = Query(None),
     limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0)
+    offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """List all applications for a vacancy. Use is_test=true to see test conversations, is_test=false for real ones."""
     # Validate UUID format
@@ -38,8 +40,11 @@ async def list_applications(
     vacancy_repo = VacancyRepository(pool)
     app_repo = ApplicationRepository(pool)
 
-    # Verify vacancy exists
-    if not await vacancy_repo.exists(vacancy_uuid):
+    # Verify vacancy exists and belongs to workspace
+    vacancy_row = await pool.fetchrow(
+        "SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_uuid
+    )
+    if not vacancy_row or vacancy_row["workspace_id"] != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Vacancy not found")
 
     # Get applications
@@ -66,7 +71,7 @@ async def list_applications(
 
 
 @router.get("/applications/{application_id}")
-async def get_application(application_id: str):
+async def get_application(application_id: str, ctx: AuthContext = Depends(require_workspace)):
     """Get a single application by ID."""
     # Validate UUID format
     try:
@@ -82,6 +87,13 @@ async def get_application(application_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Application not found")
 
+    # Verify application's vacancy belongs to workspace
+    vacancy_row = await pool.fetchrow(
+        "SELECT workspace_id FROM ats.vacancies WHERE id = $1", row["vacancy_id"]
+    )
+    if not vacancy_row or vacancy_row["workspace_id"] != ctx.workspace_id:
+        raise HTTPException(status_code=404, detail="Application not found")
+
     # Fetch answers and questions
     answer_rows = await app_repo.get_answers(row["id"])
     question_rows = await app_repo.get_questions_for_vacancy(row["vacancy_id"])
@@ -90,7 +102,7 @@ async def get_application(application_id: str):
 
 
 @router.post("/applications/reprocess-tests")
-async def reprocess_test_applications():
+async def reprocess_test_applications(ctx: AuthContext = Depends(require_workspace)):
     """
     Reprocess all test applications through the transcript processor.
 
@@ -104,7 +116,7 @@ async def reprocess_test_applications():
     """
     pool = await get_db_pool()
 
-    # Find all test applications with their screening conversation
+    # Find all test applications with their screening conversation (scoped to workspace)
     # Match by candidate_phone if available, otherwise by candidate_name
     test_apps = await pool.fetch(
         """
@@ -129,9 +141,11 @@ async def reprocess_test_applications():
                 LIMIT 1
             ) as conversation_id
         FROM ats.applications a
-        WHERE a.is_test = true AND a.status = 'completed'
+        JOIN ats.vacancies v ON v.id = a.vacancy_id
+        WHERE a.is_test = true AND a.status = 'completed' AND v.workspace_id = $1
         ORDER BY a.started_at DESC
-        """
+        """,
+        ctx.workspace_id
     )
 
     if not test_apps:

@@ -11,6 +11,7 @@ from src.utils.date_utils import get_next_business_days, get_dutch_date
 
 from pydantic import BaseModel
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.models.common import PaginatedResponse
 from src.models.vacancy import VacancyResponse, VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse, VacancyUpdateRequest
 from src.models.application import ApplicationResponse, QuestionAnswerResponse, CVApplicationRequest
@@ -26,17 +27,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Vacancies"])
 
 
+async def _verify_vacancy_workspace(pool, vacancy_id: uuid.UUID, workspace_id: uuid.UUID):
+    """Verify a vacancy exists and belongs to the given workspace. Raises 404 if not."""
+    row = await pool.fetchrow(
+        "SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_id
+    )
+    if not row or row["workspace_id"] != workspace_id:
+        raise HTTPException(status_code=404, detail="Vacancy not found")
+
+
 @router.get("/vacancies", response_model=PaginatedResponse[VacancyResponse])
 async def list_vacancies(
     status: Optional[str] = Query(None, description="Filter by status"),
     source: Optional[str] = Query(None, description="Filter by source"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_workspace),
     repo: VacancyRepository = Depends(get_vacancy_repo),
     service: VacancyService = Depends(get_vacancy_service)
 ):
     """List all vacancies with optional filtering, including linked applicants."""
-    rows, total = await repo.list_with_stats(status=status, source=source, limit=limit, offset=offset)
+    rows, total = await repo.list_with_stats(status=status, source=source, workspace_id=ctx.workspace_id, limit=limit, offset=offset)
 
     # Fetch applicants for all vacancies in one query
     vacancy_ids = [row["id"] for row in rows]
@@ -54,6 +65,7 @@ async def list_vacancies(
 @router.get("/vacancies/{vacancy_id}", response_model=VacancyDetailResponse)
 async def get_vacancy(
     vacancy_id: str,
+    ctx: AuthContext = Depends(require_workspace),
     repo: VacancyRepository = Depends(get_vacancy_repo),
     service: VacancyService = Depends(get_vacancy_service)
 ):
@@ -61,7 +73,7 @@ async def get_vacancy(
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     row = await repo.get_by_id(vacancy_uuid)
 
-    if not row:
+    if not row or row.get("workspace_id") != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Vacancy not found")
 
     # Fetch applicants for this vacancy
@@ -85,10 +97,16 @@ async def get_vacancy(
 async def update_vacancy(
     vacancy_id: str,
     body: VacancyUpdateRequest,
+    ctx: AuthContext = Depends(require_workspace),
     repo: VacancyRepository = Depends(get_vacancy_repo),
 ):
     """Update vacancy fields (e.g. start_date)."""
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
+
+    # Verify workspace ownership before mutating
+    existing = await repo.get_by_id(vacancy_uuid)
+    if not existing or existing.get("workspace_id") != ctx.workspace_id:
+        raise HTTPException(status_code=404, detail="Vacancy not found")
 
     row = await repo.update(vacancy_uuid, start_date=body.start_date)
     if not row:
@@ -98,7 +116,7 @@ async def update_vacancy(
 
 
 @router.post("/vacancies/{vacancy_id}/cv-application")
-async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
+async def create_cv_application(vacancy_id: str, request: CVApplicationRequest, ctx: AuthContext = Depends(require_workspace)):
     """
     Create an application from a CV PDF.
 
@@ -114,12 +132,12 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid vacancy ID format: {vacancy_id}")
 
-    # Verify vacancy exists
+    # Verify vacancy exists and belongs to workspace
     vacancy_row = await pool.fetchrow(
-        "SELECT id, title FROM ats.vacancies WHERE id = $1",
+        "SELECT id, title, workspace_id FROM ats.vacancies WHERE id = $1",
         vacancy_uuid
     )
-    if not vacancy_row:
+    if not vacancy_row or vacancy_row["workspace_id"] != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Vacancy not found")
 
     # Get pre-screening
@@ -300,7 +318,7 @@ async def create_cv_application(vacancy_id: str, request: CVApplicationRequest):
 
 
 @router.get("/vacancies/{vacancy_id}/stats")
-async def get_vacancy_stats(vacancy_id: str):
+async def get_vacancy_stats(vacancy_id: str, ctx: AuthContext = Depends(require_workspace)):
     """Get aggregated statistics for a vacancy."""
     # Validate UUID format
     try:
@@ -310,10 +328,7 @@ async def get_vacancy_stats(vacancy_id: str):
 
     pool = await get_db_pool()
     repo = VacancyRepository(pool)
-
-    # Verify vacancy exists
-    if not await repo.exists(vacancy_uuid):
-        raise HTTPException(status_code=404, detail="Vacancy not found")
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
 
     # Get stats
     row = await repo.get_stats(vacancy_uuid)
@@ -343,12 +358,12 @@ async def get_vacancy_stats(vacancy_id: str):
 
 
 @router.get("/stats")
-async def get_dashboard_stats():
+async def get_dashboard_stats(ctx: AuthContext = Depends(require_workspace)):
     """Get dashboard-level aggregate statistics across all vacancies."""
     pool = await get_db_pool()
     repo = VacancyRepository(pool)
 
-    row = await repo.get_dashboard_stats()
+    row = await repo.get_dashboard_stats(workspace_id=ctx.workspace_id)
 
     total = row["total"]
     this_week = row["this_week"]
@@ -378,10 +393,11 @@ async def get_dashboard_stats():
 
 
 @router.get("/vacancies/{vacancy_id}/workstation-sheet")
-async def get_workstation_sheet(vacancy_id: str):
+async def get_workstation_sheet(vacancy_id: str, ctx: AuthContext = Depends(require_workspace)):
     """Get workstation sheet parameters for a vacancy."""
     vid = parse_uuid(vacancy_id, "vacancy_id")
     pool = await get_db_pool()
+    await _verify_vacancy_workspace(pool, vid, ctx.workspace_id)
 
     rows = await pool.fetch(
         """
@@ -405,10 +421,11 @@ async def get_workstation_sheet(vacancy_id: str):
 
 
 @router.put("/vacancies/{vacancy_id}/workstation-sheet/{param_key}")
-async def set_workstation_sheet_param(vacancy_id: str, param_key: str, body: dict):
+async def set_workstation_sheet_param(vacancy_id: str, param_key: str, body: dict, ctx: AuthContext = Depends(require_workspace)):
     """Set a workstation sheet parameter for a vacancy."""
     vid = parse_uuid(vacancy_id, "vacancy_id")
     pool = await get_db_pool()
+    await _verify_vacancy_workspace(pool, vid, ctx.workspace_id)
 
     param_value = body.get("param_value", "yes")
     notes = body.get("notes")
@@ -427,10 +444,11 @@ async def set_workstation_sheet_param(vacancy_id: str, param_key: str, body: dic
 
 
 @router.delete("/vacancies/{vacancy_id}/workstation-sheet/{param_key}")
-async def delete_workstation_sheet_param(vacancy_id: str, param_key: str):
+async def delete_workstation_sheet_param(vacancy_id: str, param_key: str, ctx: AuthContext = Depends(require_workspace)):
     """Remove a workstation sheet parameter from a vacancy."""
     vid = parse_uuid(vacancy_id, "vacancy_id")
     pool = await get_db_pool()
+    await _verify_vacancy_workspace(pool, vid, ctx.workspace_id)
 
     await pool.execute(
         "DELETE FROM ats.workstation_sheets WHERE vacancy_id = $1 AND param_key = $2",
@@ -491,10 +509,12 @@ async def update_agent_status(
     vacancy_id: str,
     agent_type: str,
     body: AgentStatusUpdate,
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """Toggle online/offline for a vacancy agent."""
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     pool = await get_db_pool()
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
     repo = VacancyAgentRepository(pool)
 
     row = await repo.set_online(vacancy_uuid, agent_type, body.is_online)
@@ -513,10 +533,12 @@ async def update_agent_status(
 async def get_agent_status(
     vacancy_id: str,
     agent_type: str,
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """Get online/offline status for a vacancy agent."""
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     pool = await get_db_pool()
+    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
     repo = VacancyAgentRepository(pool)
 
     row = await repo.get(vacancy_uuid, agent_type)

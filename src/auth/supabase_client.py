@@ -1,7 +1,7 @@
 """
 Supabase Auth client wrapper.
 
-Handles Google OAuth flow and token management.
+Handles OAuth flows (Google, Microsoft) and token management.
 """
 import logging
 from typing import Any, Dict, Optional
@@ -38,22 +38,31 @@ class SupabaseAuthClient:
             "Content-Type": "application/json",
         }
 
-    def get_google_oauth_url(self, redirect_to: Optional[str] = None) -> str:
+    def _get_oauth_url(self, provider: str, redirect_to: Optional[str] = None) -> str:
         """
-        Generate the Google OAuth authorization URL.
+        Generate an OAuth authorization URL for the given provider.
 
         Args:
+            provider: The OAuth provider (e.g. "google", "azure")
             redirect_to: Optional URL to redirect after successful auth (unused, always goes to /auth/callback)
 
         Returns:
             The full OAuth authorization URL
         """
         params = {
-            "provider": "google",
+            "provider": provider,
             "redirect_to": f"{FRONTEND_URL}/auth/callback",
         }
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
         return f"{self.base_url}/authorize?{query_string}"
+
+    def get_google_oauth_url(self, redirect_to: Optional[str] = None) -> str:
+        """Generate the Google OAuth authorization URL."""
+        return self._get_oauth_url("google", redirect_to)
+
+    def get_microsoft_oauth_url(self, redirect_to: Optional[str] = None) -> str:
+        """Generate the Microsoft OAuth authorization URL."""
+        return self._get_oauth_url("azure", redirect_to)
 
     async def exchange_code_for_session(self, code: str) -> Dict[str, Any]:
         """

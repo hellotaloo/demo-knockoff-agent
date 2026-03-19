@@ -2,7 +2,7 @@
 Agent vacancy repository - handles vacancy listing by agent status.
 """
 import asyncpg
-from typing import Tuple
+from typing import Optional, Tuple
 from uuid import UUID
 
 
@@ -14,6 +14,7 @@ class AgentVacancyRepository:
 
     async def list_prescreening_vacancies(
         self,
+        workspace_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
@@ -25,14 +26,23 @@ class AgentVacancyRepository:
         - generated: Has pre_screening but not published
         - published: Pre_screening is published
         """
-        count_query = """
+        ws_filter = ""
+        params = []
+        param_idx = 1
+
+        if workspace_id:
+            ws_filter = f" AND v.workspace_id = ${param_idx}"
+            params.append(workspace_id)
+            param_idx += 1
+
+        count_query = f"""
             SELECT COUNT(*)
             FROM ats.vacancies v
-            WHERE v.status NOT IN ('closed', 'filled')
+            WHERE v.status NOT IN ('closed', 'filled'){ws_filter}
         """
-        total = await self.pool.fetchval(count_query)
+        total = await self.pool.fetchval(count_query, *params)
 
-        query = """
+        query = f"""
             SELECT
                 v.id, v.title, v.company, v.location, v.status, v.created_at,
                 CASE
@@ -64,16 +74,18 @@ class AgentVacancyRepository:
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
-            WHERE v.status NOT IN ('closed', 'filled')
+            WHERE v.status NOT IN ('closed', 'filled'){ws_filter}
             ORDER BY v.created_at DESC
-            LIMIT $1 OFFSET $2
+            LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
+        params.extend([limit, offset])
 
-        rows = await self.pool.fetch(query, limit, offset)
+        rows = await self.pool.fetch(query, *params)
         return rows, total
 
     async def list_preonboarding_vacancies(
         self,
+        workspace_id: Optional[UUID] = None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
@@ -84,14 +96,23 @@ class AgentVacancyRepository:
         - new: document_collection agent not registered
         - generated: document_collection agent registered
         """
-        count_query = """
+        ws_filter = ""
+        params = []
+        param_idx = 1
+
+        if workspace_id:
+            ws_filter = f" AND v.workspace_id = ${param_idx}"
+            params.append(workspace_id)
+            param_idx += 1
+
+        count_query = f"""
             SELECT COUNT(*)
             FROM ats.vacancies v
-            WHERE v.status NOT IN ('closed', 'filled')
+            WHERE v.status NOT IN ('closed', 'filled'){ws_filter}
         """
-        total = await self.pool.fetchval(count_query)
+        total = await self.pool.fetchval(count_query, *params)
 
-        query = """
+        query = f"""
             SELECT
                 v.id, v.title, v.company, v.location, v.status, v.created_at,
                 CASE
@@ -121,46 +142,65 @@ class AgentVacancyRepository:
                 FROM agents.document_collections dc
                 WHERE dc.vacancy_id = v.id
             ) dc_stats ON true
-            WHERE v.status NOT IN ('closed', 'filled')
+            WHERE v.status NOT IN ('closed', 'filled'){ws_filter}
             ORDER BY v.created_at DESC
-            LIMIT $1 OFFSET $2
+            LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
+        params.extend([limit, offset])
 
-        rows = await self.pool.fetch(query, limit, offset)
+        rows = await self.pool.fetch(query, *params)
         return rows, total
 
-    async def get_prescreening_dashboard_stats(self) -> asyncpg.Record:
+    async def get_prescreening_dashboard_stats(self, workspace_id: Optional[UUID] = None) -> asyncpg.Record:
         """Get aggregate prescreening stats for the dashboard."""
-        query = """
+        ws_filter = ""
+        params = []
+        if workspace_id:
+            ws_filter = " WHERE a.vacancy_id IN (SELECT id FROM ats.vacancies WHERE workspace_id = $1)"
+            params.append(workspace_id)
+
+        query = f"""
             SELECT
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE started_at >= date_trunc('week', NOW())) as this_week,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-                COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count
-            FROM ats.applications
+                COUNT(*) FILTER (WHERE a.started_at >= date_trunc('week', NOW())) as this_week,
+                COUNT(*) FILTER (WHERE a.status = 'completed') as completed_count,
+                COUNT(*) FILTER (WHERE a.qualified = true) as qualified_count,
+                COUNT(*) FILTER (WHERE a.channel = 'voice') as voice_count,
+                COUNT(*) FILTER (WHERE a.channel = 'whatsapp') as whatsapp_count
+            FROM ats.applications a{ws_filter}
         """
-        return await self.pool.fetchrow(query)
+        return await self.pool.fetchrow(query, *params)
 
-    async def get_preonboarding_dashboard_stats(self) -> asyncpg.Record:
+    async def get_preonboarding_dashboard_stats(self, workspace_id: Optional[UUID] = None) -> asyncpg.Record:
         """Get aggregate document collection stats for the dashboard."""
-        query = """
+        ws_filter = ""
+        params = []
+        if workspace_id:
+            ws_filter = " WHERE dc.vacancy_id IN (SELECT id FROM ats.vacancies WHERE workspace_id = $1)"
+            params.append(workspace_id)
+
+        query = f"""
             SELECT
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE status = 'active') as active,
-                COUNT(*) FILTER (WHERE status = 'completed') as completed,
-                COUNT(*) FILTER (WHERE status = 'needs_review') as needs_review
-            FROM agents.document_collections
+                COUNT(*) FILTER (WHERE dc.status = 'active') as active,
+                COUNT(*) FILTER (WHERE dc.status = 'completed') as completed,
+                COUNT(*) FILTER (WHERE dc.status = 'needs_review') as needs_review
+            FROM agents.document_collections dc{ws_filter}
         """
-        return await self.pool.fetchrow(query)
+        return await self.pool.fetchrow(query, *params)
 
-    async def get_counts(self) -> dict:
+    async def get_counts(self, workspace_id: Optional[UUID] = None) -> dict:
         """
         Get all agent vacancy counts in a single lightweight query.
         Used for navigation counters - no LATERAL joins or full data fetching.
         """
-        query = """
+        ws_filter = ""
+        params = []
+        if workspace_id:
+            ws_filter = " WHERE v.workspace_id = $1"
+            params.append(workspace_id)
+
+        query = f"""
             SELECT
                 -- Pre-screening counts
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NULL) as prescreening_new,
@@ -172,6 +212,6 @@ class AgentVacancyRepository:
                 COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')) as preonboarding_generated,
                 COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as preonboarding_archived
             FROM ats.vacancies v
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id{ws_filter}
         """
-        return await self.pool.fetchrow(query)
+        return await self.pool.fetchrow(query, *params)

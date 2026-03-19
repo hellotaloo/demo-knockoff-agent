@@ -9,10 +9,11 @@ import asyncio
 import uuid
 import logging
 from datetime import datetime, timedelta, date
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from data.fixtures import load_candidates, load_applications, load_pre_screenings, load_activities
 import json
 
+from src.config import ENVIRONMENT
 from src.database import get_db_pool
 from src.services import DemoService
 from src.services.ats_import_service import ATSImportService, get_import_progress, clear_import_progress
@@ -30,6 +31,9 @@ router = APIRouter(tags=["Demo Data"])
 @router.post("/demo/seed")
 async def seed_demo_data(activities: bool = Query(True, description="Include activities in seed")):
     """Seed base data (candidates). Vacancies are imported separately via POST /demo/import-ats."""
+    if ENVIRONMENT == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+
     pool = await get_db_pool()
 
     # Load fixtures from JSON files (non-ATS data only)
@@ -274,6 +278,9 @@ async def reset_demo_data(
     workflow_activities: bool = Query(True, description="Include workflow activities dashboard demo data")
 ):
     """Clear all vacancies, applications, candidates, and pre-screenings, optionally reseed with demo data."""
+    if ENVIRONMENT == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+
     clear_import_progress()
     pool = await get_db_pool()
 
@@ -464,6 +471,9 @@ async def trigger_ats_import(
 
     Poll GET /demo/import-ats/status for progress.
     """
+    if ENVIRONMENT == "production":
+        raise HTTPException(status_code=404, detail="Not found")
+
     if module not in ("pre_screening", "document_collection"):
         return {"status": "error", "message": f"Onbekende module: {module}. Gebruik 'pre_screening' of 'document_collection'."}
 

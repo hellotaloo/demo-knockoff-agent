@@ -27,6 +27,7 @@ class ConnectionResponse(BaseModel):
     integration: IntegrationResponse
     is_active: bool
     has_credentials: bool = Field(description="Whether credentials have been saved (never exposes actual values)")
+    credential_hints: dict = Field(default_factory=dict, description="Masked credential previews for admin verification (e.g. '••••abcd')")
     health_status: str = Field(description="healthy, unhealthy, or unknown")
     last_health_check_at: Optional[datetime] = None
     settings: dict = Field(default_factory=dict)
@@ -65,3 +66,32 @@ class UpdateConnectionSettingsRequest(BaseModel):
     """Update non-secret settings for a connection."""
     settings: dict = Field(default_factory=dict)
     is_active: Optional[bool] = None
+
+
+# =============================================================================
+# Mapping Schema Models
+# =============================================================================
+
+class MappingFieldInfo(BaseModel):
+    """A target (Taloo) field that can be mapped to."""
+    name: str
+    label: str
+    type: str  # "text", "date", "html", "boolean"
+    required: bool
+    description: str
+
+
+class SourceFieldInfo(BaseModel):
+    """A source (external system) field available for mapping."""
+    name: str
+    label: str
+    category: str  # "vacancy", "owner", "office", or dynamic relationship name
+    sf_type: Optional[str] = None  # Salesforce field type (string, picklist, date, etc.)
+
+
+class MappingSchemaResponse(BaseModel):
+    """Schema for the mapping editor UI."""
+    target_fields: list[MappingFieldInfo]
+    source_fields: list[SourceFieldInfo]
+    default_mapping: dict
+    current_mapping: Optional[dict] = None

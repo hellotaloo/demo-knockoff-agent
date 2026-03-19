@@ -6,8 +6,9 @@ import uuid
 import logging
 from typing import Optional
 from collections import defaultdict
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException
 
+from src.auth.dependencies import AuthContext, require_workspace
 from src.database import get_db_pool
 from src.repositories import CandidateRepository
 from src.repositories.candidate_attribute_repo import CandidateAttributeRepository
@@ -46,6 +47,7 @@ async def list_candidates(
     is_test: Optional[bool] = Query(None, description="Filter by test flag: true for test candidates, false for real ones"),
     sort_by: str = Query("status", description="Sort by: status, name, last_activity, rating, availability"),
     sort_order: str = Query("asc", description="Sort order: asc or desc"),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """
     Get list of candidates with skills, vacancy count, and last activity.
@@ -63,6 +65,7 @@ async def list_candidates(
         availability=availability.value if availability else None,
         search=search,
         is_test=is_test,
+        workspace_id=ctx.workspace_id,
         sort_by=sort_by,
         sort_order=sort_order,
     )
@@ -134,13 +137,13 @@ async def list_candidates(
 
 
 @router.get("/{candidate_id}", response_model=CandidateWithApplicationsResponse)
-async def get_candidate(candidate_id: uuid.UUID):
+async def get_candidate(candidate_id: uuid.UUID, ctx: AuthContext = Depends(require_workspace)):
     """Get a single candidate with their applications, skills, and activity timeline."""
     pool = await get_db_pool()
     repo = CandidateRepository(pool)
 
     candidate = await repo.get_by_id(candidate_id)
-    if not candidate:
+    if not candidate or candidate.get("workspace_id") != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     # Get applications, skills, attributes, candidacies, documents, and timeline
@@ -343,13 +346,14 @@ async def get_candidate(candidate_id: uuid.UUID):
 async def update_candidate_status(
     candidate_id: uuid.UUID,
     status: CandidateStatus,
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """Update a candidate's status."""
     pool = await get_db_pool()
     repo = CandidateRepository(pool)
 
     candidate = await repo.get_by_id(candidate_id)
-    if not candidate:
+    if not candidate or candidate.get("workspace_id") != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     await repo.update_status(candidate_id, status.value)
@@ -361,13 +365,14 @@ async def update_candidate_status(
 async def update_candidate_rating(
     candidate_id: uuid.UUID,
     rating: float = Query(..., ge=0, le=5, description="Rating from 0 to 5"),
+    ctx: AuthContext = Depends(require_workspace),
 ):
     """Update a candidate's rating."""
     pool = await get_db_pool()
     repo = CandidateRepository(pool)
 
     candidate = await repo.get_by_id(candidate_id)
-    if not candidate:
+    if not candidate or candidate.get("workspace_id") != ctx.workspace_id:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     await repo.update_rating(candidate_id, rating)

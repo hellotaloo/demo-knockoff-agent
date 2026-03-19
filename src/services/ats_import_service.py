@@ -121,6 +121,23 @@ class ATSImportService:
         self.pool = pool
         self.ats_base_url = (ats_base_url or ATS_SIMULATOR_URL).rstrip("/")
 
+    async def _is_auto_generate_enabled(self, workspace_id: UUID) -> bool:
+        """Check if auto-generate is enabled in the pre_screening agent config."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT settings FROM agents.agent_config "
+                "WHERE workspace_id = $1 AND config_type = 'pre_screening' AND is_active = true "
+                "LIMIT 1",
+                workspace_id,
+            )
+        if not row:
+            return True  # Default: enabled
+
+        settings = row["settings"]
+        if isinstance(settings, str):
+            settings = json.loads(settings)
+        return settings.get("general", {}).get("auto_generate", True)
+
     async def import_all(self, workspace_id: UUID) -> ATSImportResult:
         """
         Full import: fetch recruiters, clients, and vacancies from the ATS
@@ -211,6 +228,24 @@ class ATSImportService:
             _set_progress_complete(total=0, published=0, failed=0)
             return
 
+        # Check if auto-generate is enabled
+        auto_generate = await self._is_auto_generate_enabled(workspace_id)
+        if not auto_generate:
+            logger.info(
+                f"Auto-generate disabled — skipping question generation for "
+                f"{len(imported_vacancies)} imported vacancies"
+            )
+            _set_progress_complete(
+                total=len(imported_vacancies),
+                published=0,
+                failed=0,
+            )
+            # Still seed candidacies etc.
+            await self._seed_candidacies_from_fixtures(workspace_id)
+            await self._seed_placements_from_fixtures(workspace_id)
+            await self._seed_workstation_sheets_from_fixtures(workspace_id)
+            return
+
         # Phase 2: Set up the queue and create workflows upfront for all vacancies.
         # This allows the manual "Genereren" button in the frontend to find the
         # existing workflow via find_by_context() and fire events on it.
@@ -233,6 +268,7 @@ class ATSImportService:
                     "source": "ats_import",
                 },
                 initial_step="generating",
+                workspace_id=workspace_id,
             )
             vacancy_workflow_map[vac["id"]] = workflow_id
 
@@ -275,6 +311,7 @@ class ATSImportService:
                 vacancy_title=vac["title"],
                 vacancy_description=vac["description"],
                 workflow_id=vacancy_workflow_map[vacancy_id],
+                workspace_id=workspace_id,
             )
 
             if gen_result.get("success"):
@@ -664,6 +701,7 @@ class ATSImportService:
         vacancy_title: str,
         vacancy_description: str,
         workflow_id: str | None = None,
+        workspace_id: UUID | None = None,
     ) -> dict:
         """
         Generate pre-screening questions for a vacancy using the interview generator agent,
@@ -779,6 +817,7 @@ class ATSImportService:
                             "source": "ats_import",
                         },
                         initial_step="generating",
+                        workspace_id=workspace_id,
                     )
 
             await orchestrator.handle_event(workflow_id, "questions_saved", {
