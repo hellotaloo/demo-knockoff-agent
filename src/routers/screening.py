@@ -22,6 +22,7 @@ from src.repositories import ConversationRepository, CandidateRepository, Applic
 from src.database import get_db_pool
 from src.services.livekit_service import fetch_scheduling_config
 from src.config import logger
+from src.utils.sse_helpers import sse_done, sse_error, sse_status
 
 router = APIRouter(tags=["Screening"])
 
@@ -47,8 +48,8 @@ async def stream_screening_chat(
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Invalid vacancy ID format'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("Invalid vacancy ID format")
+        yield sse_done()
         return
 
     # Get vacancy
@@ -57,13 +58,13 @@ async def stream_screening_chat(
         vacancy_uuid
     )
     if not vacancy:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("Vacancy not found")
+        yield sse_done()
         return
 
     if workspace_id and vacancy["workspace_id"] != workspace_id:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("Vacancy not found")
+        yield sse_done()
         return
 
     # Get pre-screening config
@@ -75,8 +76,8 @@ async def stream_screening_chat(
         vacancy_uuid
     )
     if not ps_row:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'No pre-screening found for this vacancy'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("No pre-screening found for this vacancy")
+        yield sse_done()
         return
 
     # Get questions
@@ -185,8 +186,8 @@ async def stream_screening_chat(
         # Continuation - get agent from cache
         agent = _web_chat_sessions.get(session_id)
         if not agent:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found. Please start a new conversation.'})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_error("Session not found. Please start a new conversation.")
+            yield sse_done()
             return
 
         if not candidate_name:
@@ -196,7 +197,7 @@ async def stream_screening_chat(
         logger.info(f"💬 Continuing conversation - Session: {session_id[:8]}...")
         logger.info(f"📩 User message: {message}")
 
-    yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Antwoord genereren...'})}\n\n"
+    yield sse_status("thinking", "Antwoord genereren...")
 
     try:
         # For new conversation, use fixed template copy (matches the Twilio template)
@@ -226,9 +227,9 @@ async def stream_screening_chat(
             yield f"data: {json.dumps({'type': 'complete', 'message': response_text, 'session_id': session_id, 'candidate_name': candidate_name, 'is_complete': is_complete})}\n\n"
     except Exception as e:
         logger.error(f"Error during screening chat: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield sse_error(str(e))
 
-    yield "data: [DONE]\n\n"
+    yield sse_done()
 
 
 @router.post("/screening/chat")
@@ -410,8 +411,8 @@ async def stream_interview_simulation(
     try:
         vacancy_uuid = uuid.UUID(vacancy_id)
     except ValueError:
-        yield f"data: {json.dumps({'type': 'error', 'message': f'Invalid vacancy ID: {vacancy_id}'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error(f"Invalid vacancy ID: {vacancy_id}")
+        yield sse_done()
         return
 
     vacancy = await pool.fetchrow(
@@ -419,13 +420,13 @@ async def stream_interview_simulation(
         vacancy_uuid
     )
     if not vacancy:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("Vacancy not found")
+        yield sse_done()
         return
 
     if workspace_id and vacancy["workspace_id"] != workspace_id:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Vacancy not found'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("Vacancy not found")
+        yield sse_done()
         return
 
     vacancy_title = vacancy["title"]
@@ -436,8 +437,8 @@ async def stream_interview_simulation(
         vacancy_uuid
     )
     if not pre_screening:
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Pre-screening not configured for this vacancy'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error("Pre-screening not configured for this vacancy")
+        yield sse_done()
         return
 
     # Build pre-screening config dict for simulator
@@ -472,8 +473,8 @@ async def stream_interview_simulation(
     try:
         persona_enum = SimulationPersona(persona)
     except ValueError:
-        yield f"data: {json.dumps({'type': 'error', 'message': f'Invalid persona: {persona}. Valid options: qualified, borderline, unqualified, rushed, enthusiastic, custom'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error(f"Invalid persona: {persona}. Valid options: qualified, borderline, unqualified, rushed, enthusiastic, custom")
+        yield sse_done()
         return
 
     # Build simulator instruction (contains persona behavior and question context)
@@ -563,9 +564,9 @@ async def stream_interview_simulation(
 
     except Exception as e:
         logger.error(f"Error during simulation: {e}", exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield sse_error(str(e))
 
-    yield "data: [DONE]\n\n"
+    yield sse_done()
 
 
 async def _simulate_candidate_response(

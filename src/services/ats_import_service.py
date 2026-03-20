@@ -246,33 +246,16 @@ class ATSImportService:
             await self._seed_workstation_sheets_from_fixtures(workspace_id)
             return
 
-        # Phase 2: Set up the queue and create workflows upfront for all vacancies.
-        # This allows the manual "Genereren" button in the frontend to find the
-        # existing workflow via find_by_context() and fire events on it.
+        # Phase 2: Generate pre-screenings for each vacancy.
+        # Workflows are created just-in-time (right before generation starts)
+        # so the activities view only shows vacancies actively being processed.
         from src.workflows.orchestrator import get_orchestrator
         orchestrator = await get_orchestrator()
-
-        vacancy_workflow_map: dict[str, str] = {}  # vacancy_id → workflow_id
 
         _set_progress_queue([
             {"id": v["id"], "title": v["title"], "status": "queued"}
             for v in imported_vacancies
         ])
-
-        for vac in imported_vacancies:
-            workflow_id = await orchestrator.create_workflow(
-                workflow_type="vacancy_setup",
-                context={
-                    "vacancy_id": vac["id"],
-                    "vacancy_title": vac["title"],
-                    "source": "ats_import",
-                },
-                initial_step="generating",
-                workspace_id=workspace_id,
-            )
-            vacancy_workflow_map[vac["id"]] = workflow_id
-
-        logger.info(f"Created {len(vacancy_workflow_map)} vacancy_setup workflows upfront")
 
         published_count = 0
         failed_count = 0
@@ -281,8 +264,6 @@ class ATSImportService:
             vacancy_id = vac["id"]
 
             # Skip if pre-screening was already generated (e.g. manually via frontend).
-            # When the user saves manually, save_pre_screening finds the workflow we
-            # created above and fires questions_saved, advancing it to complete.
             async with self.pool.acquire() as conn:
                 existing_ps = await conn.fetchrow(
                     "SELECT id, status FROM agents.pre_screenings WHERE vacancy_id = $1",
@@ -304,13 +285,26 @@ class ATSImportService:
                 )
                 continue
 
+            # Create workflow just before generating — so it only appears in
+            # activities when this vacancy is actually being processed.
+            workflow_id = await orchestrator.create_workflow(
+                workflow_type="vacancy_setup",
+                context={
+                    "vacancy_id": vac["id"],
+                    "vacancy_title": vac["title"],
+                    "source": "ats_import",
+                },
+                initial_step="generating",
+                workspace_id=workspace_id,
+            )
+
             _update_vacancy_progress(vacancy_id, "generating", activity="Vacaturetekst analyseren...")
 
             gen_result = await self._generate_pre_screening(
                 vacancy_id=UUID(vacancy_id),
                 vacancy_title=vac["title"],
                 vacancy_description=vac["description"],
-                workflow_id=vacancy_workflow_map[vacancy_id],
+                workflow_id=workflow_id,
                 workspace_id=workspace_id,
             )
 

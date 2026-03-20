@@ -32,19 +32,11 @@ from src.config import (
 )
 from src.utils.conversation_cache import conversation_cache
 from src.services.whatsapp_service import send_whatsapp_message
+from src.dependencies import get_session_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Document Collection"])
-
-# Global session manager (set by main app)
-session_manager = None
-
-
-def set_session_manager(manager):
-    """Set the session manager instance."""
-    global session_manager
-    session_manager = manager
 
 
 # =============================================================================
@@ -391,7 +383,7 @@ async def initiate_document_collection(request: OutboundDocumentRequest, ctx: Au
     8. Send via Twilio WhatsApp
     9. Store conversation record
     """
-    global session_manager
+    session_manager = get_session_manager()
     pool = await get_db_pool()
 
     # Validate vacancy_id

@@ -17,6 +17,8 @@ from src.models.integrations import (
     MappingFieldInfo,
     SourceFieldInfo,
     MappingSchemaResponse,
+    ExportFieldInfo,
+    ExportMappingSchemaResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,7 +65,7 @@ CONNEXYS_SOURCE_FIELDS = [
     SourceFieldInfo(name="job_work_regime__c", label="Werkregime", category="vacancy"),
     SourceFieldInfo(name="job_brand__c", label="Brand", category="vacancy"),
     SourceFieldInfo(name="cbx_itzu_website__c", label="ITZU Website (online/offline)", category="vacancy"),
-    SourceFieldInfo(name="sync_to_taloo", label="Sync naar Taloo", category="vacancy"),
+    SourceFieldInfo(name="sync_to_taloo__c", label="Sync naar Taloo", category="vacancy"),
     SourceFieldInfo(name="CreatedDate", label="Aanmaakdatum", category="vacancy"),
     SourceFieldInfo(name="LastModifiedDate", label="Laatste wijziging", category="vacancy"),
     # Owner (recruiter) fields
@@ -83,7 +85,7 @@ CONNEXYS_DEFAULT_MAPPING = {
     "start_date": {"template": "{{cxsrec__Job_start_date__c}}"},
     "recruiter_email": {"template": "{{Owner.Email}}"},
     "office_email": {"template": "{{job_office__r.office_email__c}}"},
-    "sync_filter": {"template": "{{sync_to_taloo}}"},
+    "sync_filter": {"template": "{{sync_to_taloo__c}}"},
     "is_online": {"template": "{{cbx_itzu_website__c}}"},
 }
 
@@ -92,6 +94,41 @@ PROVIDER_MAPPING_CONFIG = {
         "target_fields": TALOO_TARGET_FIELDS,
         "source_fields": CONNEXYS_SOURCE_FIELDS,
         "default_mapping": CONNEXYS_DEFAULT_MAPPING,
+    },
+}
+
+
+# =============================================================================
+# Export (Data Push-back) Configuration
+# =============================================================================
+
+# Default Salesforce object for pushing screening results
+CONNEXYS_DEFAULT_EXPORT_SF_OBJECT = "cxsrec__cxsCandidate__c"
+
+# Taloo application fields available for export
+TALOO_EXPORT_SOURCE_FIELDS = [
+    ExportFieldInfo(name="candidate_name", label="Kandidaatnaam", type="text", description="Volledige naam van de kandidaat"),
+    ExportFieldInfo(name="candidate_phone", label="Telefoonnummer", type="text", description="Telefoonnummer van de kandidaat"),
+    ExportFieldInfo(name="candidate_email", label="E-mailadres", type="text", description="E-mailadres van de kandidaat"),
+    ExportFieldInfo(name="summary", label="Samenvatting", type="html", description="AI-gegenereerde executive samenvatting van het screening-gesprek"),
+    ExportFieldInfo(name="open_questions_score", label="Kwalificatiescore", type="number", description="Gemiddelde score op open vragen (0-100)"),
+    ExportFieldInfo(name="qualified", label="Gekwalificeerd", type="boolean", description="Of de kandidaat is geslaagd voor de screening"),
+    ExportFieldInfo(name="knockout_passed", label="Knockout geslaagd", type="number", description="Aantal geslaagde knockoutvragen"),
+    ExportFieldInfo(name="knockout_total", label="Knockout totaal", type="number", description="Totaal aantal knockoutvragen"),
+    ExportFieldInfo(name="knockout_result", label="Knockout resultaat", type="text", description="Knockout geslaagd/totaal als tekst (bijv. '3/4')"),
+    ExportFieldInfo(name="answers_formatted", label="Vragen & antwoorden", type="html", description="Alle vragen en antwoorden geformateerd als tekst"),
+    ExportFieldInfo(name="channel", label="Kanaal", type="text", description="Screeningkanaal (whatsapp/voice/cv)"),
+    ExportFieldInfo(name="interaction_seconds", label="Duur (seconden)", type="number", description="Duur van de interactie in seconden"),
+    ExportFieldInfo(name="interview_slot", label="Interviewmoment", type="text", description="Geselecteerd interviewmoment"),
+    ExportFieldInfo(name="completed_at", label="Afgerond op", type="datetime", description="Datum/tijd waarop screening is afgerond"),
+    ExportFieldInfo(name="vacancy_source_id", label="Vacature extern ID", type="text", description="Het externe ID van de vacature (voor koppeling in het ATS)"),
+]
+
+PROVIDER_EXPORT_CONFIG = {
+    "connexys": {
+        "source_fields": TALOO_EXPORT_SOURCE_FIELDS,
+        "default_sf_object": CONNEXYS_DEFAULT_EXPORT_SF_OBJECT,
+        "default_mapping": {},  # Empty until client provides Connexys field names
     },
 }
 
@@ -250,6 +287,75 @@ class IntegrationService:
             "source_fields": [f.model_dump() for f in fields],
             "cached_at": datetime.now(timezone.utc).isoformat(),
         }
+        await self.repo.update_settings(connection_id, json.dumps(settings))
+
+        return fields
+
+    # =========================================================================
+    # Export Mapping (Data Push-back)
+    # =========================================================================
+
+    async def get_export_mapping_schema(self, connection_id: UUID, workspace_id: Optional[UUID] = None) -> ExportMappingSchemaResponse:
+        """Return the export mapping schema for the data push-back editor."""
+        if workspace_id:
+            row = await self._verify_connection_ownership(connection_id, workspace_id)
+        else:
+            row = await self.repo.get_connection(connection_id)
+        if not row:
+            raise ValueError("Connection not found")
+
+        provider = row["slug"]
+        config = PROVIDER_EXPORT_CONFIG.get(provider)
+        if not config:
+            raise ValueError(f"No export configuration for provider: {provider}")
+
+        settings = json.loads(row["settings"]) if isinstance(row["settings"], str) else (row["settings"] or {})
+        pushback = settings.get("data_pushback", {})
+        current = pushback.get("mappings")
+
+        # Use cached export target fields if available
+        target_fields = []
+        export_cache = settings.get("export_field_cache")
+        if export_cache and export_cache.get("target_fields"):
+            target_fields = [SourceFieldInfo(**f) for f in export_cache["target_fields"]]
+
+        return ExportMappingSchemaResponse(
+            source_fields=config["source_fields"],
+            target_fields=target_fields,
+            default_mapping=config["default_mapping"],
+            current_mapping=current,
+        )
+
+    async def discover_export_target_fields(
+        self, connection_id: UUID, sf_object: Optional[str] = None, workspace_id: Optional[UUID] = None
+    ) -> list[SourceFieldInfo]:
+        """Discover available target fields on the Connexys export object and cache them."""
+        if workspace_id:
+            row = await self._verify_connection_ownership(connection_id, workspace_id)
+        else:
+            row = await self.repo.get_connection(connection_id)
+        if not row:
+            raise ValueError("Connection not found")
+
+        provider = row["slug"]
+        credentials = json.loads(row["credentials"]) if isinstance(row["credentials"], str) else row["credentials"]
+        settings = json.loads(row["settings"]) if isinstance(row["settings"], str) else (row["settings"] or {})
+
+        if provider == "connexys":
+            config = PROVIDER_EXPORT_CONFIG.get(provider, {})
+            target_object = sf_object or settings.get("data_pushback", {}).get("sf_object") or config.get("default_sf_object", CONNEXYS_DEFAULT_EXPORT_SF_OBJECT)
+            fields = await self._discover_connexys_fields(credentials, target_object)
+        else:
+            raise ValueError(f"Export field discovery not supported for provider: {provider}")
+
+        # Cache in settings.export_field_cache
+        settings["export_field_cache"] = {
+            "target_fields": [f.model_dump() for f in fields],
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # Also store the sf_object in data_pushback settings
+        pushback = settings.setdefault("data_pushback", {})
+        pushback["sf_object"] = target_object
         await self.repo.update_settings(connection_id, json.dumps(settings))
 
         return fields

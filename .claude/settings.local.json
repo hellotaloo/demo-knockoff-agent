@@ -259,7 +259,13 @@
       "Bash(ls /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/admin/integrations/[slug]/mapping/)",
       "Bash(ls /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/admin/integrations/[slug]/mapping/import/)",
       "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/)",
-      "Bash(grep -E \"\\\\.\\(py\\)$\")"
+      "Bash(grep -E \"\\\\.\\(py\\)$\")",
+      "Bash(grep -A2 -B2 \"Client\\(TWILIO\" /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend/src/**/*.py /Users/lunar/Desktop/sites/taloo-workspace/taloo-backend/app.py)",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/views/)",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/views/vacancies/)",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/admin/)",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/admin/integrations/)",
+      "Bash(ls -la /Users/lunar/Desktop/sites/taloo-workspace/taloo-frontend/app/\\\\\\(dashboard\\\\\\)/activities/)"
     ],
     "defaultMode": "acceptEdits"
   },

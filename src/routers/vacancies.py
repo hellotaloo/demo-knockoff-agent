@@ -7,7 +7,7 @@ from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends
 from agents.cv_analyzer import analyze_cv_base64
-from src.utils.date_utils import get_next_business_days, get_dutch_date
+from src.utils.dutch_dates import get_next_business_days, get_dutch_date
 
 from pydantic import BaseModel
 

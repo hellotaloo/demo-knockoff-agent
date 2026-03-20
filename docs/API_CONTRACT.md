@@ -4,6 +4,8 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-20** — Added data push-back (export to ATS) endpoints: `GET /integrations/connections/{id}/export-mapping-schema` for configuring export field mappings, `POST /integrations/connections/{id}/discover-export-fields` for discovering writable fields on the target Connexys object, `POST /integrations/applications/{id}/push-to-ats` for pushing a single application's screening results, `POST /integrations/vacancies/{id}/push-to-ats` for batch-pushing all unsynced applications. New types: `ExportFieldInfo`, `ExportMappingSchemaResponse`, `PushbackResultResponse`. Export mapping stored in `settings.data_pushback` (same JSONB column as import mapping). Uses `{{field}}` template syntax with Taloo application fields as source
+- **2026-03-19** — Added `POST /integrations/sync` and `GET /integrations/sync/status` endpoints for vacancy import from external ATS integrations. Sync resolves the workspace's active ATS connection automatically (no connection_id needed). Runs as a background task with polling for progress. Uses provider-agnostic architecture: `VacancyImportService` handles mapping/upsert, `ConnexysProvider` handles Salesforce-specific fetching. New type: `SyncProgressResponse`
 - **2026-03-19** — Added `GET /auth/login/microsoft` endpoint for Microsoft OAuth login. Mirrors the existing Google OAuth flow — redirects to Microsoft consent page via Supabase Auth. Existing `/auth/callback` handles both providers
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 3). Extended workspace isolation to activities and audit trail: `GET /api/activities/tasks`, `POST /api/activities/tasks/{id}/complete`, `GET /monitoring`. All now require `Authorization` + `X-Workspace-ID` headers. Activities filter workflows by `workspace_id` column (added to `agents.workflows` table). Audit trail filters through vacancy/candidate workspace ownership. Added `GET /clients` endpoint for workspace-scoped client listing with vacancy/candidate counts
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 2). Extended workspace isolation to all data listing endpoints: `GET /vacancies`, `GET /vacancies/stats`, `GET /candidates`, `GET /agents/counts`, `GET /agents/prescreening/vacancies`, `GET /agents/preonboarding/vacancies`, `GET /agents/prescreening/stats`, `GET /agents/preonboarding/stats`. All now require `Authorization` + `X-Workspace-ID` headers and filter data by workspace. Navigation counts (`GET /agents/counts`) no longer hardcodes a workspace UUID — reads from auth context
@@ -5442,3 +5444,122 @@ Templates use N8N-style `{{field_name}}` syntax with dot-path traversal for rela
   "current_mapping": null
 }
 ```
+
+### POST /integrations/sync
+
+Start a vacancy sync from the workspace's active ATS integration. Resolves the active connection automatically — no connection_id needed. Runs as a background task; poll `GET /integrations/sync/status` for progress.
+
+**Response:** `202 Accepted`
+
+```json
+{
+  "status": "started",
+  "message": "Sync gestart"
+}
+```
+
+**Errors:**
+- `409 Conflict` — A sync is already in progress
+- `404 Not Found` — No active ATS integration connection found (returned during sync via progress)
+
+### GET /integrations/sync/status
+
+Poll for the current sync progress.
+
+**Response:** `SyncProgressResponse`
+
+```json
+{
+  "status": "syncing",
+  "message": "42 vacatures opgehaald, importeren...",
+  "total_fetched": 42,
+  "inserted": 15,
+  "updated": 10,
+  "skipped": 2,
+  "failed": 0
+}
+```
+
+### Data Push-back (Export to ATS)
+
+**ExportFieldInfo**
+```json
+{
+  "name": "summary",
+  "label": "Samenvatting",
+  "type": "html",
+  "description": "AI-gegenereerde executive samenvatting van het screening-gesprek"
+}
+```
+
+**ExportMappingSchemaResponse**
+```json
+{
+  "source_fields": [ "...ExportFieldInfo[]" ],
+  "target_fields": [ "...SourceFieldInfo[]" ],
+  "default_mapping": {},
+  "current_mapping": null
+}
+```
+
+**PushbackResultResponse**
+```json
+{
+  "application_id": "uuid",
+  "status": "success",
+  "message": "Data succesvol verstuurd naar cxsrec__cxsCandidate__c",
+  "sf_record_id": "003XXXXXXXXXXXX"
+}
+```
+
+### GET /integrations/connections/{connection_id}/export-mapping-schema
+
+Get the export field mapping schema for data push-back configuration. Returns Taloo application fields (source) and Connexys target fields (discovered via `discover-export-fields`).
+
+Export mapping saved via `PATCH /integrations/connections/{id}` in `settings.data_pushback`:
+```json
+{
+  "settings": {
+    "data_pushback": {
+      "enabled": true,
+      "sf_object": "cxsrec__cxsCandidate__c",
+      "mappings": {
+        "Description": { "template": "{{summary}}" },
+        "Score__c": { "template": "{{open_questions_score}}" },
+        "Screening_Notes__c": { "template": "{{answers_formatted}}" }
+      }
+    }
+  }
+}
+```
+
+**Response:** `ExportMappingSchemaResponse`
+
+### POST /integrations/connections/{connection_id}/discover-export-fields
+
+Discover available writable fields on the Connexys export target object. Results are cached in `settings.export_field_cache`.
+
+**Query Parameters:**
+- `sf_object` (optional) — Salesforce object name (defaults to `cxsrec__cxsCandidate__c`)
+
+**Response:** `SourceFieldInfo[]`
+
+### POST /integrations/applications/{application_id}/push-to-ats
+
+Push a single application's screening results back to Connexys. Requires data push-back to be enabled and mapped in the connection settings.
+
+**Response:** `PushbackResultResponse`
+
+**Statuses:**
+- `success` — Record created in Connexys, application marked as synced
+- `skipped` — Application not completed or push-back not enabled
+- `error` — Push failed (see message for details)
+
+### POST /integrations/vacancies/{vacancy_id}/push-to-ats
+
+Push all unsynced completed applications for a vacancy to Connexys. Skips test applications.
+
+**Response:** `PushbackResultResponse[]`
+```
+
+**Status values:** `idle` (no sync running), `syncing` (in progress), `complete` (finished), `error` (failed)

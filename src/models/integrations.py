@@ -95,3 +95,46 @@ class MappingSchemaResponse(BaseModel):
     source_fields: list[SourceFieldInfo]
     default_mapping: dict
     current_mapping: Optional[dict] = None
+
+
+# =============================================================================
+# Export Mapping Models (Data Push-back)
+# =============================================================================
+
+class ExportFieldInfo(BaseModel):
+    """A Taloo source field available for export to an external ATS."""
+    name: str
+    label: str
+    type: str  # "text", "number", "boolean", "html", "datetime"
+    description: str
+
+
+class ExportMappingSchemaResponse(BaseModel):
+    """Schema for the export mapping editor UI (data push-back)."""
+    source_fields: list[ExportFieldInfo]        # Taloo application fields
+    target_fields: list[SourceFieldInfo]         # Connexys/SF target fields
+    default_mapping: dict
+    current_mapping: Optional[dict] = None
+
+
+class PushbackResultResponse(BaseModel):
+    """Result of pushing an application to the external ATS."""
+    application_id: str
+    status: str  # "success", "error", "skipped"
+    message: str
+    sf_record_id: Optional[str] = None
+
+
+# =============================================================================
+# Sync Models
+# =============================================================================
+
+class SyncProgressResponse(BaseModel):
+    """Progress of a vacancy sync operation."""
+    status: str = Field(description="idle | syncing | complete | error")
+    message: str = ""
+    total_fetched: int = 0
+    inserted: int = 0
+    updated: int = 0
+    skipped: int = 0
+    failed: int = 0

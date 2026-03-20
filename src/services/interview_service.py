@@ -9,6 +9,7 @@ from typing import AsyncGenerator, Optional
 from google.genai import types
 from google.adk.events import Event, EventActions
 from src.config import SIMPLE_EDIT_KEYWORDS, SIMULATED_REASONING
+from src.utils.sse_helpers import sse_done, sse_error, sse_status
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ class InterviewService:
         print(f"[TIMING] Session reset: {time.time() - session_reset_start:.2f}s")
         
         # Send initial status
-        yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Vacature analyseren...'})}\n\n"
+        yield sse_status('thinking', 'Vacature analyseren...')
         
         # Run the agent
         content = types.Content(role="user", parts=[types.Part(text=vacancy_text)])
@@ -223,7 +224,7 @@ class InterviewService:
                 
                 if event_type == "error":
                     logger.error(f"Agent error: {event_data}")
-                    yield f"data: {json.dumps({'type': 'error', 'message': str(event_data)})}\n\n"
+                    yield sse_error(str(event_data))
                     break
                 
                 # Process agent event
@@ -242,7 +243,7 @@ class InterviewService:
             
             except Exception as e:
                 logger.error(f"Error processing event: {e}")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                yield sse_error(str(e))
                 break
         
         # Wait for agent task to complete
@@ -251,7 +252,7 @@ class InterviewService:
         # Send completion
         total_time = time.time() - total_start
         print(f"[TIMING] Total generation time: {total_time:.2f}s")
-        yield "data: [DONE]\n\n"
+        yield sse_done()
     
     async def stream_feedback(
         self,
@@ -263,8 +264,8 @@ class InterviewService:
         lock = self.get_feedback_lock(session_id)
         if lock.locked():
             print(f"[FEEDBACK] Session {session_id} already processing, rejecting duplicate request")
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Een verzoek wordt al verwerkt. Even geduld.'})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_error('Een verzoek wordt al verwerkt. Even geduld.')
+            yield sse_done()
             return
         
         async with lock:
@@ -289,8 +290,8 @@ class InterviewService:
             print(f"[TIMING] Session fetch: {session_fetch_time:.2f}s")
             
             if not session:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found. Please generate questions first.'})}\n\n"
-                yield "data: [DONE]\n\n"
+                yield sse_error('Session not found. Please generate questions first.')
+                yield sse_done()
                 return
             
             # === TIMING: Agent selection ===
@@ -305,7 +306,7 @@ class InterviewService:
             print(f"[AGENT] Session history: {history_count} events")
             
             status_message = 'Feedback verwerken...' if use_fast else 'Feedback analyseren...'
-            yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': status_message})}\n\n"
+            yield sse_status('thinking', status_message)
             
             # Run agent with feedback
             content = types.Content(role="user", parts=[types.Part(text=message)])
@@ -322,8 +323,8 @@ class InterviewService:
                         yield f"data: {json.dumps({'type': 'content', 'content': str(event.content)})}\n\n"
             except Exception as e:
                 logger.error(f"Feedback error: {e}")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                yield sse_error(str(e))
             
             total_time = time.time() - total_start
             print(f"[TIMING] Total feedback time: {total_time:.2f}s")
-            yield "data: [DONE]\n\n"
+            yield sse_done()

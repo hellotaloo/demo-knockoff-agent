@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from src.database import get_db_pool
 from src.models.playground import PlaygroundChatRequest
 from src.utils.random_candidate import generate_random_candidate
+from src.utils.sse_helpers import sse_done, sse_error, sse_status
 
 logger = logging.getLogger(__name__)
 
@@ -549,26 +550,26 @@ async def stream_playground_chat(
         try:
             if agent_type == "pre_screening":
                 if not vacancy_id:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'vacancy_id is required for pre_screening'})}\n\n"
-                    yield "data: [DONE]\n\n"
+                    yield sse_error("vacancy_id is required for pre_screening")
+                    yield sse_done()
                     return
                 wrapper = await _bootstrap_pre_screening(pool, vacancy_id, candidate_name)
 
             elif agent_type == "document_collection":
                 if not collection_id:
-                    yield f"data: {json.dumps({'type': 'error', 'message': 'collection_id is required for document_collection'})}\n\n"
-                    yield "data: [DONE]\n\n"
+                    yield sse_error("collection_id is required for document_collection")
+                    yield sse_done()
                     return
                 wrapper = await _bootstrap_document_collection(pool, collection_id, candidate_name)
 
             else:
-                yield f"data: {json.dumps({'type': 'error', 'message': f'Unknown agent_type: {agent_type}'})}\n\n"
-                yield "data: [DONE]\n\n"
+                yield sse_error(f"Unknown agent_type: {agent_type}")
+                yield sse_done()
                 return
 
         except ValueError as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_error(str(e))
+            yield sse_done()
             return
 
         wrapper.live_mode = live_mode
@@ -599,12 +600,12 @@ async def stream_playground_chat(
         if wrapper:
             wrapper.live_mode = live_mode
         if not wrapper:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found. Please start a new conversation.'})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_error("Session not found. Please start a new conversation.")
+            yield sse_done()
             return
         candidate_name = wrapper.candidate_name
 
-    yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Antwoord genereren...'})}\n\n"
+    yield sse_status("thinking", "Antwoord genereren...")
 
     try:
         # Decode and attach image data for document collection
@@ -679,9 +680,9 @@ async def stream_playground_chat(
 
     except Exception as e:
         logger.error(f"Error in playground chat ({agent_type}): {e}", exc_info=True)
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield sse_error(str(e))
 
-    yield "data: [DONE]\n\n"
+    yield sse_done()
 
 
 # =============================================================================

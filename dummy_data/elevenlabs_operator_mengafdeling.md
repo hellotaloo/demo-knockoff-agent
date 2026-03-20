@@ -1,7 +1,7 @@
 Call Transcript:
 
 User: Hallo, met Lulien.
-Agent: Hallo! Je spreekt met Izy, de digitale assistent van Go4Jobs. Ik bel je over je sollicitatie. Dit duurt ongeveer 3 minuten. Als alles matcht, plannen we direct een gesprek in met de recruiter! Past dat nu?
+Agent: Hallo! Je spreekt met Izy, de digitale assistent van Top Interim. Ik bel je over je sollicitatie. Dit duurt ongeveer 3 minuten. Als alles matcht, plannen we direct een gesprek in met de recruiter! Past dat nu?
 User: Ja, dat past zeker.
 Agent: Perfect! Laten we beginnen met een paar korte vragen. Ben je in het bezit van een geldige Belgische werkvergunning?
 User: Jot, dat heb ik.

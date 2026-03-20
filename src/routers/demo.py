@@ -244,7 +244,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
                 INSERT INTO ats.office_locations (workspace_id, name, address, spoken_name, is_default)
                 VALUES ($1, $2, $3, $4, true)
                 RETURNING id
-            """, DEFAULT_WORKSPACE_ID, "Go4Jobs Antwerpen centrum", "Mechelsesteenweg 27, 2018 Antwerpen", "Antwerpen centrum")
+            """, DEFAULT_WORKSPACE_ID, "Top Interim Antwerpen centrum", "Mechelsesteenweg 27, 2018 Antwerpen", "Antwerpen centrum")
             office_location_id = row["id"]
 
             # Assign to all vacancies in this workspace

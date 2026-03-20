@@ -60,7 +60,7 @@ async def run_conversation_test(verbose: bool = True):
     agent = create_simple_agent(
         candidate_name="Jan",
         vacancy_title="Magazijnmedewerker",
-        company_name="Go4Jobs",
+        company_name="Top Interim",
         knockout_questions=TEST_KNOCKOUT_QUESTIONS,
         open_questions=TEST_OPEN_QUESTIONS,
     )
@@ -135,7 +135,7 @@ async def run_knockout_fail_test():
     agent = create_simple_agent(
         candidate_name="Piet",
         vacancy_title="Chauffeur",
-        company_name="Go4Jobs",
+        company_name="Top Interim",
         knockout_questions=[
             {
                 "question": "Heb je een rijbewijs B?",

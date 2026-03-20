@@ -21,6 +21,7 @@ from src.config import (
     LIVEKIT_API_KEY,
     LIVEKIT_API_SECRET,
 )
+from src.services.whatsapp_service import get_twilio_client
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +102,7 @@ async def _ping_twilio() -> tuple[str, str]:
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
         return "not_configured", "Berichten niet ingesteld"
     try:
-        from twilio.rest import Client
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client = get_twilio_client()
         # Twilio SDK is synchronous — run in executor
         loop = asyncio.get_event_loop()
         account = await loop.run_in_executor(

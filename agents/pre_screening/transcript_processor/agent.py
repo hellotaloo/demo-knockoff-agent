@@ -6,15 +6,13 @@ against pre-screening interview questions.
 """
 
 from google.adk.agents.llm_agent import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.adk.planners import BuiltInPlanner
 from google.genai import types
 from dataclasses import dataclass
 from typing import Optional
-import json
 import logging
-import re
+
+from agents.common.runner import run_agent_once
 
 logger = logging.getLogger(__name__)
 
@@ -225,16 +223,6 @@ transcript_processor_agent = Agent(
     ),
 )
 
-# Session service for running the agent
-_session_service = InMemorySessionService()
-
-# Runner for executing the agent
-_runner = Runner(
-    agent=transcript_processor_agent,
-    app_name="transcript_processor_app",
-    session_service=_session_service,
-)
-
 
 # =============================================================================
 # Transcript Processing Functions
@@ -325,7 +313,6 @@ async def process_transcript(
     Returns:
         TranscriptProcessorResult with evaluation results
     """
-    import uuid
     from datetime import datetime
     
     # Use provided call_date or default to today
@@ -362,32 +349,18 @@ Geef je evaluatie als JSON."""
     logger.info(f"Qualification questions: {len(qualification_questions)}")
     logger.info("-" * 40)
     
-    # Generate a unique session ID for this processing
-    session_id = f"transcript_{uuid.uuid4().hex[:8]}"
-    
-    # Create session before running the agent
-    await _session_service.create_session(
-        app_name="transcript_processor_app",
-        user_id="system",
-        session_id=session_id
-    )
-    
     # Run the agent
-    response_text = ""
     content = types.Content(
         role="user",
         parts=[types.Part(text=prompt)]
     )
-    
-    async for event in _runner.run_async(
-        user_id="system",
-        session_id=session_id,
-        new_message=content
-    ):
-        if event.is_final_response() and event.content:
-            for part in event.content.parts:
-                if hasattr(part, 'text') and part.text:
-                    response_text += part.text
+
+    response_text = await run_agent_once(
+        agent=transcript_processor_agent,
+        app_name="transcript_processor_app",
+        content=content,
+        session_id_prefix="transcript",
+    )
     
     logger.info("Agent response received")
     logger.debug(f"Raw response: {response_text[:500]}...")

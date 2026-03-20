@@ -16,23 +16,17 @@ from src.models.data_query import DataQueryRequest
 from agents.database_query.agent import set_db_pool as set_data_query_db_pool
 from agents.recruiter_analyst.agent import root_agent as recruiter_analyst_agent
 
+from src.dependencies import get_session_manager
+from src.utils.sse_helpers import sse_done, sse_error, sse_status
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Data Query"])
 
-# Global session manager (set by main app)
-session_manager = None
-
-
-def set_session_manager(manager):
-    """Set the session manager instance."""
-    global session_manager
-    session_manager = manager
-
 
 async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator[str, None]:
     """Stream SSE events during analyst query processing."""
-    global session_manager
+    session_manager = get_session_manager()
 
     async def get_or_create_analyst_session():
         """Helper to get existing session or create new one, handling race conditions."""
@@ -58,7 +52,7 @@ async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator
     )
 
     # Send initial status
-    yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Vraag analyseren...'})}\n\n"
+    yield sse_status("thinking", "Vraag analyseren...")
 
     # Run the agent
     content = types.Content(role="user", parts=[types.Part(text=question)])
@@ -71,7 +65,7 @@ async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator
         ):
             # Check for tool calls or sub-agent delegation
             if hasattr(event, 'tool_calls') and event.tool_calls:
-                yield f"data: {json.dumps({'type': 'status', 'status': 'tool_call', 'message': 'Data ophalen...'})}\n\n"
+                yield sse_status("tool_call", "Data ophalen...")
 
             # Check for thinking/reasoning content
             if hasattr(event, 'content') and event.content and event.content.parts:
@@ -85,9 +79,9 @@ async def stream_analyst_query(question: str, session_id: str) -> AsyncGenerator
                 yield f"data: {json.dumps({'type': 'complete', 'message': response_text, 'session_id': session_id})}\n\n"
     except Exception as e:
         logger.error(f"Error during analyst query: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield sse_error(str(e))
 
-    yield "data: [DONE]\n\n"
+    yield sse_done()
 
 
 @router.post("/data-query")
@@ -109,7 +103,7 @@ async def analyst_query(request: DataQueryRequest):
 @router.get("/data-query/session/{session_id}")
 async def get_analyst_session(session_id: str):
     """Get the current session state for an analyst session."""
-    global session_manager
+    session_manager = get_session_manager()
 
     try:
         session = await session_manager.analyst_session_service.get_session(
@@ -138,7 +132,7 @@ async def get_analyst_session(session_id: str):
 @router.delete("/data-query/session/{session_id}")
 async def delete_analyst_session(session_id: str):
     """Delete an analyst session to start fresh."""
-    global session_manager
+    session_manager = get_session_manager()
 
     try:
         session = await session_manager.analyst_session_service.get_session(

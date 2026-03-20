@@ -27,6 +27,7 @@ from src.models.pre_screening import (
 from src.repositories import PreScreeningRepository, AgentConfigRepository, VacancyRepository
 from src.repositories.vacancy_agent_repo import VacancyAgentRepository
 from src.database import get_db_pool
+from src.dependencies import get_session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,6 @@ async def _verify_vacancy_workspace(pool, vacancy_id, workspace_id):
     )
     if not row or row["workspace_id"] != workspace_id:
         raise HTTPException(status_code=404, detail="Vacancy not found")
-
-# Will be set during app startup
-session_manager = None
-
-
-def set_session_manager(manager):
-    """Set the session manager instance."""
-    global session_manager
-    session_manager = manager
 
 
 async def _run_background_analysis(pre_screening_id: uuid.UUID, vacancy_id: str):
@@ -236,7 +228,7 @@ async def get_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_
     Always creates/restores an interview session pre-populated with the saved
     questions, returning session_id and interview for use with /interview/feedback.
     """
-    global session_manager
+    session_manager = get_session_manager()
     pool = await get_db_pool()
 
     # Validate UUID format
@@ -326,7 +318,7 @@ async def get_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_
 
     async def get_or_create_session():
         """Helper to get existing session or create new one, handling race conditions."""
-        global session_manager
+        session_manager = get_session_manager()
         session = await session_manager.interview_session_service.get_session(
             app_name="interview_question_generator", user_id="web", session_id=session_id
         )

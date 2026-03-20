@@ -24,6 +24,7 @@ from src.routers.health import (
     _ping_twilio,
     _ping_with_timeout,
 )
+from src.services.whatsapp_service import get_twilio_client
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,7 @@ async def _send_whatsapp_alert(service_slug: str, description: str):
     timestamp = datetime.now().strftime("%d-%m-%Y %H:%M")
 
     try:
-        from twilio.rest import Client
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        client = get_twilio_client()
         loop = asyncio.get_event_loop()
 
         if TWILIO_TEMPLATE_HEALTH_ALERT and TWILIO_MESSAGING_SERVICE_SID:

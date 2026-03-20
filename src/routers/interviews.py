@@ -24,17 +24,10 @@ from src.models.interview import (
 )
 from src.database import get_db_pool
 from src.config import SIMPLE_EDIT_KEYWORDS, SIMULATED_REASONING, logger
+from src.dependencies import get_session_manager
+from src.utils.sse_helpers import sse_done, sse_error, sse_status
 
 router = APIRouter(tags=["Interview Generation"])
-
-# Will be set during app startup
-session_manager = None
-
-
-def set_session_manager(manager):
-    """Set the session manager instance."""
-    global session_manager
-    session_manager = manager
 
 
 # Per-session locks to prevent concurrent feedback processing
@@ -130,7 +123,7 @@ def should_use_fast_agent(session, message: str) -> bool:
 
 async def stream_interview_generation(vacancy_text: str, session_id: str) -> AsyncGenerator[str, None]:
     """Stream SSE events during interview generation."""
-    global session_manager
+    session_manager = get_session_manager()
 
     total_start = time.time()
     print(f"\n{'='*60}")
@@ -175,7 +168,7 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
     print(f"[TIMING] Session reset: {time.time() - session_reset_start:.2f}s")
 
     # Send initial status
-    yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': 'Vacature analyseren...'})}\n\n"
+    yield sse_status('thinking', 'Vacature analyseren...')
 
     # Run the agent
     content = types.Content(role="user", parts=[types.Part(text=vacancy_text)])
@@ -261,7 +254,7 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
             if hasattr(event, 'tool_calls') and event.tool_calls:
                 tool_names = [tc.name if hasattr(tc, 'name') else str(tc) for tc in event.tool_calls]
                 print(f"[TIMING] Tool call at {event_time:.2f}s: {tool_names}")
-                yield f"data: {json.dumps({'type': 'status', 'status': 'tool_call', 'message': 'Vragen genereren...'})}\n\n"
+                yield sse_status('tool_call', 'Vragen genereren...')
 
             # Final response
             if event.is_final_response() and event.content and event.content.parts:
@@ -292,25 +285,25 @@ async def stream_interview_generation(vacancy_text: str, session_id: str) -> Asy
                 yield f"data: {json.dumps({'type': 'complete', 'message': response_text, 'interview': interview, 'session_id': session_id})}\n\n"
     except Exception as e:
         logger.error(f"Error during interview generation: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        yield sse_error(str(e))
     finally:
         # Ensure agent task is cleaned up
         if not agent_task.done():
             agent_task.cancel()
 
-    yield "data: [DONE]\n\n"
+    yield sse_done()
 
 
 async def stream_feedback(session_id: str, message: str) -> AsyncGenerator[str, None]:
     """Stream SSE events during feedback processing."""
-    global session_manager
+    session_manager = get_session_manager()
 
     # Acquire per-session lock to prevent concurrent processing
     lock = get_feedback_lock(session_id)
     if lock.locked():
         print(f"[FEEDBACK] Session {session_id} already processing, rejecting duplicate request")
-        yield f"data: {json.dumps({'type': 'error', 'message': 'Een verzoek wordt al verwerkt. Even geduld.'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield sse_error('Een verzoek wordt al verwerkt. Even geduld.')
+        yield sse_done()
         return
 
     async with lock:
@@ -337,8 +330,8 @@ async def stream_feedback(session_id: str, message: str) -> AsyncGenerator[str, 
         print(f"[TIMING] Session fetch: {session_fetch_time:.2f}s")
 
         if not session:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found. Please generate questions first.'})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_error('Session not found. Please generate questions first.')
+            yield sse_done()
             return
 
         # === TIMING: Agent selection ===
@@ -353,7 +346,7 @@ async def stream_feedback(session_id: str, message: str) -> AsyncGenerator[str, 
         print(f"[AGENT] Session history: {history_count} events")
 
         status_message = 'Feedback verwerken...' if use_fast else 'Feedback analyseren...'
-        yield f"data: {json.dumps({'type': 'status', 'status': 'thinking', 'message': status_message})}\n\n"
+        yield sse_status('thinking', status_message)
 
         # Include current interview state in the message so agent knows current order
         # This is needed because user may have reordered/deleted via direct endpoints
@@ -425,7 +418,7 @@ Gebruiker: {message}"""
                     tool_call_start = time.time()
                     tool_names = [tc.name if hasattr(tc, 'name') else str(tc) for tc in event.tool_calls]
                     print(f"[TIMING] Tool call at {event_time:.2f}s: {tool_names}")
-                    yield f"data: {json.dumps({'type': 'status', 'status': 'tool_call', 'message': 'Vragen aanpassen...'})}\n\n"
+                    yield sse_status('tool_call', 'Vragen aanpassen...')
 
                 if event.is_final_response():
                     print(f"[FINAL] is_final_response=True, has_content={event.content is not None}")
@@ -478,12 +471,12 @@ Gebruiker: {message}"""
                     except Exception as inner_e:
                         print(f"[ERROR] Exception in final response processing: {inner_e}")
                         logger.error(f"Error processing final response: {inner_e}", exc_info=True)
-                        yield f"data: {json.dumps({'type': 'error', 'message': f'Error processing response: {str(inner_e)}'})}\n\n"
+                        yield sse_error(f'Error processing response: {str(inner_e)}')
         except Exception as e:
             logger.error(f"Error during feedback processing: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield sse_error(str(e))
 
-        yield "data: [DONE]\n\n"
+        yield sse_done()
 
 
 @router.post("/interview/generate")
@@ -546,7 +539,7 @@ async def process_feedback(request: FeedbackRequest):
 @router.get("/interview/session/{session_id}")
 async def get_interview_session(session_id: str):
     """Get the current interview state for a session."""
-    global session_manager
+    session_manager = get_session_manager()
 
     try:
         session = await session_manager.interview_session_service.get_session(
@@ -578,7 +571,7 @@ async def get_interview_session(session_id: str):
 @router.post("/interview/reorder")
 async def reorder_questions(request: ReorderRequest):
     """Reorder questions without invoking the agent. Instant response."""
-    global session_manager
+    session_manager = get_session_manager()
 
     # Debug logging
     logger.info(f"[REORDER] Request received - session_id: {request.session_id}")
@@ -664,7 +657,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
     Creates a new session with the saved questions pre-populated,
     allowing the user to continue editing via /interview/feedback.
     """
-    global session_manager
+    session_manager = get_session_manager()
 
     pool = await get_db_pool()
 
@@ -744,7 +737,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
 
     async def get_or_create_feedback_session():
         """Helper to get existing session or create new one, handling race conditions."""
-        global session_manager
+        session_manager = get_session_manager()
         session = await session_manager.interview_session_service.get_session(
             app_name="interview_question_generator", user_id="web", session_id=session_id
         )
@@ -796,7 +789,7 @@ async def restore_session_from_db(request: RestoreSessionRequest):
 @router.post("/interview/delete")
 async def delete_question(request: DeleteQuestionRequest):
     """Delete a question without invoking the agent. Instant response."""
-    global session_manager
+    session_manager = get_session_manager()
 
     try:
         session = await session_manager.interview_session_service.get_session(
@@ -869,7 +862,7 @@ async def delete_question(request: DeleteQuestionRequest):
 @router.post("/interview/add")
 async def add_question(request: AddQuestionRequest):
     """Add a question without invoking the agent. Instant response."""
-    global session_manager
+    session_manager = get_session_manager()
 
     # Validate question type
     if request.question_type not in ("knockout", "qualification"):

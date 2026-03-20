@@ -14,7 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from twilio.twiml.messaging_response import MessagingResponse
-from twilio.rest import Client
 from google.adk.runners import Runner
 from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.events import Event, EventActions
@@ -126,10 +125,6 @@ from src.routers import (
     integrations_router,
     clients_router,
 )
-import src.routers.pre_screenings as pre_screenings_router_module
-import src.routers.interviews as interviews_router_module
-import src.routers.data_query as data_query_router_module
-import src.routers.document_collection as document_collection_router_module
 
 
 # ============================================================================
@@ -261,12 +256,6 @@ async def lifespan(app: FastAPI):
     # Set global session_manager for dependency injection
     set_global_session_manager(session_manager)
 
-    # Set session_manager in routers that need it (for backwards compatibility)
-    pre_screenings_router_module.set_session_manager(session_manager)
-    interviews_router_module.set_session_manager(session_manager)
-    data_query_router_module.set_session_manager(session_manager)
-    document_collection_router_module.set_session_manager(session_manager)
-
     # Start background workflow ticker
     _workflow_ticker_task = asyncio.create_task(_workflow_ticker_loop())
 
@@ -298,14 +287,16 @@ async def lifespan(app: FastAPI):
 # Sentry Error Tracking
 # ============================================================================
 
-if os.getenv("SENTRY_DSN"):
+if os.getenv("SENTRY_DSN") and os.getenv("ENVIRONMENT") != "local":
     sentry_sdk.init(
         dsn=os.getenv("SENTRY_DSN"),
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
         environment=os.getenv("ENVIRONMENT", "production"),
     )
-    logger.info("Sentry initialized for error tracking")
+    logger.info(f"Sentry initialized for environment: {os.getenv('ENVIRONMENT', 'production')}")
+else:
+    logger.info("Sentry disabled for local development")
 
 
 # ============================================================================
@@ -367,6 +358,3 @@ app.include_router(candidacy_router)
 app.include_router(candidate_attributes_router)
 app.include_router(integrations_router)
 app.include_router(clients_router)
-
-# Twilio client for proactive messages
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)

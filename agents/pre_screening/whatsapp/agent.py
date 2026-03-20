@@ -1607,7 +1607,7 @@ def create_simple_agent(
         open_questions: List of question strings
         config: Optional AgentConfig for customization
         is_test: If True, skip real calendar bookings (for simulation/testing)
-        office_location: Office location name (e.g., "Go4Jobs Antwerpen Centraal")
+        office_location: Office location name (e.g., "Top Interim Antwerpen Centraal")
         office_address: Office address (e.g., "Mechelsesteenweg 27, 2018 Antwerpen")
 
     Returns:
@@ -1617,7 +1617,7 @@ def create_simple_agent(
     state = ConversationState(
         candidate_name=candidate_name,
         vacancy_title=vacancy_title,
-        company_name=company_name or "Go4Jobs",  # Default to Go4Jobs if not provided
+        company_name=company_name or "Top Interim",  # Default to Top Interim if not provided
         knockout_questions=knockout_questions,
         open_questions=open_questions,
         alternate_questions=list(config.alternate_questions),

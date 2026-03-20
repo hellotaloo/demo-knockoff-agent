@@ -7,8 +7,6 @@ questions need to be asked.
 """
 
 from google.adk.agents.llm_agent import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
 from dataclasses import dataclass
 from typing import Optional
@@ -16,7 +14,8 @@ import base64
 import json
 import logging
 import re
-import uuid
+
+from agents.common.runner import run_agent_once
 
 logger = logging.getLogger(__name__)
 
@@ -127,16 +126,6 @@ cv_analyzer_agent = Agent(
     description="Agent for analyzing CVs against interview questions to identify clarification needs",
 )
 
-# Session service for running the agent
-_session_service = InMemorySessionService()
-
-# Runner for executing the agent
-_runner = Runner(
-    agent=cv_analyzer_agent,
-    app_name="cv_analyzer_app",
-    session_service=_session_service,
-)
-
 
 # =============================================================================
 # Helper Functions
@@ -224,16 +213,6 @@ Geef je analyse als JSON."""
     logger.info(f"Qualification questions: {len(qualification_questions)}")
     logger.info("-" * 40)
     
-    # Generate a unique session ID for this processing
-    session_id = f"cv_analysis_{uuid.uuid4().hex[:8]}"
-    
-    # Create session before running the agent
-    await _session_service.create_session(
-        app_name="cv_analyzer_app",
-        user_id="system",
-        session_id=session_id
-    )
-    
     # Build the content with both PDF and text prompt
     # The PDF is passed as inline_data, the prompt as text
     content = types.Content(
@@ -250,18 +229,14 @@ Geef je analyse als JSON."""
             types.Part(text=prompt_text)
         ]
     )
-    
+
     # Run the agent
-    response_text = ""
-    async for event in _runner.run_async(
-        user_id="system",
-        session_id=session_id,
-        new_message=content
-    ):
-        if event.is_final_response() and event.content:
-            for part in event.content.parts:
-                if hasattr(part, 'text') and part.text:
-                    response_text += part.text
+    response_text = await run_agent_once(
+        agent=cv_analyzer_agent,
+        app_name="cv_analyzer_app",
+        content=content,
+        session_id_prefix="cv_analysis",
+    )
     
     logger.info("Agent response received")
     logger.debug(f"Raw response: {response_text[:500]}...")

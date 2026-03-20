@@ -8,13 +8,10 @@ Analyzes interview questions from a candidate perspective and returns:
 """
 
 from google.adk.agents.llm_agent import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
-import json
 import logging
-import re
-import uuid
+
+from agents.common.runner import run_agent_once
 
 logger = logging.getLogger(__name__)
 
@@ -172,14 +169,6 @@ interview_analysis_agent = Agent(
     generate_content_config=generate_config,
 )
 
-_session_service = InMemorySessionService()
-
-_runner = Runner(
-    agent=interview_analysis_agent,
-    app_name="interview_analysis_app",
-    session_service=_session_service,
-)
-
 
 # =============================================================================
 # Helper Functions
@@ -233,29 +222,17 @@ Geef je analyse als JSON."""
 
     logger.info(f"[INTERVIEW ANALYSIS] Starting — vacancy: {vacancy_title}, questions: {len(questions)}")
 
-    session_id = f"interview_analysis_{uuid.uuid4().hex[:8]}"
-
-    await _session_service.create_session(
-        app_name="interview_analysis_app",
-        user_id="system",
-        session_id=session_id,
-    )
-
     content = types.Content(
         role="user",
         parts=[types.Part(text=prompt_text)],
     )
 
-    response_text = ""
-    async for event in _runner.run_async(
-        user_id="system",
-        session_id=session_id,
-        new_message=content,
-    ):
-        if event.is_final_response() and event.content:
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    response_text += part.text
+    response_text = await run_agent_once(
+        agent=interview_analysis_agent,
+        app_name="interview_analysis_app",
+        content=content,
+        session_id_prefix="interview_analysis",
+    )
 
     logger.info("[INTERVIEW ANALYSIS] Agent response received")
     logger.debug(f"Raw response: {response_text[:500]}...")

@@ -9,12 +9,9 @@ import logging
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from google.adk.agents.llm_agent import Agent
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
-import json
-import re
-import uuid
+
+from agents.common.runner import run_agent_once
 
 logger = logging.getLogger(__name__)
 
@@ -139,14 +136,6 @@ _detection_agent = Agent(
     description="AI agent for detecting document boundaries in photos"
 )
 
-_session_service = InMemorySessionService()
-_runner = Runner(
-    agent=_detection_agent,
-    app_name="document_detection",
-    session_service=_session_service
-)
-
-
 from src.utils.text_utils import extract_json_from_response
 
 
@@ -169,14 +158,6 @@ async def detect_document_bounds(image_data: bytes) -> Optional[DocumentBounds]:
     try:
         logger.info("🔍 AI Document Detection: Analyzing image with Gemini...")
 
-        # Create unique session
-        session_id = f"doc_detect_{uuid.uuid4().hex[:8]}"
-        await _session_service.create_session(
-            app_name="document_detection",
-            user_id="system",
-            session_id=session_id
-        )
-
         # Detect MIME type
         mime_type = "image/jpeg"
         if image_data[:4] == b'\x89PNG':
@@ -197,16 +178,12 @@ async def detect_document_bounds(image_data: bytes) -> Optional[DocumentBounds]:
         )
 
         # Run agent
-        response_text = ""
-        async for event in _runner.run_async(
-            user_id="system",
-            session_id=session_id,
-            new_message=content
-        ):
-            if event.is_final_response() and event.content:
-                for part in event.content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        response_text += part.text
+        response_text = await run_agent_once(
+            agent=_detection_agent,
+            app_name="document_detection",
+            content=content,
+            session_id_prefix="doc_detect",
+        )
 
         # Parse response
         parsed = parse_detection_response(response_text)
