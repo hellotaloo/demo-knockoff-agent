@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 import asyncpg
 from src.repositories import VacancyRepository
 from src.models import VacancyResponse, ChannelsResponse, VacancyAgentResponse, VacancyStatsResponse, DashboardStatsResponse
-from src.models.vacancy import RecruiterSummary, ClientSummary, ApplicantSummary
+from src.models.vacancy import RecruiterSummary, ClientSummary, ApplicantSummary, OfficeSummary, JobFunctionSummary
 
 
 class VacancyService:
@@ -106,6 +106,25 @@ class VacancyService:
                 logo=row["c_logo"]
             )
 
+        # Build office info if present
+        office = None
+        if row.get("ol_id"):
+            office = OfficeSummary(
+                id=str(row["ol_id"]),
+                name=row["ol_name"],
+                address=row["ol_address"] or None,
+                email=row["ol_email"],
+                phone=row["ol_phone"],
+            )
+
+        # Build job function info if present
+        job_function = None
+        if row.get("jf_id"):
+            job_function = JobFunctionSummary(
+                id=str(row["jf_id"]),
+                name=row["jf_name"],
+            )
+
         # Build applicants list
         applicants = []
         if applicant_rows:
@@ -137,6 +156,8 @@ class VacancyService:
             agents=VacancyService._build_agents(row),
             recruiter=recruiter,
             client=client,
+            office=office,
+            job_function=job_function,
             applicants=applicants,
             candidates_count=row["candidates_count"],
             completed_count=row["completed_count"],

@@ -39,7 +39,13 @@ TALOO_TARGET_FIELDS = [
     MappingFieldInfo(name="source_id", label="Extern ID", type="text", required=True, description="Uniek ID uit het bronsysteem"),
     MappingFieldInfo(name="start_date", label="Startdatum", type="date", required=False, description="Startdatum van de inzet"),
     MappingFieldInfo(name="recruiter_email", label="Recruiter e-mail", type="text", required=False, description="E-mailadres van de recruiter/eigenaar"),
+    MappingFieldInfo(name="recruiter_name", label="Recruiter naam", type="text", required=False, description="Volledige naam van de recruiter"),
+    MappingFieldInfo(name="recruiter_phone", label="Recruiter telefoon", type="text", required=False, description="Telefoonnummer van de recruiter"),
+    MappingFieldInfo(name="recruiter_role", label="Recruiter functie", type="text", required=False, description="Functietitel van de recruiter"),
+    MappingFieldInfo(name="office_name", label="Kantoornaam", type="text", required=False, description="Naam van het kantoor"),
     MappingFieldInfo(name="office_email", label="Kantoor e-mail", type="text", required=False, description="E-mailadres van het kantoor"),
+    MappingFieldInfo(name="office_phone", label="Kantoor telefoon", type="text", required=False, description="Telefoonnummer van het kantoor"),
+    MappingFieldInfo(name="office_address", label="Kantoor adres", type="text", required=False, description="Volledig adres van het kantoor"),
     MappingFieldInfo(name="sync_filter", label="Sync filter", type="boolean", required=False, description="Veld dat bepaalt of de vacature gesynchroniseerd wordt"),
     MappingFieldInfo(name="is_online", label="Online pre-screening", type="boolean", required=False, description="true = online pre-screening, false = offline"),
 ]
@@ -71,9 +77,17 @@ CONNEXYS_SOURCE_FIELDS = [
     # Owner (recruiter) fields
     SourceFieldInfo(name="Owner.Email", label="Eigenaar e-mail", category="owner"),
     SourceFieldInfo(name="Owner.Name", label="Eigenaar naam", category="owner"),
+    SourceFieldInfo(name="Owner.Phone", label="Eigenaar telefoon", category="owner"),
+    SourceFieldInfo(name="Owner.Title", label="Eigenaar functie", category="owner"),
     # Office fields
     SourceFieldInfo(name="job_office__r.Name", label="Kantoornaam", category="office"),
     SourceFieldInfo(name="job_office__r.office_email__c", label="Kantoor e-mail", category="office"),
+    SourceFieldInfo(name="job_office__r.office_phone__c", label="Kantoor telefoon", category="office"),
+    SourceFieldInfo(name="job_office__r.Id", label="Kantoor ID", category="office"),
+    SourceFieldInfo(name="job_office__r.office_street__c", label="Kantoor straat", category="office"),
+    SourceFieldInfo(name="job_office__r.office_number__c", label="Kantoor nummer", category="office"),
+    SourceFieldInfo(name="job_office__r.office_postalcode__c", label="Kantoor postcode", category="office"),
+    SourceFieldInfo(name="job_office__r.office_city__c", label="Kantoor plaats", category="office"),
 ]
 
 CONNEXYS_DEFAULT_MAPPING = {
@@ -84,7 +98,14 @@ CONNEXYS_DEFAULT_MAPPING = {
     "source_id": {"template": "{{Id}}"},
     "start_date": {"template": "{{cxsrec__Job_start_date__c}}"},
     "recruiter_email": {"template": "{{Owner.Email}}"},
+    "recruiter_name": {"template": "{{Owner.Name}}"},
+    "recruiter_phone": {"template": "{{Owner.Phone}}"},
+    "recruiter_role": {"template": "{{Owner.Title}}"},
+    "office_name": {"template": "{{job_office__r.Name}}"},
     "office_email": {"template": "{{job_office__r.office_email__c}}"},
+    "office_phone": {"template": "{{job_office__r.office_phone__c}}"},
+    "office_address": {"template": "{{job_office__r.office_street__c}} {{job_office__r.office_number__c}}, {{job_office__r.office_postalcode__c}} {{job_office__r.office_city__c}}"},
+    "office_source_id": {"template": "{{job_office__r.Id}}"},
     "sync_filter": {"template": "{{sync_to_taloo__c}}"},
     "is_online": {"template": "{{cbx_itzu_website__c}}"},
 }

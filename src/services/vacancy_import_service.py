@@ -118,7 +118,7 @@ class VacancyImportService:
 
             # Transform and upsert each record
             async with self.pool.acquire() as conn:
-                office_location_id = await self._get_default_office_location_id(conn, workspace_id)
+                default_office_id = await self._get_default_office_location_id(conn, workspace_id)
 
                 for record in raw_records:
                     try:
@@ -133,14 +133,39 @@ class VacancyImportService:
                         # Ensure recruiter exists
                         recruiter_id = None
                         recruiter_email = vacancy_data.pop("recruiter_email", None)
+                        recruiter_name = vacancy_data.pop("recruiter_name", None)
+                        recruiter_phone = vacancy_data.pop("recruiter_phone", None)
+                        recruiter_role = vacancy_data.pop("recruiter_role", None)
                         if recruiter_email:
-                            recruiter_id = await self._ensure_recruiter(conn, workspace_id, recruiter_email)
+                            recruiter_id = await self._ensure_recruiter(
+                                conn, workspace_id, recruiter_email,
+                                name=recruiter_name or None,
+                                phone=recruiter_phone or None,
+                                role=recruiter_role or None,
+                            )
 
                         # Ensure client exists
                         client_id = None
                         company = vacancy_data.get("company")
                         if company:
                             client_id = await self._ensure_client(conn, workspace_id, company)
+
+                        # Ensure office location exists (from Connexys data or fallback to default)
+                        office_location_id = default_office_id
+                        office_name = vacancy_data.pop("office_name", None)
+                        office_email = vacancy_data.pop("office_email", None)
+                        office_phone = vacancy_data.pop("office_phone", None)
+                        office_address = vacancy_data.pop("office_address", None)
+                        office_source_id = vacancy_data.pop("office_source_id", None)
+                        if office_name:
+                            office_location_id = await self._ensure_office_location(
+                                conn, workspace_id, provider_slug,
+                                name=office_name,
+                                email=office_email or None,
+                                phone=office_phone or None,
+                                address=office_address or None,
+                                source_id=office_source_id or None,
+                            )
 
                         # Upsert the vacancy
                         action = await self._upsert_vacancy(
@@ -267,13 +292,14 @@ class VacancyImportService:
                 UPDATE ats.vacancies SET
                     title = $2, company = $3, location = $4, description = $5,
                     start_date = $6, recruiter_id = $7, client_id = $8,
+                    office_location_id = $9,
                     updated_at = now()
                 WHERE id = $1
             """,
                 existing["id"],
                 data.get("title"), data.get("company"), data.get("location"),
                 data.get("description"), data.get("start_date"),
-                recruiter_id, client_id,
+                recruiter_id, client_id, office_location_id,
             )
             return "updated"
         else:
@@ -301,20 +327,33 @@ class VacancyImportService:
 
     @staticmethod
     async def _ensure_recruiter(
-        conn: asyncpg.Connection, workspace_id: UUID, email: str, name: Optional[str] = None,
+        conn: asyncpg.Connection,
+        workspace_id: UUID,
+        email: str,
+        name: Optional[str] = None,
+        phone: Optional[str] = None,
+        role: Optional[str] = None,
     ) -> UUID:
-        """Lookup recruiter by email, or create if not found."""
+        """Lookup recruiter by email, or create if not found. Updates name/phone/role on existing."""
         existing = await conn.fetchrow(
             "SELECT id FROM ats.recruiters WHERE email = $1", email,
         )
         if existing:
+            # Update fields that may have changed
+            await conn.execute("""
+                UPDATE ats.recruiters
+                SET name = COALESCE($2, name),
+                    phone = COALESCE($3, phone),
+                    role = COALESCE($4, role)
+                WHERE id = $1
+            """, existing["id"], name, phone, role)
             return existing["id"]
 
         row = await conn.fetchrow("""
-            INSERT INTO ats.recruiters (name, email, is_active)
-            VALUES ($1, $2, true)
+            INSERT INTO ats.recruiters (name, email, phone, role, is_active)
+            VALUES ($1, $2, $3, $4, true)
             RETURNING id
-        """, name or email, email)
+        """, name or email, email, phone, role)
         return row["id"]
 
     @staticmethod
@@ -334,6 +373,64 @@ class VacancyImportService:
             VALUES ($1, $2)
             RETURNING id
         """, company_name, workspace_id)
+        return row["id"]
+
+    @staticmethod
+    async def _ensure_office_location(
+        conn: asyncpg.Connection,
+        workspace_id: UUID,
+        source: str,
+        name: str,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        address: Optional[str] = None,
+        source_id: Optional[str] = None,
+    ) -> UUID:
+        """Lookup office location by source + source_id, or by name. Create if not found."""
+        # Clean up address (template may produce "  ,  " when fields are empty)
+        if address:
+            address = ", ".join(part.strip() for part in address.split(",") if part.strip())
+            if not address:
+                address = None
+
+        # Try to find by source_id first (most reliable)
+        if source_id:
+            existing = await conn.fetchrow(
+                "SELECT id FROM ats.office_locations WHERE workspace_id = $1 AND source = $2 AND source_id = $3",
+                workspace_id, source, source_id,
+            )
+            if existing:
+                # Update fields that may have changed
+                await conn.execute("""
+                    UPDATE ats.office_locations
+                    SET name = $2, email = $3, phone = $4, address = COALESCE($5, address),
+                        updated_at = now()
+                    WHERE id = $1
+                """, existing["id"], name, email, phone, address)
+                return existing["id"]
+
+        # Fallback: match by name within workspace
+        existing = await conn.fetchrow(
+            "SELECT id FROM ats.office_locations WHERE workspace_id = $1 AND name = $2",
+            workspace_id, name,
+        )
+        if existing:
+            await conn.execute("""
+                UPDATE ats.office_locations
+                SET email = COALESCE($2, email), phone = COALESCE($3, phone),
+                    address = COALESCE($4, address),
+                    source = COALESCE($5, source), source_id = COALESCE($6, source_id),
+                    updated_at = now()
+                WHERE id = $1
+            """, existing["id"], email, phone, address, source, source_id)
+            return existing["id"]
+
+        # Create new office location
+        row = await conn.fetchrow("""
+            INSERT INTO ats.office_locations (workspace_id, name, address, email, phone, source, source_id)
+            VALUES ($1, $2, COALESCE($3, ''), $4, $5, $6, $7)
+            RETURNING id
+        """, workspace_id, name, address, email, phone, source, source_id)
         return row["id"]
 
     @staticmethod

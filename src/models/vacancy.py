@@ -43,6 +43,21 @@ class ClientSummary(BaseModel):
     logo: Optional[str] = None
 
 
+class OfficeSummary(BaseModel):
+    """Office location info embedded in vacancy response."""
+    id: str
+    name: str
+    address: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class JobFunctionSummary(BaseModel):
+    """Job function info embedded in vacancy response."""
+    id: str
+    name: str
+
+
 class ApplicantSummary(BaseModel):
     """Lightweight applicant info embedded in vacancy response."""
     id: str
@@ -82,6 +97,10 @@ class VacancyResponse(BaseModel):
     recruiter: Optional[RecruiterSummary] = None  # Full recruiter info (includes id)
     # Client/company
     client: Optional[ClientSummary] = None  # Full client info (includes id)
+    # Office location
+    office: Optional[OfficeSummary] = None  # Office location info
+    # Job function
+    job_function: Optional[JobFunctionSummary] = None  # Job function/category
     # Applicants
     applicants: list[ApplicantSummary] = []  # Candidates who did pre-screening
     # Application stats

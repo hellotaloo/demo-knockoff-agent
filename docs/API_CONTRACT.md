@@ -4,6 +4,7 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-20** — Added `office` (`OfficeSummary`) and `job_function` (`JobFunctionSummary`) fields to `VacancyResponse`. Office locations are now synced per-vacancy from Connexys (`job_office__r`) instead of using the workspace default. Added `office_name`, `office_phone`, `office_source_id` to Connexys field mapping. Enhanced `ats.office_locations` table with `email`, `phone`, `source`, `source_id` columns
 - **2026-03-20** — Added data push-back (export to ATS) endpoints: `GET /integrations/connections/{id}/export-mapping-schema` for configuring export field mappings, `POST /integrations/connections/{id}/discover-export-fields` for discovering writable fields on the target Connexys object, `POST /integrations/applications/{id}/push-to-ats` for pushing a single application's screening results, `POST /integrations/vacancies/{id}/push-to-ats` for batch-pushing all unsynced applications. New types: `ExportFieldInfo`, `ExportMappingSchemaResponse`, `PushbackResultResponse`. Export mapping stored in `settings.data_pushback` (same JSONB column as import mapping). Uses `{{field}}` template syntax with Taloo application fields as source
 - **2026-03-19** — Added `POST /integrations/sync` and `GET /integrations/sync/status` endpoints for vacancy import from external ATS integrations. Sync resolves the workspace's active ATS connection automatically (no connection_id needed). Runs as a background task with polling for progress. Uses provider-agnostic architecture: `VacancyImportService` handles mapping/upsert, `ConnexysProvider` handles Salesforce-specific fetching. New type: `SyncProgressResponse`
 - **2026-03-19** — Added `GET /auth/login/microsoft` endpoint for Microsoft OAuth login. Mirrors the existing Google OAuth flow — redirects to Microsoft consent page via Supabase Auth. Existing `/auth/callback` handles both providers
@@ -523,6 +524,19 @@ interface ClientSummary {
   logo?: string;
 }
 
+interface OfficeSummary {
+  id: string;
+  name: string;
+  address?: string;
+  email?: string;
+  phone?: string;
+}
+
+interface JobFunctionSummary {
+  id: string;
+  name: string;
+}
+
 interface ApplicantSummary {
   id: string;
   name: string;
@@ -554,6 +568,8 @@ interface VacancyResponse {
   agents: AgentsResponse;
   recruiter?: RecruiterSummary;   // Full recruiter info (if assigned) - use recruiter.id for ID
   client?: ClientSummary;         // Full client info (if assigned) - use client.id for ID
+  office?: OfficeSummary;         // Office location info (name, address, email, phone)
+  job_function?: JobFunctionSummary; // Job function/category (if assigned)
   applicants: ApplicantSummary[]; // Candidates who completed pre-screening (excludes test applications)
   candidates_count: number;
   completed_count: number;

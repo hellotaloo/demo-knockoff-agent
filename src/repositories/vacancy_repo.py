@@ -63,6 +63,9 @@ class VacancyRepository:
                    v.client_id,
                    c.id as c_id, c.name as c_name, c.location as c_location,
                    c.industry as c_industry, c.logo as c_logo,
+                   ol.id as ol_id, ol.name as ol_name, ol.address as ol_address,
+                   ol.email as ol_email, ol.phone as ol_phone,
+                   jf.id as jf_id, jf.name as jf_name,
                    (ps.id IS NOT NULL) as has_screening,
                    ps.published_at,
                    CASE
@@ -84,6 +87,8 @@ class VacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
+            LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
+            LEFT JOIN ats.job_functions jf ON jf.id = v.job_function_id
             LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
@@ -126,6 +131,9 @@ class VacancyRepository:
                    v.client_id,
                    c.id as c_id, c.name as c_name, c.location as c_location,
                    c.industry as c_industry, c.logo as c_logo,
+                   ol.id as ol_id, ol.name as ol_name, ol.address as ol_address,
+                   ol.email as ol_email, ol.phone as ol_phone,
+                   jf.id as jf_id, jf.name as jf_name,
                    (ps.id IS NOT NULL) as has_screening,
                    ps.published_at,
                    CASE
@@ -147,6 +155,8 @@ class VacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
+            LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
+            LEFT JOIN ats.job_functions jf ON jf.id = v.job_function_id
             LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
