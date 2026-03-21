@@ -27,6 +27,7 @@ async def list_activities(
     channel: Optional[ActivityChannel] = Query(None, description="Filter by channel: voice, whatsapp, cv, web"),
     candidate_id: Optional[str] = Query(None, description="Filter by candidate ID"),
     vacancy_id: Optional[str] = Query(None, description="Filter by vacancy ID"),
+    since: Optional[str] = Query(None, description="ISO datetime - only return activities created after this timestamp"),
     limit: int = Query(50, ge=1, le=100, description="Number of activities to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     ctx: AuthContext = Depends(require_workspace),
@@ -47,6 +48,7 @@ async def list_activities(
         candidate_id=candidate_id,
         vacancy_id=vacancy_id,
         workspace_id=ctx.workspace_id,
+        since=since,
         limit=limit,
         offset=offset
     )

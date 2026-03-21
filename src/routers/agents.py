@@ -5,8 +5,9 @@ Both endpoints return the same AgentVacancyResponse shape, with
 agent-specific data in self-describing AgentStatItem lists.
 """
 import logging
+import uuid
 from typing import Optional
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException
 import asyncpg
 
 from src.models.vacancy import (
@@ -19,6 +20,7 @@ from src.models.vacancy import (
 )
 from src.auth.dependencies import AuthContext, require_workspace
 from src.repositories.agent_vacancy_repo import AgentVacancyRepository
+from src.repositories.workspace_agent_availability_repo import WorkspaceAgentAvailabilityRepository
 from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,23 @@ async def get_agent_vacancy_repo() -> AgentVacancyRepository:
     """Dependency to get AgentVacancyRepository."""
     pool = await get_db_pool()
     return AgentVacancyRepository(pool)
+
+
+async def get_availability_repo() -> WorkspaceAgentAvailabilityRepository:
+    """Dependency to get WorkspaceAgentAvailabilityRepository."""
+    pool = await get_db_pool()
+    return WorkspaceAgentAvailabilityRepository(pool)
+
+
+async def require_agent_available(
+    workspace_id: uuid.UUID, agent_type: str, repo: WorkspaceAgentAvailabilityRepository
+):
+    """Raise 403 if agent type is not available for workspace."""
+    if not await repo.is_agent_available(workspace_id, agent_type):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Agent '{agent_type}' is not available for this workspace",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +195,7 @@ async def list_prescreening_vacancies(
     offset: int = Query(0, ge=0),
     ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
+    avail_repo: WorkspaceAgentAvailabilityRepository = Depends(get_availability_repo),
 ):
     """
     List all non-archived vacancies with prescreening agent status and stats.
@@ -185,6 +205,7 @@ async def list_prescreening_vacancies(
     - **generated**: Has pre-screening record but not published
     - **published**: Pre-screening is published
     """
+    await require_agent_available(ctx.workspace_id, "prescreening", avail_repo)
     rows, total = await repo.list_prescreening_vacancies(workspace_id=ctx.workspace_id, limit=limit, offset=offset)
     vacancies = [_build_prescreening_vacancy(row) for row in rows]
 
@@ -202,6 +223,7 @@ async def list_preonboarding_vacancies(
     offset: int = Query(0, ge=0),
     ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
+    avail_repo: WorkspaceAgentAvailabilityRepository = Depends(get_availability_repo),
 ):
     """
     List all non-archived vacancies with document collection agent status and stats.
@@ -210,6 +232,7 @@ async def list_preonboarding_vacancies(
     - **new**: Document collection agent not registered
     - **generated**: Document collection agent registered
     """
+    await require_agent_available(ctx.workspace_id, "document_collection", avail_repo)
     rows, total = await repo.list_preonboarding_vacancies(workspace_id=ctx.workspace_id, limit=limit, offset=offset)
     vacancies = [_build_preonboarding_vacancy(row) for row in rows]
 
@@ -230,8 +253,10 @@ async def list_preonboarding_vacancies(
 async def get_prescreening_stats(
     ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
+    avail_repo: WorkspaceAgentAvailabilityRepository = Depends(get_availability_repo),
 ):
     """Aggregate dashboard stats for the pre-screening overview page."""
+    await require_agent_available(ctx.workspace_id, "prescreening", avail_repo)
     row = await repo.get_prescreening_dashboard_stats(workspace_id=ctx.workspace_id)
 
     total = row["total"]
@@ -267,8 +292,10 @@ async def get_prescreening_stats(
 async def get_preonboarding_stats(
     ctx: AuthContext = Depends(require_workspace),
     repo: AgentVacancyRepository = Depends(get_agent_vacancy_repo),
+    avail_repo: WorkspaceAgentAvailabilityRepository = Depends(get_availability_repo),
 ):
     """Aggregate dashboard stats for the document collection overview page."""
+    await require_agent_available(ctx.workspace_id, "document_collection", avail_repo)
     row = await repo.get_preonboarding_dashboard_stats(workspace_id=ctx.workspace_id)
 
     total = row["total"]
@@ -295,3 +322,18 @@ async def get_preonboarding_stats(
             ),
         ]
     )
+
+
+# ---------------------------------------------------------------------------
+# Agent availability
+# ---------------------------------------------------------------------------
+
+
+@router.get("/availability")
+async def get_agent_availability(
+    ctx: AuthContext = Depends(require_workspace),
+    avail_repo: WorkspaceAgentAvailabilityRepository = Depends(get_availability_repo),
+):
+    """Get available agent types for the current workspace."""
+    agents = await avail_repo.get_available_agents(ctx.workspace_id)
+    return {"available_agents": agents}

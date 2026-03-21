@@ -19,6 +19,7 @@ from src.utils.random_candidate import generate_random_candidate
 from src.models.screening import ScreeningChatRequest, SimulateInterviewRequest
 from src.auth.dependencies import AuthContext, require_workspace
 from src.repositories import ConversationRepository, CandidateRepository, ApplicationRepository, CandidacyRepository
+from src.agents import AgentType, AgentRegistry
 from src.database import get_db_pool
 from src.services.livekit_service import fetch_scheduling_config
 from src.config import logger
@@ -244,6 +245,13 @@ async def screening_chat(request: ScreeningChatRequest, ctx: AuthContext = Depen
     For continuing conversations:
     - Include session_id from previous response
     """
+    # Check agent availability via TalooAgent
+    pool = await get_db_pool()
+    agent_cls = AgentRegistry.get(AgentType.PRESCREENING)
+    taloo_agent = agent_cls(pool=pool, workspace_id=ctx.workspace_id)
+    if not await taloo_agent.check_availability():
+        raise HTTPException(status_code=403, detail="Agent 'prescreening' is not available for this workspace")
+
     return StreamingResponse(
         stream_screening_chat(
             request.vacancy_id,

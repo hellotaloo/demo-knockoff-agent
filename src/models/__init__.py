@@ -146,6 +146,7 @@ from .workspace import (
     WorkspaceMemberUpdate,
     WorkspaceInvitationCreate,
     WorkspaceInvitationResponse,
+    AcceptInvitationRequest,
 )
 
 # Interview analysis models
@@ -268,6 +269,7 @@ __all__ = [
     "WorkspaceMemberUpdate",
     "WorkspaceInvitationCreate",
     "WorkspaceInvitationResponse",
+    "AcceptInvitationRequest",
     # Interview Analysis
     "AnalysisQuestionInput",
     "AnalysisVacancyInput",

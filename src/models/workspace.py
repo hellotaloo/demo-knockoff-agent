@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 class WorkspaceRole(str, Enum):
     """Workspace membership roles."""
+    SUPER_ADMIN = "super_admin"
     OWNER = "owner"
     ADMIN = "admin"
     MEMBER = "member"
@@ -105,12 +106,18 @@ class WorkspaceInvitationResponse(BaseModel):
     email: str
     role: WorkspaceRole
     invited_by: str
-    expires_at: datetime
+    invited_by_name: Optional[str] = None
+    expires_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class AcceptInvitationRequest(BaseModel):
+    """Request model for accepting a workspace invitation."""
+    token: str = Field(..., description="Invitation token")
 
 
 # Update forward references

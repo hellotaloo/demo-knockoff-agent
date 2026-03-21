@@ -156,7 +156,10 @@ PostgreSQL hosted on Supabase. Migrations are managed via **Git** through the Su
 │  Database repo path: /Users/lunar/Desktop/sites/taloo-workspace/taloo-database │
 │  Migration files: supabase/migrations/                                      │
 │  Remote: https://github.com/hellotaloo/taloo-database.git                   │
-│  Production branch: master                                                  │
+│  Development branch: dev        ← ALL PRs target this branch               │
+│  Production branch: master      ← NEVER push or merge directly to master   │
+│                                                                             │
+│  Flow: feature branch → PR to dev → test on dev DB → then dev → master     │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -174,17 +177,26 @@ FILE="/Users/lunar/Desktop/sites/taloo-workspace/taloo-database/supabase/migrati
 3. Commit and push from the database repo:
 ```bash
 cd /Users/lunar/Desktop/sites/taloo-workspace/taloo-database
+git checkout dev && git pull origin dev
 git checkout -b feature/<branch_name>
 git add supabase/migrations/
 git commit -m "<descriptive message>"
 git push -u origin feature/<branch_name>
 ```
 
-4. Create a PR using `gh pr create` in the taloo-database repo
+4. Create a PR targeting the `dev` branch:
+```bash
+gh pr create --base dev
+```
 
-5. After user approves, merge the PR → Supabase auto-applies the migration
+5. After user approves, merge the PR → Supabase auto-applies the migration to the dev database
 
-**IMPORTANT: NEVER push directly to master.** All migrations must go through a feature branch + PR, regardless of complexity.
+**CRITICAL RULES:**
+- **NEVER push directly to master.** All migrations must go through feature branch → PR → dev.
+- **NEVER create PRs targeting master.** Always target `dev`.
+- **NEVER modify the Supabase branch settings** (persistent, non-persistent, delete, etc.).
+- Feature branches must always be created from `dev`, not from `master`.
+- Only the user promotes changes from `dev` to `master` (production).
 
 ### MCP Tool Usage
 

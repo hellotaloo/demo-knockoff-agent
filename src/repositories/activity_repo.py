@@ -211,6 +211,7 @@ class ActivityRepository:
         candidate_id: Optional[str] = None,
         vacancy_id: Optional[str] = None,
         workspace_id=None,
+        since: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
@@ -253,6 +254,11 @@ class ActivityRepository:
         if workspace_id:
             conditions.append(f"COALESCE(v.workspace_id, c.workspace_id) = ${param_idx}")
             params.append(workspace_id)
+            param_idx += 1
+
+        if since:
+            conditions.append(f"a.created_at > ${param_idx}::timestamptz")
+            params.append(since)
             param_idx += 1
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"

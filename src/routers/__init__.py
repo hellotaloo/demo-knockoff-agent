@@ -36,6 +36,7 @@ from .candidacy import router as candidacy_router
 from .candidate_attributes import router as candidate_attributes_router
 from .integrations import router as integrations_router
 from .clients import router as clients_router
+from .admin import router as admin_router
 
 __all__ = [
     "health_router",
@@ -73,4 +74,5 @@ __all__ = [
     "candidate_attributes_router",
     "integrations_router",
     "clients_router",
+    "admin_router",
 ]

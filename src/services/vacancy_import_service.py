@@ -157,6 +157,7 @@ class VacancyImportService:
                         office_phone = vacancy_data.pop("office_phone", None)
                         office_address = vacancy_data.pop("office_address", None)
                         office_source_id = vacancy_data.pop("office_source_id", None)
+                        office_spoken_name = vacancy_data.pop("office_spoken_name", None)
                         if office_name:
                             office_location_id = await self._ensure_office_location(
                                 conn, workspace_id, provider_slug,
@@ -165,6 +166,7 @@ class VacancyImportService:
                                 phone=office_phone or None,
                                 address=office_address or None,
                                 source_id=office_source_id or None,
+                                spoken_name=office_spoken_name or None,
                             )
 
                         # Upsert the vacancy
@@ -208,12 +210,20 @@ class VacancyImportService:
 
     @staticmethod
     def _get_active_mapping(settings: dict, provider_slug: str) -> dict:
-        """Get the active field mapping: custom from settings, or provider default."""
+        """Get the active field mapping: custom from settings, or provider default.
+
+        Always merges the default mapping as a base so that system fields
+        (like office_source_id) are included even if the user hasn't
+        configured them in the UI.
+        """
+        config = PROVIDER_MAPPING_CONFIG.get(provider_slug, {})
+        default = config.get("default_mapping", {})
         custom = settings.get("field_mapping", {}).get("mappings")
         if custom:
-            return custom
-        config = PROVIDER_MAPPING_CONFIG.get(provider_slug, {})
-        return config.get("default_mapping", {})
+            # Default first, then custom overrides
+            merged = {**default, **custom}
+            return merged
+        return default
 
     # =========================================================================
     # Field Mapping & Transformation
@@ -385,6 +395,7 @@ class VacancyImportService:
         phone: Optional[str] = None,
         address: Optional[str] = None,
         source_id: Optional[str] = None,
+        spoken_name: Optional[str] = None,
     ) -> UUID:
         """Lookup office location by source + source_id, or by name. Create if not found."""
         # Clean up address (template may produce "  ,  " when fields are empty)
@@ -404,9 +415,10 @@ class VacancyImportService:
                 await conn.execute("""
                     UPDATE ats.office_locations
                     SET name = $2, email = $3, phone = $4, address = COALESCE($5, address),
+                        spoken_name = COALESCE($6, spoken_name),
                         updated_at = now()
                     WHERE id = $1
-                """, existing["id"], name, email, phone, address)
+                """, existing["id"], name, email, phone, address, spoken_name)
                 return existing["id"]
 
         # Fallback: match by name within workspace
@@ -420,17 +432,18 @@ class VacancyImportService:
                 SET email = COALESCE($2, email), phone = COALESCE($3, phone),
                     address = COALESCE($4, address),
                     source = COALESCE($5, source), source_id = COALESCE($6, source_id),
+                    spoken_name = COALESCE($7, spoken_name),
                     updated_at = now()
                 WHERE id = $1
-            """, existing["id"], email, phone, address, source, source_id)
+            """, existing["id"], email, phone, address, source, source_id, spoken_name)
             return existing["id"]
 
         # Create new office location
         row = await conn.fetchrow("""
-            INSERT INTO ats.office_locations (workspace_id, name, address, email, phone, source, source_id)
-            VALUES ($1, $2, COALESCE($3, ''), $4, $5, $6, $7)
+            INSERT INTO ats.office_locations (workspace_id, name, address, email, phone, source, source_id, spoken_name)
+            VALUES ($1, $2, COALESCE($3, ''), $4, $5, $6, $7, $8)
             RETURNING id
-        """, workspace_id, name, address, email, phone, source, source_id)
+        """, workspace_id, name, address, email, phone, source, source_id, spoken_name)
         return row["id"]
 
     @staticmethod

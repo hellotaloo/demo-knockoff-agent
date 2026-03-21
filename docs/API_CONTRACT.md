@@ -4,6 +4,8 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-21** — Added workspace member management: super admin support (`@taloo.eu` accounts bypass workspace membership, full access to all workspaces), `GET /admin/workspaces` (super admin lists all workspaces), invitation management endpoints (`GET /workspaces/{id}/invitations`, `DELETE /workspaces/{id}/invitations/{invitation_id}`, `POST /workspaces/invitations/accept`). Added `SUPER_ADMIN` to `WorkspaceRole` enum, `AcceptInvitationRequest` model, `invited_by_name` to `WorkspaceInvitationResponse`. Invitation emails sent via Resend: invitation email with accept link for new users, added-notification email for existing users. Emails gracefully skip when `RESEND_API_KEY` is not configured
+- **2026-03-21** — Added `group` field (string) to `MappingFieldInfo` in `GET /integrations/connections/{id}/mapping-schema`. Groups target fields into logical UI sections: Algemeen, Beschrijving, Locatie, Recruiter, Kantoor, Synchronisatie. Frontend renders groups as section headers in the order they appear in the array. Defaults to `"Algemeen"` if absent
 - **2026-03-20** — Added `office` (`OfficeSummary`) and `job_function` (`JobFunctionSummary`) fields to `VacancyResponse`. Office locations are now synced per-vacancy from Connexys (`job_office__r`) instead of using the workspace default. Added `office_name`, `office_phone`, `office_source_id` to Connexys field mapping. Enhanced `ats.office_locations` table with `email`, `phone`, `source`, `source_id` columns
 - **2026-03-20** — Added data push-back (export to ATS) endpoints: `GET /integrations/connections/{id}/export-mapping-schema` for configuring export field mappings, `POST /integrations/connections/{id}/discover-export-fields` for discovering writable fields on the target Connexys object, `POST /integrations/applications/{id}/push-to-ats` for pushing a single application's screening results, `POST /integrations/vacancies/{id}/push-to-ats` for batch-pushing all unsynced applications. New types: `ExportFieldInfo`, `ExportMappingSchemaResponse`, `PushbackResultResponse`. Export mapping stored in `settings.data_pushback` (same JSONB column as import mapping). Uses `{{field}}` template syntax with Taloo application fields as source
 - **2026-03-19** — Added `POST /integrations/sync` and `GET /integrations/sync/status` endpoints for vacancy import from external ATS integrations. Sync resolves the workspace's active ATS connection automatically (no connection_id needed). Runs as a background task with polling for progress. Uses provider-agnostic architecture: `VacancyImportService` handles mapping/upsert, `ConnexysProvider` handles Salesforce-specific fetching. New type: `SyncProgressResponse`
@@ -11,6 +13,8 @@ Complete API reference for the Taloo recruitment screening platform.
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 3). Extended workspace isolation to activities and audit trail: `GET /api/activities/tasks`, `POST /api/activities/tasks/{id}/complete`, `GET /monitoring`. All now require `Authorization` + `X-Workspace-ID` headers. Activities filter workflows by `workspace_id` column (added to `agents.workflows` table). Audit trail filters through vacancy/candidate workspace ownership. Added `GET /clients` endpoint for workspace-scoped client listing with vacancy/candidate counts
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 2). Extended workspace isolation to all data listing endpoints: `GET /vacancies`, `GET /vacancies/stats`, `GET /candidates`, `GET /agents/counts`, `GET /agents/prescreening/vacancies`, `GET /agents/preonboarding/vacancies`, `GET /agents/prescreening/stats`, `GET /agents/preonboarding/stats`. All now require `Authorization` + `X-Workspace-ID` headers and filter data by workspace. Navigation counts (`GET /agents/counts`) no longer hardcodes a workspace UUID — reads from auth context
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 1). All `/integrations/connections/*` endpoints and `/pre-screening/config`, `/pre-screening/auto-generate` endpoints now require `Authorization: Bearer <token>` and `X-Workspace-ID: <uuid>` headers. Requests without these headers will receive 401/400 errors. Connection-by-ID operations now verify the connection belongs to the caller's workspace (returns 404 for cross-workspace access). Removed hardcoded `DEFAULT_WORKSPACE_ID` from integrations router. Added reusable `require_workspace` auth dependency
+- **2026-03-21** — Added optional `since` query parameter (ISO datetime) to `GET /monitoring` for real-time polling. When provided, only returns activities created after the given timestamp. Frontend polls every 5 seconds with `since` set to the latest known activity timestamp
+- **2026-03-20** — Added `GET /agents/availability` endpoint returning available agent types for the current workspace. Added agent availability enforcement (403) on prescreening (vacancies, stats, chat, outbound) and preonboarding (vacancies, stats) endpoints. Backed by new `agents.workspace_agent_availability` table (deny-by-default). Only top-level agents (`prescreening`, `document_collection`) are controlled; sub-agents (cv_analyzer, interview_question_generator, etc.) are not independently gated
 - **2026-03-19** — `PATCH /integrations/connections/{id}` now merges incoming settings with existing settings instead of replacing them. Added `sf_object` setting for Connexys connections to configure which Salesforce object to query for field discovery (defaults to `cxsrec__cxsPosition__c`)
 - **2026-03-19** — Added `POST /integrations/connections/{id}/discover-fields` endpoint for dynamic source field discovery. Calls the external system's describe/metadata API (Salesforce `sobjects/describe`) to fetch all available fields including relationship sub-fields. Results are cached in `settings.field_cache` and served by `GET mapping-schema`. Falls back to hardcoded defaults when no cache exists. Added optional `sf_type` field to `SourceFieldInfo`. Frontend mapping page now has a "Velden ophalen" button to trigger discovery
 - **2026-03-19** — Added `GET /pre-screening/auto-generate` and `PUT /pre-screening/auto-generate` endpoints to toggle automatic pre-screening question generation for newly imported vacancies. Setting stored in `agents.agent_config` under `general.auto_generate`. When disabled, ATS import only imports vacancies without generating questions (they show "Genereren" button in the UI)
@@ -1556,6 +1560,28 @@ Counts are read from the denormalized `ats.navigation_counts` table, which is ke
   }
 }
 ```
+
+---
+
+### GET /agents/availability
+
+Get available agent types for the current workspace. Used by frontend to conditionally show/hide agent sections.
+
+**Auth:** Workspace required (`X-Workspace-ID` header)
+
+**Response:**
+
+```typescript
+interface AgentAvailabilityResponse {
+  available_agents: string[];  // e.g. ["prescreening", "document_collection", "cv_analyzer", ...]
+}
+```
+
+Top-level agent types: `prescreening`, `document_collection`
+
+Controlled by `agents.workspace_agent_availability` table (GOD admin, direct DB). Deny-by-default: if no row exists for a workspace+agent_type, that agent is not available.
+
+**403 enforcement:** Endpoints that use an agent will return `403 Forbidden` with `"Agent '{type}' is not available for this workspace"` if the agent is disabled.
 
 ---
 
@@ -5318,7 +5344,8 @@ Manage connections to external systems (Connexys/Salesforce, Microsoft). Support
   "label": "Vacaturenaam",
   "type": "text",
   "required": true,
-  "description": "Titel van de vacature"
+  "description": "Titel van de vacature",
+  "group": "Algemeen"
 }
 ```
 
@@ -5439,8 +5466,8 @@ Templates use N8N-style `{{field_name}}` syntax with dot-path traversal for rela
 ```json
 {
   "target_fields": [
-    { "name": "title", "label": "Vacaturenaam", "type": "text", "required": true, "description": "Titel van de vacature" },
-    { "name": "description", "label": "Omschrijving", "type": "html", "required": false, "description": "Volledige vacaturetekst" }
+    { "name": "title", "label": "Vacaturenaam", "type": "text", "required": true, "description": "Titel van de vacature", "group": "Algemeen" },
+    { "name": "description", "label": "Omschrijving", "type": "html", "required": false, "description": "Volledige vacaturetekst", "group": "Beschrijving" }
   ],
   "source_fields": [
     { "name": "Name", "label": "Vacaturenaam", "category": "vacancy" },
@@ -5579,3 +5606,62 @@ Push all unsynced completed applications for a vacancy to Connexys. Skips test a
 ```
 
 **Status values:** `idle` (no sync running), `syncing` (in progress), `complete` (finished), `error` (failed)
+
+---
+
+## Admin (Super Admin Only)
+
+Super admin access is granted to users with `@taloo.eu` email domains. Super admins bypass workspace membership checks and can access any workspace by providing its `X-Workspace-ID` header.
+
+### GET /admin/workspaces
+
+List all workspaces on the platform. Super admin only (403 for non-super-admin users).
+
+**Auth:** `Authorization: Bearer <token>` (must be `@taloo.eu` account)
+
+**Response:** Array of workspace objects with `id`, `name`, `slug`, `logo_url`, `settings`, `created_at`, `updated_at`
+
+---
+
+## Workspace Invitation Management
+
+### POST /workspaces/invitations/accept
+
+Accept a workspace invitation by token. The token must match the authenticated user's email.
+
+**Auth:** `Authorization: Bearer <token>`
+
+**Request body:**
+```json
+{
+  "token": "invitation-token-string"
+}
+```
+
+**Response:**
+```json
+{
+  "workspace_id": "uuid",
+  "workspace_name": "string",
+  "workspace_slug": "string",
+  "role": "member"
+}
+```
+
+**Errors:** 403 if token is expired, already accepted, or email mismatch
+
+### GET /workspaces/{workspace_id}/invitations
+
+List pending (not accepted, not expired) invitations for a workspace.
+
+**Auth:** `Authorization: Bearer <token>` + owner/admin role (or super admin)
+
+**Response:** `WorkspaceInvitationResponse[]` — includes `invited_by_name` for display
+
+### DELETE /workspaces/{workspace_id}/invitations/{invitation_id}
+
+Cancel/revoke a pending invitation.
+
+**Auth:** `Authorization: Bearer <token>` + owner/admin role (or super admin)
+
+**Response:** `{ "success": true }`

@@ -20,6 +20,7 @@ from .candidacy_repo import CandidacyRepository
 from .candidate_attribute_type_repo import CandidateAttributeTypeRepository
 from .candidate_attribute_repo import CandidateAttributeRepository
 from .placement_repo import PlacementRepository
+from .workspace_agent_availability_repo import WorkspaceAgentAvailabilityRepository
 
 __all__ = [
     "VacancyRepository",
@@ -41,4 +42,5 @@ __all__ = [
     "CandidateAttributeTypeRepository",
     "CandidateAttributeRepository",
     "PlacementRepository",
+    "WorkspaceAgentAvailabilityRepository",
 ]

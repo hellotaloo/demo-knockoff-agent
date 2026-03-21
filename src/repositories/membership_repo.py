@@ -223,21 +223,24 @@ class WorkspaceMembershipRepository:
         invited_by: uuid.UUID,
         expires_in_days: int = 7,
     ) -> asyncpg.Record:
-        """Create a workspace invitation."""
+        """Create a workspace invitation. Replaces any existing invitation for the same email+workspace."""
         token = secrets.token_urlsafe(32)
         expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+
+        # Remove any existing invitation for this email+workspace
+        await self.pool.execute(
+            """
+            DELETE FROM system.workspace_invitations
+            WHERE workspace_id = $1 AND email = $2
+            """,
+            workspace_id,
+            email.lower(),
+        )
 
         return await self.pool.fetchrow(
             """
             INSERT INTO system.workspace_invitations (workspace_id, email, role, token, invited_by, expires_at)
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (workspace_id, email)
-            DO UPDATE SET
-                role = EXCLUDED.role,
-                token = EXCLUDED.token,
-                invited_by = EXCLUDED.invited_by,
-                expires_at = EXCLUDED.expires_at,
-                accepted_at = NULL
             RETURNING *
             """,
             workspace_id,

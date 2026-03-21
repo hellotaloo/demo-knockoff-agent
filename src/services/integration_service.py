@@ -32,22 +32,30 @@ logger = logging.getLogger(__name__)
 CONNEXYS_DEFAULT_SF_OBJECT = "cxsrec__cxsPosition__c"
 
 TALOO_TARGET_FIELDS = [
-    MappingFieldInfo(name="title", label="Vacaturenaam", type="text", required=True, description="Titel van de vacature"),
-    MappingFieldInfo(name="company", label="Bedrijfsnaam", type="text", required=True, description="Naam van het klantbedrijf"),
-    MappingFieldInfo(name="location", label="Locatie", type="text", required=False, description="Werklocatie (postcode + stad)"),
-    MappingFieldInfo(name="description", label="Omschrijving", type="html", required=False, description="Volledige vacaturetekst (functieomschrijving, eisen, voorwaarden)"),
-    MappingFieldInfo(name="source_id", label="Extern ID", type="text", required=True, description="Uniek ID uit het bronsysteem"),
-    MappingFieldInfo(name="start_date", label="Startdatum", type="date", required=False, description="Startdatum van de inzet"),
-    MappingFieldInfo(name="recruiter_email", label="Recruiter e-mail", type="text", required=False, description="E-mailadres van de recruiter/eigenaar"),
-    MappingFieldInfo(name="recruiter_name", label="Recruiter naam", type="text", required=False, description="Volledige naam van de recruiter"),
-    MappingFieldInfo(name="recruiter_phone", label="Recruiter telefoon", type="text", required=False, description="Telefoonnummer van de recruiter"),
-    MappingFieldInfo(name="recruiter_role", label="Recruiter functie", type="text", required=False, description="Functietitel van de recruiter"),
-    MappingFieldInfo(name="office_name", label="Kantoornaam", type="text", required=False, description="Naam van het kantoor"),
-    MappingFieldInfo(name="office_email", label="Kantoor e-mail", type="text", required=False, description="E-mailadres van het kantoor"),
-    MappingFieldInfo(name="office_phone", label="Kantoor telefoon", type="text", required=False, description="Telefoonnummer van het kantoor"),
-    MappingFieldInfo(name="office_address", label="Kantoor adres", type="text", required=False, description="Volledig adres van het kantoor"),
-    MappingFieldInfo(name="sync_filter", label="Sync filter", type="boolean", required=False, description="Veld dat bepaalt of de vacature gesynchroniseerd wordt"),
-    MappingFieldInfo(name="is_online", label="Online pre-screening", type="boolean", required=False, description="true = online pre-screening, false = offline"),
+    # Algemeen
+    MappingFieldInfo(name="title", label="Vacaturenaam", type="text", required=True, description="Titel van de vacature", group="Algemeen"),
+    MappingFieldInfo(name="company", label="Bedrijfsnaam", type="text", required=True, description="Naam van het klantbedrijf", group="Algemeen"),
+    MappingFieldInfo(name="source_id", label="Extern ID", type="text", required=True, description="Uniek ID uit het bronsysteem", group="Algemeen"),
+    MappingFieldInfo(name="start_date", label="Startdatum", type="date", required=False, description="Startdatum van de inzet", group="Algemeen"),
+    # Beschrijving
+    MappingFieldInfo(name="description", label="Omschrijving", type="html", required=False, description="Volledige vacaturetekst (functieomschrijving, eisen, voorwaarden)", group="Beschrijving"),
+    # Locatie
+    MappingFieldInfo(name="location", label="Locatie", type="text", required=False, description="Werklocatie (postcode + stad)", group="Locatie"),
+    # Recruiter
+    MappingFieldInfo(name="recruiter_name", label="Recruiter naam", type="text", required=False, description="Volledige naam van de recruiter", group="Recruiter"),
+    MappingFieldInfo(name="recruiter_email", label="Recruiter e-mail", type="text", required=False, description="E-mailadres van de recruiter/eigenaar", group="Recruiter"),
+    MappingFieldInfo(name="recruiter_phone", label="Recruiter telefoon", type="text", required=False, description="Telefoonnummer van de recruiter", group="Recruiter"),
+    MappingFieldInfo(name="recruiter_role", label="Recruiter functie", type="text", required=False, description="Functietitel van de recruiter", group="Recruiter"),
+    # Kantoor
+    MappingFieldInfo(name="office_name", label="Kantoornaam", type="text", required=False, description="Naam van het kantoor", group="Kantoor"),
+    MappingFieldInfo(name="office_email", label="Kantoor e-mail", type="text", required=False, description="E-mailadres van het kantoor", group="Kantoor"),
+    MappingFieldInfo(name="office_phone", label="Kantoor telefoon", type="text", required=False, description="Telefoonnummer van het kantoor", group="Kantoor"),
+    MappingFieldInfo(name="office_address", label="Kantoor adres", type="text", required=False, description="Volledig adres van het kantoor", group="Kantoor"),
+    MappingFieldInfo(name="office_source_id", label="Kantoor extern ID", type="text", required=False, description="Uniek ID van het kantoor uit het bronsysteem", group="Kantoor"),
+    MappingFieldInfo(name="office_spoken_name", label="Kantoor uitspraaknaam", type="text", required=False, description="Uitspraaknaam van het kantoor (voor voice)", group="Kantoor"),
+    # Synchronisatie
+    MappingFieldInfo(name="sync_filter", label="Sync filter", type="boolean", required=False, description="Veld dat bepaalt of de vacature gesynchroniseerd wordt", group="Synchronisatie"),
+    MappingFieldInfo(name="is_online", label="Online pre-screening", type="boolean", required=False, description="true = online pre-screening, false = offline", group="Synchronisatie"),
 ]
 
 CONNEXYS_SOURCE_FIELDS = [
@@ -106,6 +114,7 @@ CONNEXYS_DEFAULT_MAPPING = {
     "office_phone": {"template": "{{job_office__r.office_phone__c}}"},
     "office_address": {"template": "{{job_office__r.office_street__c}} {{job_office__r.office_number__c}}, {{job_office__r.office_postalcode__c}} {{job_office__r.office_city__c}}"},
     "office_source_id": {"template": "{{job_office__r.Id}}"},
+    "office_spoken_name": {"template": ""},
     "sync_filter": {"template": "{{sync_to_taloo__c}}"},
     "is_online": {"template": "{{cbx_itzu_website__c}}"},
 }

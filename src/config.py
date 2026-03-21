@@ -26,36 +26,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is required")
 
-# ============================================================================
-# External Service Configuration
-# ============================================================================
-
-# Twilio Configuration
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")  # e.g., "whatsapp:+14155238886"
-TWILIO_MESSAGING_SERVICE_SID = os.environ.get("TWILIO_MESSAGING_SERVICE_SID")  # e.g., "MGxxxxxxxx"
-TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION = os.environ.get("TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION")  # e.g., "HXxxxxxxxx"
-TWILIO_TEMPLATE_INITIATE_PRE_SCREENING = os.environ.get("TWILIO_TEMPLATE_INITIATE_PRE_SCREENING")  # e.g., "HXxxxxxxxx"
-TWILIO_TEMPLATE_HEALTH_ALERT = os.environ.get("TWILIO_TEMPLATE_HEALTH_ALERT")  # e.g., "HXxxxxxxxx"
-
-# ElevenLabs Configuration
-ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
-
-# Yousign Configuration
-YOUSIGN_API_KEY = os.environ.get("YOUSIGN_API_KEY", "")
-YOUSIGN_WEBHOOK_SECRET = os.environ.get("YOUSIGN_WEBHOOK_SECRET", "")
-YOUSIGN_CUSTOM_EXPERIENCE_ID = os.environ.get("YOUSIGN_CUSTOM_EXPERIENCE_ID", "")
-ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")  # Master voice agent ID
-
-# VAPI Configuration
-VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
-VAPI_PUBLIC_KEY = os.environ.get("VAPI_PUBLIC_KEY")  # Public key safe for frontend (web calls)
-VAPI_SQUAD_ID = os.environ.get("VAPI_SQUAD_ID", "c43899f8-59fa-4886-85d6-02bed3ed325d")
-VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
-VAPI_WEBHOOK_SECRET = os.environ.get("VAPI_WEBHOOK_SECRET", "")
-VAPI_SERVER_URL = os.environ.get("VAPI_SERVER_URL")  # Webhook URL for this environment
-
 # =============================================================================
 # Supabase Auth Configuration
 # =============================================================================
@@ -66,7 +36,40 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-# LiveKit Configuration
+# ============================================================================
+# Twilio Configuration (WhatsApp)
+# ============================================================================
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
+TWILIO_MESSAGING_SERVICE_SID = os.environ.get("TWILIO_MESSAGING_SERVICE_SID")
+TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION = os.environ.get("TWILIO_TEMPLATE_INTERVIEW_CONFIRMATION")
+TWILIO_TEMPLATE_INITIATE_PRE_SCREENING = os.environ.get("TWILIO_TEMPLATE_INITIATE_PRE_SCREENING")
+TWILIO_TEMPLATE_HEALTH_ALERT = os.environ.get("TWILIO_TEMPLATE_HEALTH_ALERT")
+
+# ============================================================================
+# VAPI Configuration (Voice AI)
+# ============================================================================
+
+VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
+VAPI_PUBLIC_KEY = os.environ.get("VAPI_PUBLIC_KEY")
+VAPI_SQUAD_ID = os.environ.get("VAPI_SQUAD_ID")
+VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
+VAPI_WEBHOOK_SECRET = os.environ.get("VAPI_WEBHOOK_SECRET", "")
+VAPI_SERVER_URL = os.environ.get("VAPI_SERVER_URL")
+
+# ============================================================================
+# ElevenLabs Configuration (webhook validation only)
+# ============================================================================
+
+ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID")
+ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
+
+# ============================================================================
+# LiveKit Configuration (Voice Agent Infrastructure)
+# ============================================================================
+
 LIVEKIT_URL = os.environ.get("LIVEKIT_URL")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET")
@@ -75,16 +78,41 @@ LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "pre-screening")
 LIVEKIT_WEBHOOK_SECRET = os.environ.get("LIVEKIT_WEBHOOK_SECRET", "")
 BACKEND_WEBHOOK_URL = os.environ.get("BACKEND_WEBHOOK_URL", "")
 
-# Health Alert Configuration
-ALERT_WHATSAPP_NUMBER = os.environ.get("ALERT_WHATSAPP_NUMBER")  # e.g., "whatsapp:+32xxxxxxxxx"
-HEALTH_CHECK_INTERVAL = int(os.environ.get("HEALTH_CHECK_INTERVAL", "300"))  # seconds (default: 5 min)
-ALERT_COOLDOWN = int(os.environ.get("ALERT_COOLDOWN", "3600"))  # seconds between repeat alerts per service (default: 1h)
+# ============================================================================
+# Yousign Configuration (E-Signatures)
+# ============================================================================
 
-# Prato Flex Configuration
+YOUSIGN_API_KEY = os.environ.get("YOUSIGN_API_KEY", "")
+YOUSIGN_WEBHOOK_SECRET = os.environ.get("YOUSIGN_WEBHOOK_SECRET", "")
+YOUSIGN_CUSTOM_EXPERIENCE_ID = os.environ.get("YOUSIGN_CUSTOM_EXPERIENCE_ID", "")
+
+# ============================================================================
+# Prato Flex Configuration (Workforce Management)
+# ============================================================================
+
 PRATO_FLEX_API_URL = os.environ.get("PRATO_FLEX_API_URL", "https://salesdemo.prato.be/webservice")
-PRATO_FLEX_API_TOKEN = os.environ.get("PRATO_FLEX_API_TOKEN", "")  # WB token for auth
+PRATO_FLEX_API_TOKEN = os.environ.get("PRATO_FLEX_API_TOKEN", "")
 
+# =============================================================================
+# Email Configuration (Resend)
+# =============================================================================
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+EMAIL_FROM_ADDRESS = os.environ.get("EMAIL_FROM_ADDRESS", "welkom@taloo.eu")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Taloo")
+
+# ============================================================================
+# Health Alert Configuration
+# ============================================================================
+
+ALERT_WHATSAPP_NUMBER = os.environ.get("ALERT_WHATSAPP_NUMBER")
+HEALTH_CHECK_INTERVAL = int(os.environ.get("HEALTH_CHECK_INTERVAL", "300"))
+ALERT_COOLDOWN = int(os.environ.get("ALERT_COOLDOWN", "3600"))
+
+# ============================================================================
 # ATS Simulator Configuration
+# ============================================================================
+
 ATS_SIMULATOR_URL = os.environ.get("ATS_SIMULATOR_URL", "http://localhost:8080/ats-simulator")
 
 # ============================================================================
@@ -123,6 +151,75 @@ else:
     logging.basicConfig(level=logging.INFO, handlers=[handler])
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Startup Validation
+# =============================================================================
+
+
+def _validate_env():
+    """Validate environment variables at startup. Fail fast on missing required vars."""
+    missing_required = []
+    missing_optional = []
+
+    # Required — app cannot function without these
+    required = {
+        "DATABASE_URL": DATABASE_URL,
+        "GOOGLE_API_KEY": os.environ.get("GOOGLE_API_KEY"),
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_JWT_SECRET": SUPABASE_JWT_SECRET,
+    }
+    for name, value in required.items():
+        if not value:
+            missing_required.append(name)
+
+    # Optional but important — warn if missing so it's obvious what's disabled
+    optional_groups = {
+        "Twilio (WhatsApp)": {
+            "TWILIO_ACCOUNT_SID": TWILIO_ACCOUNT_SID,
+            "TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN,
+            "TWILIO_WHATSAPP_NUMBER": TWILIO_WHATSAPP_NUMBER,
+        },
+        "VAPI (Voice AI)": {
+            "VAPI_API_KEY": VAPI_API_KEY,
+        },
+        "LiveKit (Voice Agent)": {
+            "LIVEKIT_URL": LIVEKIT_URL,
+            "LIVEKIT_API_KEY": LIVEKIT_API_KEY,
+            "LIVEKIT_API_SECRET": LIVEKIT_API_SECRET,
+        },
+        "Resend (Email)": {
+            "RESEND_API_KEY": RESEND_API_KEY,
+        },
+    }
+
+    for group_name, vars_dict in optional_groups.items():
+        group_missing = [name for name, value in vars_dict.items() if not value]
+        if group_missing:
+            missing_optional.append(f"  {group_name}: {', '.join(group_missing)}")
+
+    if missing_required:
+        raise RuntimeError(
+            f"Missing required environment variables: {', '.join(missing_required)}. "
+            f"Check your .env file or Cloud Run configuration."
+        )
+
+    if missing_optional:
+        logger.warning(
+            "Some optional environment variables are not set. "
+            "Related features will be disabled:\n%s",
+            "\n".join(missing_optional),
+        )
+
+
+_validate_env()
+
+# =============================================================================
+# Super Admin Configuration
+# =============================================================================
+
+# Email domains that grant super admin access (bypass workspace membership)
+SUPER_ADMIN_DOMAINS = [d.strip() for d in os.environ.get("SUPER_ADMIN_DOMAINS", "taloo.eu").split(",")]
 
 # ============================================================================
 # Application Constants

@@ -23,6 +23,7 @@ from src.models.document_collection import (
     DocumentCollectionDebugResponse
 )
 from src.auth.dependencies import AuthContext, require_workspace
+from src.agents import AgentType, AgentRegistry
 from src.database import get_db_pool
 from src.repositories import ApplicationRepository
 from src.config import (
@@ -385,6 +386,12 @@ async def initiate_document_collection(request: OutboundDocumentRequest, ctx: Au
     """
     session_manager = get_session_manager()
     pool = await get_db_pool()
+
+    # Check agent availability via TalooAgent
+    agent_cls = AgentRegistry.get(AgentType.DOCUMENT_COLLECTION)
+    taloo_agent = agent_cls(pool=pool, workspace_id=ctx.workspace_id)
+    if not await taloo_agent.check_availability():
+        raise HTTPException(status_code=403, detail="Agent 'document_collection' is not available for this workspace")
 
     # Validate vacancy_id
     try:

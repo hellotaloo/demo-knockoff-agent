@@ -87,6 +87,11 @@ from src.services import SessionManager
 from src.dependencies import set_session_manager as set_global_session_manager
 from src.exceptions import register_exception_handlers
 
+# Import TalooAgent registry + implementations (triggers @AgentRegistry.register)
+from src.agents.registry import AgentRegistry
+import src.agents.pre_screening_agent  # noqa: F401 — registers PreScreeningTalooAgent
+import src.agents.document_collection_agent  # noqa: F401 — registers DocumentCollectionTalooAgent
+
 # Import routers
 from src.routers import (
     health_router,
@@ -124,6 +129,7 @@ from src.routers import (
     candidate_attributes_router,
     integrations_router,
     clients_router,
+    admin_router,
 )
 
 
@@ -221,6 +227,9 @@ async def lifespan(app: FastAPI):
     session_manager.create_document_session_service()
 
     pool = await get_db_pool()  # Initialize database pool
+
+    # Validate TalooAgent registry (all agent types must be registered)
+    AgentRegistry.validate_all()
 
     # Run schema migrations
     await run_schema_migrations(pool)
@@ -358,3 +367,4 @@ app.include_router(candidacy_router)
 app.include_router(candidate_attributes_router)
 app.include_router(integrations_router)
 app.include_router(clients_router)
+app.include_router(admin_router)

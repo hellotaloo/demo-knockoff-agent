@@ -165,6 +165,7 @@ class ActivityService:
         candidate_id: Optional[str] = None,
         vacancy_id: Optional[str] = None,
         workspace_id=None,
+        since: Optional[str] = None,
         limit: int = 50,
         offset: int = 0
     ) -> GlobalActivitiesResponse:
@@ -192,6 +193,7 @@ class ActivityService:
             candidate_id=candidate_id,
             vacancy_id=vacancy_id,
             workspace_id=workspace_id,
+            since=since,
             limit=limit,
             offset=offset
         )

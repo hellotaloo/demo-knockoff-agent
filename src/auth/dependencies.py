@@ -14,12 +14,26 @@ from src.database import get_db_pool
 from src.auth.jwt import verify_supabase_token_async, extract_user_id, extract_email, extract_user_metadata
 from src.auth.exceptions import (
     AuthenticationError,
+    AuthorizationError,
     InvalidTokenError,
     WorkspaceAccessDenied,
     InsufficientRoleError,
 )
+from src.config import SUPER_ADMIN_DOMAINS
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Super Admin Helper
+# =============================================================================
+
+def is_super_admin(email: str) -> bool:
+    """Check if the user's email domain grants super admin access."""
+    if not email:
+        return False
+    domain = email.rsplit("@", 1)[-1].lower()
+    return domain in SUPER_ADMIN_DOMAINS
 
 
 # =============================================================================
@@ -46,6 +60,11 @@ class UserProfile:
         self.avatar_url = avatar_url
         self.phone = phone
         self.is_active = is_active
+
+    @property
+    def is_super_admin(self) -> bool:
+        """Check if this user has super admin access based on email domain."""
+        return is_super_admin(self.email)
 
 
 class WorkspaceMembership:
@@ -358,7 +377,22 @@ async def get_auth_context(
 
         workspace = await get_workspace_membership(pool, user.id, workspace_uuid)
         if not workspace:
-            raise WorkspaceAccessDenied(x_workspace_id)
+            if user.is_super_admin:
+                # Super admin: verify workspace exists, grant virtual membership
+                workspace_row = await pool.fetchrow(
+                    "SELECT id, name, slug FROM system.workspaces WHERE id = $1",
+                    workspace_uuid,
+                )
+                if not workspace_row:
+                    raise WorkspaceAccessDenied(x_workspace_id)
+                workspace = WorkspaceMembership(
+                    workspace_id=workspace_row["id"],
+                    workspace_name=workspace_row["name"],
+                    workspace_slug=workspace_row["slug"],
+                    role="super_admin",
+                )
+            else:
+                raise WorkspaceAccessDenied(x_workspace_id)
 
     return AuthContext(user=user, workspace=workspace)
 
@@ -395,6 +429,10 @@ def require_role(*allowed_roles: str):
         if not ctx.workspace:
             raise AuthenticationError("Workspace context required")
 
+        # Super admins bypass all role checks
+        if ctx.role == "super_admin":
+            return ctx
+
         if ctx.role not in allowed_roles:
             raise InsufficientRoleError(
                 required_role=", ".join(allowed_roles),
@@ -404,3 +442,19 @@ def require_role(*allowed_roles: str):
         return ctx
 
     return dependency
+
+
+async def require_super_admin(
+    user: UserProfile = Depends(get_current_user),
+) -> UserProfile:
+    """
+    Require the user to be a super admin.
+
+    Usage:
+        @router.get("/admin/workspaces")
+        async def list_all(user: UserProfile = Depends(require_super_admin)):
+            ...
+    """
+    if not user.is_super_admin:
+        raise AuthorizationError("Super admin access required")
+    return user

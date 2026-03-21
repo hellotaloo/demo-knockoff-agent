@@ -240,6 +240,7 @@ def _get_step_label(step: str) -> str:
         "waiting_backside": "Waiting",
         "expired": "Expired",
         "marked_as_complete": "Manually Completed",
+        "abandoned": "Afgebroken",
         # Vacancy setup steps
         "generating": "Generating",
         "analyzing": "Analyzing",
@@ -255,6 +256,10 @@ def _get_step_detail(workflow_type: str, step: str, context: dict) -> Optional[s
     if step == "marked_as_complete":
         completed_by = context.get("completed_by", "Recruiter")
         return f"Afgesloten door {completed_by}"
+
+    # Handle abandoned workflows (new screening started for same phone)
+    if step == "abandoned":
+        return "Afgebroken — nieuw gesprek gestart"
 
     # Pre-screening steps
     if workflow_type == "pre_screening":

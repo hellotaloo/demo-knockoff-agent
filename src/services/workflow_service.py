@@ -262,6 +262,38 @@ class WorkflowService:
 
         return await self.get(workflow_id)
 
+    async def abandon_by_context(self, key: str, value: str) -> int:
+        """
+        Abandon all active workflows matching a context field.
+
+        Used when clearing sessions for a phone number — ensures workflows
+        are also abandoned so timers don't fire on stale conversations.
+
+        Args:
+            key: Context field name (e.g., "candidate_phone")
+            value: Value to match
+
+        Returns:
+            Number of workflows abandoned
+        """
+        result = await self.pool.execute(
+            """
+            UPDATE agents.workflows
+            SET status = 'completed',
+                current_step = 'abandoned',
+                next_action_at = NULL,
+                next_action_type = NULL,
+                updated_at = NOW()
+            WHERE status = 'active'
+              AND context->>$1 = $2
+            """,
+            key, value,
+        )
+        count = int(result.split()[-1]) if result else 0
+        if count > 0:
+            logger.info(f"Abandoned {count} workflow(s) where {key}={value}")
+        return count
+
     async def set_timer(self, workflow_id: str, delay_seconds: int, action_type: str = "timeout") -> dict:
         """
         Set a timer for a workflow.

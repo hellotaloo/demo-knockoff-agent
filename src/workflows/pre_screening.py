@@ -37,7 +37,6 @@ STEP_CONFIG = {
     "processed": {
         "timeout_seconds": 15 * 60,        # 15 minutes - notifications may take a few minutes
         "stuck_threshold_seconds": 10 * 60,  # 10 minutes - flag if stuck for this long
-        "auto_delay_seconds": 10,          # 10 second delay before sending notifications
     },
     "complete": {
         "timeout_seconds": None,           # Terminal state - no timeout

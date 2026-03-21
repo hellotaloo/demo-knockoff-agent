@@ -11,7 +11,7 @@ from src.auth.dependencies import AuthContext, require_workspace
 from src.models.outbound import OutboundScreeningRequest, OutboundScreeningResponse
 from src.models import InterviewChannel, ActivityEventType, ActorType, ActivityChannel
 from src.repositories import CandidateRepository, CandidacyRepository, ApplicationRepository
-from src.services import ActivityService
+from src.agents import AgentType, AgentRegistry
 from src.database import get_db_pool
 from src.config import TWILIO_WHATSAPP_NUMBER, LIVEKIT_URL, TWILIO_TEMPLATE_INITIATE_PRE_SCREENING, logger
 from src.services.whatsapp_service import send_whatsapp_message, send_whatsapp_template
@@ -67,9 +67,16 @@ async def _clear_all_sessions_for_phone(pool, phone_normalized: str):
         phone_normalized
     )
 
-    total_cleared = screening_count + doc_count
+    # 4. Abandon active workflows for this phone (prevents stale timers from firing)
+    from src.services.workflow_service import WorkflowService
+    workflow_service = WorkflowService(pool)
+    workflow_count = await workflow_service.abandon_by_context("candidate_phone", phone_normalized)
+    if workflow_count > 0:
+        logger.info(f"🧹 Abandoned {workflow_count} active workflow(s) for {phone_normalized}")
+
+    total_cleared = screening_count + doc_count + workflow_count
     if total_cleared > 0:
-        logger.info(f"✅ Cleared {total_cleared} conversation(s) for {phone_normalized} - ready for new conversation")
+        logger.info(f"✅ Cleared {total_cleared} conversation(s) + workflow(s) for {phone_normalized} - ready for new conversation")
 
 
 @router.post("/screening/outbound", response_model=OutboundScreeningResponse)
@@ -94,6 +101,12 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest, ctx: Au
     - TWILIO_WHATSAPP_NUMBER must be set
     """
     pool = await get_db_pool()
+
+    # Check agent availability via TalooAgent
+    agent_cls = AgentRegistry.get(AgentType.PRESCREENING)
+    taloo_agent = agent_cls(pool=pool, workspace_id=ctx.workspace_id)
+    if not await taloo_agent.check_availability():
+        raise HTTPException(status_code=403, detail="Agent 'prescreening' is not available for this workspace")
 
     # Validate vacancy_id
     try:
@@ -191,25 +204,20 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest, ctx: Au
     application_id = app_row["id"]
     logger.info(f"📝 Created application {application_id} with status=active (is_test={request.is_test})")
 
-    # Log activity: screening started with rich metadata
-    activity_service = ActivityService(pool)
+    # Log activity: screening started via TalooAgent (enriches with agent_type + workspace_id)
     channel = ActivityChannel.VOICE if request.channel == InterviewChannel.VOICE else ActivityChannel.WHATSAPP
 
-    # Build metadata based on channel
-    activity_metadata = {
-        "phone_number": f"+{phone_normalized[:3]} *** ** {phone_normalized[-2:]}",  # Masked for privacy
-        "call_initiated_by": "outbound",
-    }
-
-    await activity_service.log(
-        candidate_id=str(candidate_id),
+    await taloo_agent.log_activity(
         event_type=ActivityEventType.SCREENING_STARTED,
+        candidate_id=str(candidate_id),
         application_id=str(application_id),
         vacancy_id=str(vacancy_uuid),
         channel=channel,
-        actor_type=ActorType.AGENT,
-        metadata=activity_metadata,
-        summary=f"Pre-screening gestart via {request.channel.value}"
+        metadata={
+            "phone_number": f"+{phone_normalized[:3]} *** ** {phone_normalized[-2:]}",
+            "call_initiated_by": "outbound",
+        },
+        summary=f"Pre-screening gestart via {request.channel.value}",
     )
 
     # Handle based on channel

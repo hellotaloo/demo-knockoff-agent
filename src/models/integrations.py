@@ -79,6 +79,7 @@ class MappingFieldInfo(BaseModel):
     type: str  # "text", "date", "html", "boolean"
     required: bool
     description: str
+    group: str = "Algemeen"
 
 
 class SourceFieldInfo(BaseModel):
