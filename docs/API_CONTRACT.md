@@ -45,6 +45,7 @@ Complete API reference for the Taloo recruitment screening platform.
 - **2026-03-09** — Added `documents_required: DocumentTypeResponse[]` to `DocumentCollectionDetailResponse` (resolves stored slugs into full document type objects with name, icon, category); added Lucide icons to seeded document types
 - **2026-03-09** — Added derived `progress` field to `DocumentCollectionResponse` (computed from messages: `"pending"` → `"started"` → `"in_progress"`); added `documents_collected` and `documents_total` fields for progress counters. General `status` remains unchanged (`active`/`completed`/`needs_review`/`abandoned`)
 - **2026-03-09** — Split `POST /demo/import-ats` with `module` query parameter: `"pre_screening"` (default, existing behavior) or `"document_collection"` (creates configs per vacancy + sample conversations). Document collection demo data moved from `/demo/seed` to this endpoint
+- **2026-03-25** — Removed all VAPI integration code, env vars, and `POST /screening/web-call` endpoint; scheduling endpoints no longer accept VAPI tool-call wrapper format
 - **2026-03-09** — Added Document Collection v2 system: workspace-scoped document types CRUD, collection configs (per-vacancy or default), document resolution/merge logic, conversation tracking, and candidate document portfolio. All under `/workspaces/{workspace_id}/document-collection/`. 7 new database tables (`ats.document_types`, `ats.document_collection_configs`, `ats.document_collection_requirements`, `ats.document_collections`, `ats.document_collection_messages`, `ats.document_collection_uploads`, `ats.candidate_documents`)
 - **2026-03-01** — Added `GET /pre-screening/config` and `PATCH /pre-screening/config` endpoints for global pre-screening agent configuration (require_consent, allow_escalation, planning_mode, schedule settings, messages); added `GET /vacancies/{vacancy_id}/pre-screening/settings` and `PATCH /vacancies/{vacancy_id}/pre-screening/settings` for per-vacancy channel toggles
 - **2026-03-01** — Added `POST /playground/start` endpoint for browser-based LiveKit WebRTC voice playground (returns access token for frontend to connect directly to pre-screening V2 agent, no database records created)
@@ -52,7 +53,6 @@ Complete API reference for the Taloo recruitment screening platform.
 - **2026-02-28** — Added ATS Simulator endpoints (`GET /ats-simulator/api/v1/vacancies`, `GET /ats-simulator/api/v1/recruiters`, `GET /ats-simulator/api/v1/clients`) and `POST /demo/import-ats` for simulated ATS integration; demo seed now imports via ATS API instead of direct DB inserts
 - **2026-02-28** — Added Interview Analysis endpoints (`POST /pre-screenings/{id}/analyze`, `GET /pre-screenings/{id}/analysis`) with per-question clarity scoring, knockout ambiguity checks, drop-off risk, funnel data, and one-liner summary for Teams notifications
 - **2026-02-19** — ~~Added Ontology endpoints for workspace knowledge graph management~~ (replaced by simplified `/ontology` endpoints on 2026-03-11)
-- **2026-02-17** — Added `POST /screening/web-call` endpoint for browser-based VAPI voice simulation (no database records created, for testing/demo only)
 - **2026-02-16** — Enhanced `AgentStatusResponse` with stats: `total_screenings`, `qualified_count`, `qualification_rate`, `last_activity_at` (populated for prescreening agent)
 - **2026-02-16** — Added `candidate_name` field to ActivityResponse in vacancy timelines (`GET /vacancies/{vacancy_id}`)
 - **2026-02-16** — Added `applicants` array to VacancyResponse (lightweight ApplicantSummary for candidates who did pre-screening)
@@ -2804,92 +2804,6 @@ interface LiveKitCallResultPayload {
 
 ---
 
-### POST /screening/web-call
-
-Create a VAPI web call session for browser-based voice simulation.
-
-This is for testing/demo purposes only - no database records are created. Returns configuration for the frontend to use with VAPI Web SDK to start a voice call directly in the browser.
-
-**Auth:** None
-
-**Request Body:**
-
-```typescript
-interface VapiWebCallRequest {
-  vacancy_id: string;
-  candidate_name?: string;  // Default: "Test Kandidaat"
-  first_name?: string;      // Extracted from candidate_name if not provided
-}
-```
-
-**Response:**
-
-```typescript
-interface VapiWebCallResponse {
-  success: boolean;
-  squad_id: string;              // VAPI squad ID for the call
-  vapi_public_key: string;       // Public key for VAPI Web SDK initialization
-  assistant_overrides: {
-    variableValues: {
-      greeting: string;          // Dutch time-based greeting
-      first_name: string;
-      vacancy_id: string;
-      vacancy_title: string;
-      knockout_questions: string;      // Formatted list of knockout questions
-      qualification_questions: string; // Formatted list of qualification questions
-      first_knockout_question: string;
-      first_qualification_question: string;
-      pre_screening_id: string;
-    };
-    server?: {
-      url: string;
-      timeoutSeconds: number;
-    };
-  };
-}
-```
-
-**Frontend Usage:**
-
-```typescript
-import Vapi from '@vapi-ai/web';
-
-// 1. Get config from backend
-const response = await fetch('/api/screening/web-call', {
-  method: 'POST',
-  body: JSON.stringify({ vacancy_id: '...', candidate_name: 'Test' })
-});
-const config = await response.json();
-
-// 2. Initialize VAPI with public key
-const vapi = new Vapi(config.vapi_public_key);
-
-// 3. Start call with squad (pass null for first two params when using squad)
-vapi.start(null, config.assistant_overrides, config.squad_id);
-
-// 4. Handle events
-vapi.on('call-start', () => console.log('Call started'));
-vapi.on('call-end', () => console.log('Call ended'));
-vapi.on('message', (msg) => {
-  if (msg.type === 'transcript') {
-    console.log(`${msg.role}: ${msg.transcript}`);
-  }
-});
-```
-
-**Error Responses:**
-
-| Status | Error |
-|--------|-------|
-| 400 | Invalid vacancy ID format |
-| 400 | No pre-screening configured for this vacancy |
-| 400 | Pre-screening is not published yet |
-| 400 | Pre-screening is offline |
-| 404 | Vacancy not found |
-| 500 | VAPI_PUBLIC_KEY not configured |
-
----
-
 ## Playground
 
 ### POST /playground/start
@@ -4516,18 +4430,10 @@ interface ArchitectureResponse {
       "description": "Analyzes voice call transcripts",
       "metadata": {"model": "gemini-2.0-flash"}
     },
-    {
-      "id": "external:vapi",
-      "type": "external",
-      "name": "VAPI",
-      "layer": "external",
-      "description": "Voice AI platform for phone screening"
-    }
   ],
   "edges": [
     {"source": "router:vacancies", "target": "service:vacancy", "type": "uses"},
     {"source": "service:vacancy", "target": "repo:vacancy", "type": "uses"},
-    {"source": "router:vapi", "target": "external:vapi", "type": "integrates", "label": "webhook"}
   ],
   "groups": [
     {"id": "api", "name": "API Layer", "layer": "api", "color": "#4CAF50"},

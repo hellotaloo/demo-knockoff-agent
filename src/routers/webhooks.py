@@ -28,13 +28,13 @@ from src.config import ELEVENLABS_WEBHOOK_SECRET, logger
 from src.models.webhook import ElevenLabsWebhookPayload
 from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
-from src.services.call_result_processor import process_call_results
+from agents.pre_screening.call_result_processor import process_call_results
 from src.repositories import ApplicationRepository, CandidacyRepository
 from src.database import get_db_pool
 from src.services.livekit_service import fetch_scheduling_config
 from src.utils.conversation_cache import conversation_cache, agent_cache, ConversationType, CachedConversation
 from src.services.whatsapp_service import send_whatsapp_message
-from src.services.screening_notes_integration_service import trigger_screening_notes_integration
+from agents.pre_screening.screening_notes_integration import trigger_screening_notes_integration
 from src.workflows import get_orchestrator
 
 logger = logging.getLogger(__name__)
@@ -1340,7 +1340,7 @@ async def elevenlabs_webhook(request: Request):
     # Extract candidate attributes from voice transcript
     if candidate_id:
         try:
-            from src.services.attribute_extraction_service import extract_and_save_attributes
+            from agents.pre_screening.attribute_extraction import extract_and_save_attributes
             transcript_text = "\n".join(
                 f"{m.get('role', 'unknown')}: {m.get('message', '')}" for m in data.transcript
             )

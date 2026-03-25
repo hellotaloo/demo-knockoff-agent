@@ -49,17 +49,6 @@ TWILIO_TEMPLATE_INITIATE_PRE_SCREENING = os.environ.get("TWILIO_TEMPLATE_INITIAT
 TWILIO_TEMPLATE_HEALTH_ALERT = os.environ.get("TWILIO_TEMPLATE_HEALTH_ALERT")
 
 # ============================================================================
-# VAPI Configuration (Voice AI)
-# ============================================================================
-
-VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
-VAPI_PUBLIC_KEY = os.environ.get("VAPI_PUBLIC_KEY")
-VAPI_SQUAD_ID = os.environ.get("VAPI_SQUAD_ID")
-VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
-VAPI_WEBHOOK_SECRET = os.environ.get("VAPI_WEBHOOK_SECRET", "")
-VAPI_SERVER_URL = os.environ.get("VAPI_SERVER_URL")
-
-# ============================================================================
 # ElevenLabs Configuration (webhook validation only)
 # ============================================================================
 
@@ -180,10 +169,7 @@ def _validate_env():
             "TWILIO_AUTH_TOKEN": TWILIO_AUTH_TOKEN,
             "TWILIO_WHATSAPP_NUMBER": TWILIO_WHATSAPP_NUMBER,
         },
-        "VAPI (Voice AI)": {
-            "VAPI_API_KEY": VAPI_API_KEY,
-        },
-        "LiveKit (Voice Agent)": {
+"LiveKit (Voice Agent)": {
             "LIVEKIT_URL": LIVEKIT_URL,
             "LIVEKIT_API_KEY": LIVEKIT_API_KEY,
             "LIVEKIT_API_SECRET": LIVEKIT_API_SECRET,

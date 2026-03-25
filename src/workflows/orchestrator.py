@@ -3,7 +3,7 @@ Workflow Orchestrator - Central event router for all workflows.
 
 The orchestrator is the single entry point for:
 1. Creating new workflows (from outbound API, etc.)
-2. Handling events (from VAPI webhook, WhatsApp agent, etc.)
+2. Handling events (from LiveKit webhook, WhatsApp agent, etc.)
 3. Routing events to the correct handler based on workflow_type + step + event
 
 Key principle: Routers are thin - they validate input and forward events here.
@@ -55,18 +55,18 @@ class WorkflowOrchestrator:
 
     def _register_handlers(self):
         """Register all workflow handlers."""
-        # Import here to avoid circular imports
-        from src.workflows.pre_screening import (
+        # Import handlers from their respective agent folders
+        from agents.pre_screening.workflows import (
             STEP_CONFIG as PRE_SCREENING_STEP_CONFIG,
             handle_screening_completed,
             handle_screening_timeout,
             handle_send_notifications,
         )
-        from src.workflows.vacancy_setup import (
+        from agents.pre_screening.interview_question_generator.workflows import (
             STEP_CONFIG as VACANCY_SETUP_STEP_CONFIG,
+            handle_auto_publish,
             handle_questions_saved,
             handle_recruiter_approved,
-            handle_auto_publish,
             handle_send_published_notification,
         )
 

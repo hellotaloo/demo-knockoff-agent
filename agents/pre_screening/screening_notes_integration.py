@@ -18,7 +18,7 @@ from typing import Optional
 
 import asyncpg
 
-from src.services.screening_notes_service import create_screening_notes_document
+from agents.pre_screening.screening_notes import create_screening_notes_document
 from src.services.google_calendar_service import calendar_service
 
 logger = logging.getLogger(__name__)

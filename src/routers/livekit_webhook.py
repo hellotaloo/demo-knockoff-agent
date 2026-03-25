@@ -16,7 +16,7 @@ from src.config import LIVEKIT_WEBHOOK_SECRET
 from src.models.livekit import LiveKitCallResultPayload
 from src.models import ActivityEventType, ActorType, ActivityChannel
 from src.services import ActivityService
-from src.services.call_result_processor import process_call_results
+from agents.pre_screening.call_result_processor import process_call_results
 from src.database import get_db_pool
 
 logger = logging.getLogger(__name__)

@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.database import get_db_pool
-from src.services.attribute_extraction_service import extract_and_save_attributes
+from agents.pre_screening.attribute_extraction import extract_and_save_attributes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

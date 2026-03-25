@@ -11,14 +11,7 @@ from .google_calendar_service import GoogleCalendarService, calendar_service
 from .activity_service import ActivityService
 from .auth_service import AuthService
 from .workspace_service import WorkspaceService
-from .vapi_service import VapiService, get_vapi_service
 from .livekit_service import LiveKitService, get_livekit_service
-from .screening_notes_integration_service import (
-    ScreeningNotesIntegrationService,
-    trigger_screening_notes_integration,
-)
-from .call_result_processor import process_call_results
-from .attribute_extraction_service import extract_and_save_attributes
 from .teams_service import TeamsService, get_teams_service
 from .short_link_service import ShortLinkService
 from .candidacy_transition_service import CandidacyStageTransitionService
@@ -37,17 +30,11 @@ __all__ = [
     "ActivityService",
     "AuthService",
     "WorkspaceService",
-    "VapiService",
-    "get_vapi_service",
-    "LiveKitService",
+"LiveKitService",
     "get_livekit_service",
-    "ScreeningNotesIntegrationService",
-    "trigger_screening_notes_integration",
-    "process_call_results",
     "TeamsService",
     "get_teams_service",
     "ShortLinkService",
     "CandidacyStageTransitionService",
-    "extract_and_save_attributes",
     "DocumentCollectionPlannerService",
 ]

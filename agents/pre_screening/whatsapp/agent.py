@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from src.utils.json_parser import parse_json_response
+
 from .calendar_helpers import (
     get_time_slots_for_whatsapp,
     get_slots_for_specific_day,
@@ -1113,7 +1115,7 @@ Houd het kort en vriendelijk (2-3 zinnen)."""
             message=message,
         )
         response = await self._evaluate(prompt)
-        return self._parse_json_response(response, {"intent": "unclear"})
+        return parse_json_response(response, {"intent": "unclear"})
 
     def _filter_slots_by_time(self, slots: list, time_preference: str = None) -> tuple[list, str]:
         """
@@ -1250,19 +1252,6 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
     # Helper methods
     # -------------------------------------------------------------------------
 
-    def _parse_json_response(self, response: str, default: dict) -> dict:
-        """Parse JSON from LLM response, handling markdown code blocks."""
-        try:
-            response = response.strip()
-            if response.startswith("```"):
-                response = response.split("```")[1]
-                if response.startswith("json"):
-                    response = response[4:]
-            return json.loads(response)
-        except (json.JSONDecodeError, IndexError):
-            logger.warning(f"Failed to parse JSON: {response[:100]}")
-            return default
-
     async def _ask_knockout_question(self) -> str:
         """Generate knockout question prompt."""
         q = self.state.knockout_questions[self.state.knockout_index]
@@ -1323,7 +1312,7 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
         """
         prompt = INTENT_READY_PROMPT.format(message=message)
         response = await self._evaluate(prompt)
-        result = self._parse_json_response(response, {"ready": True})
+        result = parse_json_response(response, {"ready": True})
         return result.get("ready", True)
 
     async def _evaluate_interest(self, message: str) -> tuple[bool, bool]:
@@ -1374,14 +1363,14 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
         logger.debug(f"Interest no regex match, using LLM for: '{msg}'")
         prompt = CONFIRM_INTEREST_PROMPT.format(message=message)
         response = await self._evaluate(prompt)
-        result = self._parse_json_response(response, {"interested": True})
+        result = parse_json_response(response, {"interested": True})
         return result.get("interested", True), False
 
     async def _is_unrelated(self, question: str, answer: str) -> bool:
         """Use LLM to check if answer is unrelated to the conversation."""
         prompt = UNRELATED_CHECK_PROMPT.format(question=question, answer=answer)
         response = await self._evaluate(prompt)
-        result = self._parse_json_response(response, {"unrelated": False})
+        result = parse_json_response(response, {"unrelated": False})
         return result.get("unrelated", False)
 
     async def _handle_unrelated_exit(self) -> str:
@@ -1458,7 +1447,7 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
             answer=answer,
         )
         response = await self._evaluate(prompt)
-        return self._parse_json_response(response, {"passed": True, "summary": answer[:100]})
+        return parse_json_response(response, {"passed": True, "summary": answer[:100]})
 
     async def _generate_fail_response(self, question: dict, answer: str) -> str:
         """Generate knockout fail response."""
@@ -1546,7 +1535,7 @@ Geen reactie op het vorige antwoord. Gewoon de vraag."""
             message=message,
         )
         response = await self._evaluate(prompt)
-        result = self._parse_json_response(response, {})
+        result = parse_json_response(response, {})
         if result.get("day") and result.get("time"):
             return result
         return None

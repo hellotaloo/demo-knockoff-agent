@@ -137,7 +137,6 @@ async def get_time_slots(raw_request: Request):
     Get available time slots for scheduling interviews.
 
     This endpoint is called by:
-    - VAPI voice agent via tool call (sends wrapper format)
     - ElevenLabs voice agent via webhook tool
     - Frontend applications for scheduling UI
 
@@ -149,12 +148,9 @@ async def get_time_slots(raw_request: Request):
     If Google Calendar is configured (GOOGLE_SERVICE_ACCOUNT_FILE),
     returns real availability from the recruiter's calendar.
     Uses GOOGLE_CALENDAR_IMPERSONATE_EMAIL as the default recruiter calendar.
-
-    Handles both direct requests and VAPI's tool-call wrapper format.
     """
     import json
 
-    # Parse raw body to handle both direct and VAPI wrapper formats
     body = await raw_request.body()
     body_str = body.decode("utf-8") if body else "{}"
     logger.info(f"[scheduling/get-time-slots] RAW BODY: {body_str}")
@@ -164,44 +160,7 @@ async def get_time_slots(raw_request: Request):
     except json.JSONDecodeError:
         data = {}
 
-    # VAPI wraps tool-call payloads inside a "message" envelope - unwrap it
-    if "message" in data and isinstance(data["message"], dict):
-        logger.info("[scheduling/get-time-slots] Unwrapping VAPI 'message' envelope")
-        data = data["message"]
-
-    # Check if this is VAPI tool-call format (has "type": "tool-calls" and "toolCallList")
-    is_vapi_format = data.get("type") == "tool-calls" and "toolCallList" in data
-    vapi_tool_call_id = None
-
-    if is_vapi_format:
-        logger.info("[scheduling/get-time-slots] Detected VAPI tool-call wrapper format")
-        # Extract arguments from first tool call
-        tool_calls = data.get("toolCallList", [])
-        if tool_calls:
-            first_call = tool_calls[0]
-            vapi_tool_call_id = first_call.get("id")
-            # Handle both direct and function wrapper formats
-            if "function" in first_call and isinstance(first_call["function"], dict):
-                args_raw = first_call["function"].get("arguments", "{}")
-                arguments = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-            else:
-                arguments = first_call.get("arguments", {})
-            logger.info(f"[scheduling/get-time-slots] Extracted VAPI arguments: {arguments}")
-        else:
-            arguments = {}
-
-        # Build request from VAPI arguments
-        request = GetTimeSlotsRequest(
-            mode=arguments.get("mode", "full"),
-            specific_date=arguments.get("specific_date"),
-            days_ahead=arguments.get("days_ahead", 3),
-            recruiter_email=arguments.get("recruiter_email"),
-            conversation_id=arguments.get("conversation_id"),
-            recruiter_id=arguments.get("recruiter_id"),
-        )
-    else:
-        # Direct request format
-        request = GetTimeSlotsRequest(**data) if data else GetTimeSlotsRequest()
+    request = GetTimeSlotsRequest(**data) if data else GetTimeSlotsRequest()
 
     logger.info(f"[scheduling/get-time-slots] PARSED REQUEST: {request.model_dump()}")
 
@@ -265,23 +224,6 @@ async def get_time_slots(raw_request: Request):
             lines.append(f"  slot {i}: {slot}")
     logger.info("\n".join(lines))
 
-    # Return in VAPI format if this was a VAPI tool-call request
-    if is_vapi_format:
-        vapi_response = {
-            "results": [{
-                "toolCallId": vapi_tool_call_id,
-                "result": json.dumps({
-                    "slots": response.slots,
-                    "formatted_text": response.formatted_text,
-                    "mode": response.mode,
-                    "has_availability": response.has_availability,
-                    "requested_date": response.requested_date,
-                })
-            }]
-        }
-        logger.info(f"[scheduling/get-time-slots] Returning VAPI format response")
-        return vapi_response
-
     return response
 
 
@@ -291,7 +233,6 @@ async def save_time_slot(raw_request: Request):
     Save a selected interview time slot and create a Google Calendar event.
 
     This endpoint is called by:
-    - VAPI voice agent via tool call (sends wrapper format)
     - ElevenLabs voice agent via webhook tool
     - Frontend applications
 
@@ -300,12 +241,9 @@ async def save_time_slot(raw_request: Request):
     2. Creates a scheduled_interviews record in the database
     3. Creates a Google Calendar event (if configured)
     4. Returns confirmation for the agent to relay to candidate
-
-    Handles both direct requests and VAPI's tool-call wrapper format.
     """
     import json
 
-    # Parse raw body to handle both direct and VAPI wrapper formats
     body = await raw_request.body()
     body_str = body.decode("utf-8") if body else "{}"
     logger.info(f"[scheduling/save-slot] RAW BODY: {body_str}")
@@ -315,55 +253,9 @@ async def save_time_slot(raw_request: Request):
     except json.JSONDecodeError:
         data = {}
 
-    # VAPI wraps tool-call payloads inside a "message" envelope - unwrap it
-    if "message" in data and isinstance(data["message"], dict):
-        logger.info("[scheduling/save-slot] Unwrapping VAPI 'message' envelope")
-        data = data["message"]
-
-    # Check if this is VAPI tool-call format (has "type": "tool-calls" and "toolCallList")
-    is_vapi_format = data.get("type") == "tool-calls" and "toolCallList" in data
-    vapi_tool_call_id = None
-    vapi_call_id = None
-
-    if is_vapi_format:
-        logger.info("[scheduling/save-slot] Detected VAPI tool-call wrapper format")
-        # Extract call_id from the call object (for conversation lookup)
-        call_obj = data.get("call", {})
-        vapi_call_id = call_obj.get("id")
-
-        # Extract arguments from first tool call
-        tool_calls = data.get("toolCallList", [])
-        if tool_calls:
-            first_call = tool_calls[0]
-            vapi_tool_call_id = first_call.get("id")
-            # Handle both direct and function wrapper formats
-            if "function" in first_call and isinstance(first_call["function"], dict):
-                args_raw = first_call["function"].get("arguments", "{}")
-                arguments = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
-            else:
-                arguments = first_call.get("arguments", {})
-            logger.info(f"[scheduling/save-slot] Extracted VAPI arguments: {arguments}")
-        else:
-            arguments = {}
-
-        # Build request from VAPI arguments
-        # Use VAPI call_id as conversation_id for DB lookup
-        request = SaveSlotRequest(
-            conversation_id=vapi_call_id or arguments.get("conversation_id", ""),
-            selected_date=arguments.get("selected_date", ""),
-            selected_time=arguments.get("selected_time", ""),
-            selected_slot_text=arguments.get("selected_slot_text"),
-            candidate_name=arguments.get("candidate_name"),
-            candidate_phone=arguments.get("candidate_phone"),
-            candidate_email=arguments.get("candidate_email"),
-            notes=arguments.get("notes"),
-            debug=arguments.get("debug", False),
-        )
-    else:
-        # Direct request format
-        request = SaveSlotRequest(**data) if data else SaveSlotRequest(
-            conversation_id="", selected_date="", selected_time=""
-        )
+    request = SaveSlotRequest(**data) if data else SaveSlotRequest(
+        conversation_id="", selected_date="", selected_time=""
+    )
 
     # Enhanced logging for debugging webhook calls
     print("\n" + "=" * 60)
@@ -376,7 +268,6 @@ async def save_time_slot(raw_request: Request):
     print(f"  candidate_name:  {request.candidate_name}")
     print(f"  candidate_email: {request.candidate_email}")
     print(f"  debug_mode:      {request.debug}")
-    print(f"  is_vapi_format:  {is_vapi_format}")
     print("-" * 60)
 
     logger.info(
@@ -429,14 +320,6 @@ async def save_time_slot(raw_request: Request):
         print("=" * 60 + "\n")
         logger.info(f"[scheduling/save-slot] DEBUG response: {response.model_dump()}")
 
-        # Return in VAPI format if this was a VAPI tool-call request
-        if is_vapi_format:
-            return {
-                "results": [{
-                    "toolCallId": vapi_tool_call_id,
-                    "result": json.dumps(response.model_dump())
-                }]
-            }
         return response
 
     # Normal mode: save to DB and create calendar event
@@ -524,37 +407,13 @@ async def save_time_slot(raw_request: Request):
                 summary=f"Interview ingepland op {slot_text}"
             )
 
-        # Return in VAPI format if this was a VAPI tool-call request
-        if is_vapi_format:
-            return {
-                "results": [{
-                    "toolCallId": vapi_tool_call_id,
-                    "result": json.dumps(response.model_dump())
-                }]
-            }
         return response
 
     except ValueError as e:
         logger.error(f"[scheduling/save-slot] error: {e}")
-        # Return error in VAPI format if this was a VAPI tool-call request
-        if is_vapi_format:
-            return {
-                "results": [{
-                    "toolCallId": vapi_tool_call_id,
-                    "result": json.dumps({"success": False, "error": str(e)})
-                }]
-            }
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"[scheduling/save-slot] unexpected error: {e}")
-        # Return error in VAPI format if this was a VAPI tool-call request
-        if is_vapi_format:
-            return {
-                "results": [{
-                    "toolCallId": vapi_tool_call_id,
-                    "result": json.dumps({"success": False, "error": "Failed to save scheduled slot"})
-                }]
-            }
         raise HTTPException(status_code=500, detail="Failed to save scheduled slot")
 
 

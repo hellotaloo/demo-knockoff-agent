@@ -14,12 +14,12 @@ import asyncio
 import json
 import logging
 import os
-import re
 import uuid
 from typing import Optional
 
 from src.database import get_db_pool
-from src.services.screening_notes_integration_service import trigger_screening_notes_integration
+from src.utils.json_parser import parse_json_response
+from agents.pre_screening.screening_notes_integration import trigger_screening_notes_integration
 from src.workflows import get_orchestrator
 
 logger = logging.getLogger(__name__)
@@ -191,26 +191,6 @@ Geef je evaluatie als JSON."""
     return prompt, id_map
 
 
-def _parse_json_response(response_text: str) -> dict:
-    """Extract JSON from the model response (handles markdown code blocks)."""
-    json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        json_match = re.search(r"\{[\s\S]*\}", response_text)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            logger.error(f"Could not find JSON in response: {response_text[:500]}")
-            return {}
-
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON: {e}\nJSON string: {json_str[:500]}")
-        return {}
-
-
 async def process_call_results(
     application_id: uuid.UUID,
     pre_screening_id: uuid.UUID,
@@ -301,7 +281,7 @@ async def process_call_results(
             return
 
         logger.debug(f"Raw Gemini response: {response_text[:1000]}")
-        parsed = _parse_json_response(response_text)
+        parsed = parse_json_response(response_text)
         if not parsed:
             logger.error(f"Failed to parse Gemini response for application {application_id}. Response: {response_text[:500]}")
             await _trigger_downstream(pool, application_id, vacancy_id, conversation_id, candidate_name, channel)
@@ -380,7 +360,7 @@ async def process_call_results(
                 application_id,
             )
             if app_info and app_info["candidate_id"]:
-                from src.services.attribute_extraction_service import extract_and_save_attributes
+                from agents.pre_screening.attribute_extraction import extract_and_save_attributes
                 transcript_text = "\n".join(f"{m['role']}: {m['message']}" for m in transcript)
                 extracted = await extract_and_save_attributes(
                     text=transcript_text,

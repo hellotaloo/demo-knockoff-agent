@@ -12,9 +12,11 @@ vacancies via the interview generator agent (when auto_generate is enabled).
 Uses a background task pattern: POST starts the sync, GET polls for progress.
 """
 import asyncio
+import html as html_module
 import json
 import logging
 import re
+import unicodedata
 import uuid as uuid_mod
 from datetime import date, datetime, timezone
 from typing import Optional
@@ -33,6 +35,12 @@ logger = logging.getLogger(__name__)
 
 # Regex to extract {{field}} placeholders from mapping templates
 TEMPLATE_PATTERN = re.compile(r"\{\{(\w+(?:\.\w+)*)\}\}")
+
+# Text sanitization patterns
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_MULTI_SPACE_RE = re.compile(r"[ \t]+")
+_MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 # ---------------------------------------------------------------------------
@@ -113,8 +121,12 @@ class VacancyImportService:
                 return
 
             provider_slug = connection["slug"]
-            credentials = json.loads(connection["credentials"]) if isinstance(connection["credentials"], str) else connection["credentials"]
-            settings = json.loads(connection["settings"]) if isinstance(connection["settings"], str) else (connection["settings"] or {})
+            try:
+                credentials = json.loads(connection["credentials"]) if isinstance(connection["credentials"], str) else connection["credentials"]
+                settings = json.loads(connection["settings"]) if isinstance(connection["settings"], str) else (connection["settings"] or {})
+            except (json.JSONDecodeError, TypeError) as e:
+                _set_progress_error(f"Ongeldige integratie-instellingen: {e}")
+                return
 
             # Resolve the field mapping (custom or default)
             mapping = self._get_active_mapping(settings, provider_slug)
@@ -297,6 +309,9 @@ class VacancyImportService:
             return str(value) if value is not None else ""
         return TEMPLATE_PATTERN.sub(replacer, template).strip()
 
+    # Fields that contain HTML content (should preserve tags but sanitize)
+    HTML_FIELDS = {"description"}
+
     @classmethod
     def _transform_record(cls, record: dict, mapping: dict) -> dict:
         """
@@ -304,6 +319,7 @@ class VacancyImportService:
 
         Returns a dict with keys matching Taloo vacancy fields.
         Handles type coercion for dates and booleans.
+        Sanitizes text to remove control characters, null bytes, etc.
         """
         result = {}
         for target_field, config in mapping.items():
@@ -311,6 +327,8 @@ class VacancyImportService:
             if not template:
                 continue
             value = cls._resolve_template(template, record)
+            if value:
+                value = _clean_text(value, is_html=target_field in cls.HTML_FIELDS)
             result[target_field] = value
 
         # Type coercion
@@ -773,6 +791,36 @@ class VacancyImportService:
 # =============================================================================
 # Helpers
 # =============================================================================
+
+def _clean_text(value: str, *, is_html: bool = False) -> str:
+    """
+    Sanitize text from external ATS systems.
+
+    Removes null bytes, control characters, decodes HTML entities, and
+    normalizes unicode. For plain-text fields (is_html=False), also strips
+    HTML tags and collapses whitespace. For HTML fields (description),
+    preserves tags but still cleans control chars and entities.
+    """
+    if not value:
+        return value
+    # Unicode NFC normalization (prevents duplicate entries from different byte representations)
+    value = unicodedata.normalize("NFC", value)
+    # Remove null bytes and control characters (keep \t, \n, \r)
+    value = _CONTROL_CHAR_RE.sub("", value)
+    # Decode HTML entities (handles double-encoded like &amp;amp; on first pass)
+    value = html_module.unescape(value)
+    if not is_html:
+        # Strip HTML tags from plain-text fields
+        value = _HTML_TAG_RE.sub("", value)
+        # Collapse whitespace
+        value = _MULTI_SPACE_RE.sub(" ", value)
+        value = value.strip()
+    else:
+        # For HTML fields, just collapse excessive newlines
+        value = _MULTI_NEWLINE_RE.sub("\n\n", value)
+        value = value.strip()
+    return value
+
 
 def _get_nested_value(record: dict, field_path: str):
     """Resolve a dotted field path like 'Owner.Email' from a nested dict."""

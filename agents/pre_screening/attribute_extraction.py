@@ -6,9 +6,10 @@ attribute values using Gemini, guided by the attribute type descriptions.
 """
 import json
 import logging
-import re
 import uuid
 from typing import Optional
+
+from src.utils.json_parser import parse_json_response
 
 import asyncpg
 
@@ -81,26 +82,6 @@ def _build_prompt(attribute_types: list[asyncpg.Record], text: str) -> str:
 {text}
 
 Geef je extractie als JSON."""
-
-
-def _parse_json_response(response_text: str) -> dict:
-    """Extract JSON from the model response (handles markdown code blocks)."""
-    json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
-    if json_match:
-        json_str = json_match.group(1)
-    else:
-        json_match = re.search(r"\{[\s\S]*\}", response_text)
-        if json_match:
-            json_str = json_match.group(0)
-        else:
-            logger.error(f"Could not find JSON in response: {response_text[:500]}")
-            return {}
-
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON: {e}\nJSON string: {json_str[:500]}")
-        return {}
 
 
 def _validate_value(value: str, data_type: str, options: Optional[list]) -> bool:
@@ -195,7 +176,7 @@ async def extract_and_save_attributes(
         return []
 
     # 3. Parse response
-    parsed = _parse_json_response(response_text)
+    parsed = parse_json_response(response_text)
     if not parsed:
         logger.error(f"Failed to parse extraction response: {response_text[:500]}")
         return []

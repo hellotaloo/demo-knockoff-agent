@@ -30,7 +30,6 @@ def _get_nodes() -> list[ArchitectureNode]:
         ("pre_screenings", "Pre-screenings", "Pre-screening configuration"),
         ("screening", "Screening", "Chat and simulation endpoints"),
         ("webhooks", "Webhooks", "Twilio and ElevenLabs webhooks"),
-        ("vapi", "VAPI", "VAPI voice call events"),
         ("outbound", "Outbound", "Voice/WhatsApp screening initiation"),
         ("cv", "CV", "CV analysis via Gemini"),
         ("documents", "Documents", "Document verification"),
@@ -70,7 +69,6 @@ def _get_nodes() -> list[ArchitectureNode]:
         ("workspace", "WorkspaceService", "src/services/workspace_service.py", "Workspace and team management"),
         ("demo", "DemoService", "src/services/demo_service.py", "Demo data management"),
         ("session_manager", "SessionManager", "src/services/session_manager.py", "ADK session lifecycle management"),
-        ("vapi", "VapiService", "src/services/vapi_service.py", "VAPI outbound calls"),
         ("whatsapp", "WhatsAppService", "src/services/whatsapp_service.py", "Twilio WhatsApp messaging"),
         ("meta_whatsapp", "MetaWhatsAppService", "src/services/meta_whatsapp_service.py", "Meta WhatsApp Cloud API"),
         ("teams", "TeamsService", "src/services/teams_service.py", "Microsoft Teams notifications"),
@@ -139,7 +137,6 @@ def _get_nodes() -> list[ArchitectureNode]:
 
     # External Integrations
     externals = [
-        ("vapi", "VAPI", "Voice AI platform for phone screening"),
         ("twilio", "Twilio", "WhatsApp messaging via Twilio API"),
         ("elevenlabs", "ElevenLabs", "Voice synthesis and phone screening"),
         ("google_calendar", "Google Calendar", "Interview scheduling"),
@@ -177,10 +174,6 @@ def _get_edges() -> list[ArchitectureEdge]:
         ("router:webhooks", "service:pre_screening"),
         ("router:webhooks", "service:activity"),
         ("router:webhooks", "service:whatsapp"),
-        ("router:vapi", "service:vapi"),
-        ("router:vapi", "service:activity"),
-        ("router:vapi", "service:scheduling"),
-        ("router:outbound", "service:vapi"),
         ("router:outbound", "service:activity"),
         ("router:outbound", "service:workflow"),
         ("router:scheduling", "service:scheduling"),
@@ -218,7 +211,6 @@ def _get_edges() -> list[ArchitectureEdge]:
         ("router:data_query", "agent:recruiter_analyst"),
         ("router:webhooks", "agent:pre_screening_transcript_processor"),
         ("router:webhooks", "agent:pre_screening_whatsapp"),
-        ("router:vapi", "agent:pre_screening_transcript_processor"),
         ("router:screening", "agent:pre_screening_whatsapp"),
         ("router:screening", "agent:candidate_simulator"),
         ("router:document_collection", "agent:document_collection"),
@@ -249,7 +241,6 @@ def _get_edges() -> list[ArchitectureEdge]:
 
     # Service -> External relationships
     service_external_edges = [
-        ("service:vapi", "external:vapi"),
         ("service:whatsapp", "external:twilio"),
         ("service:google_calendar", "external:google_calendar"),
         ("service:google_drive", "external:google_drive"),
@@ -263,7 +254,6 @@ def _get_edges() -> list[ArchitectureEdge]:
     webhook_external_edges = [
         ("router:webhooks", "external:twilio", "webhook"),
         ("router:webhooks", "external:elevenlabs", "webhook"),
-        ("router:vapi", "external:vapi", "webhook"),
         ("router:elevenlabs", "external:elevenlabs", "config"),
     ]
     for source, target, label in webhook_external_edges:

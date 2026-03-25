@@ -82,7 +82,7 @@ async def handle_screening_completed(
     Handle screening completion event.
 
     Called when:
-    - Voice: VAPI end-of-call-report webhook (after transcript processing)
+    - Voice: LiveKit call-result webhook (after transcript processing)
     - WhatsApp: Agent's finish() function (after conversation ends)
 
     The caller passes the screening results in payload:
