@@ -8,7 +8,7 @@ from prompts import greeting_prompt
 
 
 class GreetingAgent(BaseAgent):
-    def __init__(self, job_title: str, candidate_name: str = "", candidate_known: bool = False, allow_escalation: bool = True, require_consent: bool = False, persona_name: str = "Liv") -> None:
+    def __init__(self, job_title: str, candidate_name: str = "", candidate_known: bool = False, allow_escalation: bool = True, require_consent: bool = False, persona_name: str = "Anna") -> None:
         super().__init__(
             instructions=greeting_prompt(job_title, candidate_name, candidate_known, allow_escalation=allow_escalation, require_consent=require_consent, persona_name=persona_name),
             turn_detection=None,  # disable semantic turn detection for simple yes/no

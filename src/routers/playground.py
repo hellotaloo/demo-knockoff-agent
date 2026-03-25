@@ -26,7 +26,7 @@ router = APIRouter(tags=["Playground"])
 class PlaygroundStartRequest(BaseModel):
     vacancy_id: str
     candidate_name: str = "Playground Kandidaat"
-    persona_name: str = "Liv"  # Voice persona name (e.g. "Liv", "Eva") — overrides the default in prompts and voicemail
+    persona_name: str = "Anna"  # Voice persona name (e.g. "Anna", "Eva") — overrides the default in prompts and voicemail
     start_agent: Optional[str] = None  # e.g. "screening", "scheduling" — skip to specific step
     require_consent: bool = False
     candidate_known: bool = False
@@ -70,7 +70,7 @@ async def start_playground_session(request: PlaygroundStartRequest):
         """
         SELECT v.id as vacancy_id, v.title as vacancy_title,
                ps.id as pre_screening_id, ps.published_at,
-               COALESCE(va.is_online, ps.is_online) as is_online,
+               COALESCE(va.status, 'new') as agent_status,
                COALESCE(ol.spoken_name, ol.name) as office_name, ol.address as office_address
         FROM ats.vacancies v
         LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
@@ -85,10 +85,8 @@ async def start_playground_session(request: PlaygroundStartRequest):
         raise HTTPException(status_code=404, detail="Vacancy not found")
     if not row["pre_screening_id"]:
         raise HTTPException(status_code=400, detail="No pre-screening configured for this vacancy")
-    if not row["published_at"]:
+    if row["agent_status"] != "published":
         raise HTTPException(status_code=400, detail="Pre-screening not published")
-    if not row["is_online"]:
-        raise HTTPException(status_code=400, detail="Pre-screening is offline")
 
     # Fetch knockout + qualification questions
     questions = await pool.fetch(

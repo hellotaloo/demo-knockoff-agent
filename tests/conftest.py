@@ -70,13 +70,6 @@ async def published_pre_screening(client: httpx.AsyncClient, vacancy_id: str) ->
             pytest.skip(f"Failed to publish pre-screening: {pub_resp.text}")
         ps = (await client.get(f"/vacancies/{vacancy_id}/pre-screening")).json()
 
-    # Ensure it's online
-    if not ps.get("is_online"):
-        await client.patch(
-            f"/vacancies/{vacancy_id}/pre-screening/status",
-            json={"is_online": True}
-        )
-
     return ps["id"]
 
 

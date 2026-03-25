@@ -19,7 +19,7 @@ from google.adk.sessions import DatabaseSessionService, InMemorySessionService
 from google.adk.events import Event, EventActions
 from google.genai import types
 import time
-from agents.interview_question_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
+from agents.pre_screening.interview_question_generator.agent import generator_agent as interview_agent, editor_agent as interview_editor_agent
 from agents.candidate_simulator.agent import SimulationPersona, create_simulator_agent, run_simulation
 from agents.database_query.agent import set_db_pool as set_data_query_db_pool
 from agents.recruiter_analyst.agent import root_agent as recruiter_analyst_agent
@@ -91,6 +91,7 @@ from src.exceptions import register_exception_handlers
 from src.agents.registry import AgentRegistry
 import src.agents.pre_screening_agent  # noqa: F401 — registers PreScreeningTalooAgent
 import src.agents.document_collection_agent  # noqa: F401 — registers DocumentCollectionTalooAgent
+import src.event_handlers  # noqa: F401 — registers domain event handlers
 
 # Import routers
 from src.routers import (
@@ -118,7 +119,6 @@ from src.routers import (
     teams_router,
     architecture_router,
     interview_analysis_router,
-    ats_simulator_router,
     playground_router,
     playground_chat_router,
     document_collection_v2_router,
@@ -163,6 +163,9 @@ _workflow_ticker_task: Optional[asyncio.Task] = None
 
 # Background task for health monitoring
 _health_monitor_task: Optional[asyncio.Task] = None
+
+# Background task for scheduled ATS sync
+_ats_sync_ticker_task: Optional[asyncio.Task] = None
 
 
 # ============================================================================
@@ -212,10 +215,65 @@ async def _workflow_ticker_loop():
             first_run = False  # Ensure we don't retry immediately on error
 
 
+# ATS sync interval in seconds (30 minutes)
+ATS_SYNC_INTERVAL = int(os.getenv("ATS_SYNC_INTERVAL", 30 * 60))
+
+
+async def _ats_sync_ticker_loop():
+    """Background task that syncs vacancies from ATS every 30 minutes.
+
+    For each workspace with an active ATS connection, triggers a vacancy
+    sync which imports new vacancies and auto-generates pre-screening
+    questions when enabled.
+    """
+    from src.services.vacancy_import_service import VacancyImportService, get_sync_progress
+
+    logger.info(f"🔄 ATS sync ticker started (syncing every {ATS_SYNC_INTERVAL}s)")
+
+    while True:
+        try:
+            await asyncio.sleep(ATS_SYNC_INTERVAL)
+
+            pool = await get_db_pool()
+
+            # Find all workspaces with active ATS connections
+            workspaces = await pool.fetch("""
+                SELECT DISTINCT ic.workspace_id
+                FROM system.integration_connections ic
+                JOIN system.integrations i ON i.id = ic.integration_id
+                WHERE ic.is_active = true
+                  AND i.slug != 'microsoft'
+            """)
+
+            if not workspaces:
+                continue
+
+            # Skip if a manual sync is already running
+            progress = get_sync_progress()
+            if progress and progress.get("status") == "syncing":
+                logger.info("🔄 ATS sync ticker: skipping — manual sync already in progress")
+                continue
+
+            for row in workspaces:
+                workspace_id = row["workspace_id"]
+                try:
+                    logger.info(f"🔄 ATS sync ticker: syncing workspace {workspace_id}")
+                    service = VacancyImportService(pool)
+                    await service.sync(workspace_id)
+                except Exception as e:
+                    logger.error(f"🔄 ATS sync ticker: failed for workspace {workspace_id}: {e}")
+
+        except asyncio.CancelledError:
+            logger.info("🔄 ATS sync ticker stopped")
+            break
+        except Exception as e:
+            logger.error(f"🔄 ATS sync ticker error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifecycle - create session services on startup."""
-    global session_manager, _workflow_ticker_task, _health_monitor_task
+    global session_manager, _workflow_ticker_task, _health_monitor_task, _ats_sync_ticker_task
 
     # Initialize SessionManager
     session_manager = SessionManager(DATABASE_URL)
@@ -272,9 +330,19 @@ async def lifespan(app: FastAPI):
     from src.services.health_monitor import health_monitor_loop
     _health_monitor_task = asyncio.create_task(health_monitor_loop())
 
+    # Start background ATS sync ticker (every 30 minutes)
+    _ats_sync_ticker_task = asyncio.create_task(_ats_sync_ticker_loop())
+
     yield
 
     # Cleanup on shutdown
+    if _ats_sync_ticker_task:
+        _ats_sync_ticker_task.cancel()
+        try:
+            await _ats_sync_ticker_task
+        except asyncio.CancelledError:
+            pass
+
     if _health_monitor_task:
         _health_monitor_task.cancel()
         try:
@@ -356,7 +424,6 @@ app.include_router(livekit_webhook_router)
 app.include_router(teams_router)
 app.include_router(architecture_router)
 app.include_router(interview_analysis_router)
-app.include_router(ats_simulator_router)
 app.include_router(playground_router)
 app.include_router(playground_chat_router)
 app.include_router(document_collection_v2_router)

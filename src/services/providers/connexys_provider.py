@@ -33,18 +33,22 @@ class ConnexysProvider(ATSProvider):
     """Fetches vacancy records from Connexys via the Salesforce REST API."""
 
     async def fetch_vacancies(
-        self, credentials: dict, settings: dict, mapping: dict
+        self, credentials: dict, settings: dict, mapping: dict,
+        since: str | None = None,
     ) -> list[dict]:
         """
         Authenticate to Salesforce, build a SOQL query from the mapping,
         and fetch all matching vacancy records with pagination.
+
+        Args:
+            since: ISO datetime string — only fetch records modified after this time.
         """
         access_token, instance_url = await self._get_token(credentials)
         sf_object = settings.get("sf_object", CONNEXYS_DEFAULT_SF_OBJECT)
 
         # Use cached discovered fields to filter out non-existent fields
         valid_fields = self._get_valid_fields(settings)
-        soql = self._build_soql(mapping, sf_object, valid_fields)
+        soql = self._build_soql(mapping, sf_object, valid_fields, since=since)
         logger.info(f"Connexys SOQL: {soql}")
         records = await self._fetch_all_records(access_token, instance_url, soql)
         logger.info(f"Fetched {len(records)} records from Connexys")
@@ -66,12 +70,18 @@ class ConnexysProvider(ATSProvider):
         return {f["name"] for f in source_fields}
 
     @staticmethod
-    def _build_soql(mapping: dict, sf_object: str, valid_fields: set[str] | None = None) -> str:
+    def _build_soql(
+        mapping: dict, sf_object: str, valid_fields: set[str] | None = None,
+        since: str | None = None,
+    ) -> str:
         """
         Build a SOQL SELECT from the mapping templates.
 
         Extracts all {{field}} references, validates against discovered fields,
         and filters by active vacancy statuses.
+
+        Args:
+            since: ISO datetime string — adds LastModifiedDate filter for incremental sync.
         """
         # Collect all Salesforce fields referenced in the mapping templates
         fields: set[str] = set()
@@ -99,6 +109,12 @@ class ConnexysProvider(ATSProvider):
             f"FROM {sf_object} "
             f"WHERE cxsrec__Status__c IN ({status_list})"
         )
+
+        # Incremental sync: only fetch records modified since last sync
+        if since:
+            soql += f" AND LastModifiedDate >= {since}"
+
+        soql += " ORDER BY LastModifiedDate ASC"
         return soql
 
     # =========================================================================

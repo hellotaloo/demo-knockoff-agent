@@ -3,6 +3,7 @@ Monitoring router - provides global activity feed / event log.
 
 Historical view of agent actions, candidate interactions, and recruiter actions.
 """
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Query, Depends
 
@@ -41,6 +42,11 @@ async def list_activities(
     pool = await get_db_pool()
     service = ActivityService(pool)
 
+    # Parse since string to datetime for asyncpg
+    since_dt = None
+    if since:
+        since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+
     result = await service.get_all_activities(
         actor_type=actor_type,
         event_types=event_type,
@@ -48,7 +54,7 @@ async def list_activities(
         candidate_id=candidate_id,
         vacancy_id=vacancy_id,
         workspace_id=ctx.workspace_id,
-        since=since,
+        since=since_dt,
         limit=limit,
         offset=offset
     )

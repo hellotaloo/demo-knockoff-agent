@@ -35,7 +35,7 @@ def shared_language_rules(allow_escalation: bool = True) -> str:
     return rules
 
 
-def greeting_prompt(job_title: str, candidate_name: str = "", candidate_known: bool = False, allow_escalation: bool = True, require_consent: bool = False, persona_name: str = "Liv") -> str:
+def greeting_prompt(job_title: str, candidate_name: str = "", candidate_known: bool = False, allow_escalation: bool = True, require_consent: bool = False, persona_name: str = "Anna") -> str:
     if require_consent:
         intro_steps = f'Je hebt jezelf al voorgesteld aan de kandidaat. Ga direct verder met de consent-vraag.\n1. Zeg: "Voor we beginnen: dit gesprek kan opgenomen worden voor kwaliteits- en trainingsdoeleinden. Is dat oke voor jou?"\n2. Als de kandidaat JA zegt → roep `record_consent` aan.\n3. Als de kandidaat NEE zegt → roep `record_no_consent` aan.'
         n = 4
@@ -83,7 +83,7 @@ def greeting_prompt(job_title: str, candidate_name: str = "", candidate_known: b
 """
 
 
-def screening_prompt(job_title: str, allow_escalation: bool = True, persona_name: str = "Liv") -> str:
+def screening_prompt(job_title: str, allow_escalation: bool = True, persona_name: str = "Anna") -> str:
     return f"""\
 # Wie je bent
 - Je bent {persona_name}, de digitale assistent van Go For Jobs.
@@ -99,7 +99,7 @@ def screening_prompt(job_title: str, allow_escalation: bool = True, persona_name
 """
 
 
-def open_questions_prompt(job_title: str, allow_escalation: bool = True, persona_name: str = "Liv") -> str:
+def open_questions_prompt(job_title: str, allow_escalation: bool = True, persona_name: str = "Anna") -> str:
     return f"""\
 # Wie je bent
 - Je bent {persona_name}, de digitale assistent van Go For Jobs.
@@ -113,7 +113,7 @@ def open_questions_prompt(job_title: str, allow_escalation: bool = True, persona
 """
 
 
-def alternative_prompt(job_title: str, allow_escalation: bool = True, persona_name: str = "Liv") -> str:
+def alternative_prompt(job_title: str, allow_escalation: bool = True, persona_name: str = "Anna") -> str:
     return f"""\
 # Wie je bent
 - Je bent {persona_name}, de digitale assistent van Go For Jobs.
@@ -129,7 +129,7 @@ def alternative_prompt(job_title: str, allow_escalation: bool = True, persona_na
 """
 
 
-def scheduling_prompt(today: str, allow_escalation: bool = True, persona_name: str = "Liv") -> str:
+def scheduling_prompt(today: str, allow_escalation: bool = True, persona_name: str = "Anna") -> str:
     return f"""\
 # Wie je bent
 - Je bent {persona_name}, de digitale assistent van Go For Jobs.

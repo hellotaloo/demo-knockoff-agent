@@ -119,7 +119,8 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest, ctx: Au
         """
         SELECT v.id as vacancy_id, v.title as vacancy_title, v.workspace_id,
                ps.id as pre_screening_id, ps.elevenlabs_agent_id, ps.whatsapp_agent_id,
-               COALESCE(va.is_online, ps.is_online) as is_online, ps.published_at, ps.intro
+               ps.published_at, ps.intro, ps.voice_enabled,
+               COALESCE(va.status, 'new') as agent_status
         FROM ats.vacancies v
         LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
         LEFT JOIN ats.vacancy_agents va ON va.vacancy_id = v.id AND va.agent_type = 'prescreening'
@@ -137,11 +138,11 @@ async def initiate_outbound_screening(request: OutboundScreeningRequest, ctx: Au
     if not row["pre_screening_id"]:
         raise HTTPException(status_code=400, detail="No pre-screening configured for this vacancy")
 
-    if not row["published_at"]:
+    if row["agent_status"] != "published":
         raise HTTPException(status_code=400, detail="Pre-screening is not published yet")
 
-    if not row["is_online"]:
-        raise HTTPException(status_code=400, detail="Pre-screening is offline. Set it online first.")
+    if not row["voice_enabled"]:
+        raise HTTPException(status_code=400, detail="Voice channel is not enabled for this pre-screening")
 
     # Normalize phone number
     phone = request.phone_number

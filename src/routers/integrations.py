@@ -186,6 +186,7 @@ async def check_connection_health(
 
 @router.post("/sync", status_code=202)
 async def start_sync(
+    full: bool = False,
     ctx: AuthContext = Depends(require_workspace),
     pool=Depends(get_pool),
 ):
@@ -194,6 +195,9 @@ async def start_sync(
 
     Resolves the active connection automatically — no connection_id needed.
     Runs in the background; poll GET /integrations/sync/status for progress.
+
+    Args:
+        full: If true, ignore last_synced_at and fetch all records.
     """
     # Check if a sync is already running
     progress = get_sync_progress()
@@ -201,7 +205,7 @@ async def start_sync(
         raise HTTPException(status_code=409, detail="Een sync is al bezig")
 
     service = VacancyImportService(pool)
-    asyncio.create_task(service.sync(ctx.workspace_id))
+    asyncio.create_task(service.sync(ctx.workspace_id, full=full))
     return {"status": "started", "message": "Sync gestart"}
 
 

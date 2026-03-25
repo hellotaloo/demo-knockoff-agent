@@ -18,3 +18,5 @@ livekit
 livekit-api
 phonenumbers
 sentry-sdk[fastapi]
+markdownify
+pyyaml

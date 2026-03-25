@@ -50,6 +50,10 @@ class SessionManager:
         self.interview_editor_runner: Optional[Runner] = None
         self.analyst_runner: Optional[Runner] = None
 
+        # Agent references (stored for session service recreation on connection errors)
+        self.interview_agent: Optional[Agent] = None
+        self.interview_editor_agent: Optional[Agent] = None
+
         # Document collection runners cache (keyed by collection_id)
         self.document_runners: dict[str, Runner] = {}
 
@@ -68,6 +72,10 @@ class SessionManager:
         interview_editor_agent: Agent
     ) -> DatabaseSessionService:
         """Create interview generator session service and runners."""
+        # Store agent references for recreation on connection errors
+        self.interview_agent = interview_agent
+        self.interview_editor_agent = interview_editor_agent
+
         self.interview_session_service = DatabaseSessionService(
             db_url=self.database_url,
             **self.engine_kwargs

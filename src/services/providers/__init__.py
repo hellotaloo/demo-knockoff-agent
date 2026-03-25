@@ -20,7 +20,8 @@ class ATSProvider:
     """Base class for ATS provider integrations."""
 
     async def fetch_vacancies(
-        self, credentials: dict, settings: dict, mapping: dict
+        self, credentials: dict, settings: dict, mapping: dict,
+        since: str | None = None,
     ) -> list[dict]:
         """
         Fetch raw vacancy records from the external system.
@@ -29,6 +30,7 @@ class ATSProvider:
             credentials: Provider-specific auth credentials.
             settings: Connection settings (e.g. sf_object, custom config).
             mapping: Active field mapping (target_field -> {"template": "{{Source.Field}}"}).
+            since: ISO datetime string — only fetch records modified after this time.
 
         Returns:
             List of raw record dicts from the external system.

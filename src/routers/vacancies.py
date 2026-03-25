@@ -16,7 +16,6 @@ from src.models.common import PaginatedResponse
 from src.models.vacancy import VacancyResponse, VacancyStatsResponse, DashboardStatsResponse, VacancyDetailResponse, VacancyUpdateRequest
 from src.models.application import ApplicationResponse, QuestionAnswerResponse, CVApplicationRequest
 from src.repositories import VacancyRepository, ApplicationRepository
-from src.repositories.vacancy_agent_repo import VacancyAgentRepository
 from src.services import VacancyService, ActivityService
 from src.database import get_db_pool
 from src.dependencies import get_vacancy_repo, get_vacancy_service
@@ -499,55 +498,25 @@ async def list_medical_risks(search: Optional[str] = Query(None, description="Se
 # ─── Vacancy Agent Status ───────────────────────────────────────────────────
 
 
-class AgentStatusUpdate(BaseModel):
-    """Toggle is_online for a vacancy agent."""
-    is_online: bool
-
-
-@router.patch("/vacancies/{vacancy_id}/agents/{agent_type}/status")
-async def update_agent_status(
-    vacancy_id: str,
-    agent_type: str,
-    body: AgentStatusUpdate,
-    ctx: AuthContext = Depends(require_workspace),
-):
-    """Toggle online/offline for a vacancy agent."""
-    vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
-    pool = await get_db_pool()
-    await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
-    repo = VacancyAgentRepository(pool)
-
-    row = await repo.set_online(vacancy_uuid, agent_type, body.is_online)
-    if not row:
-        raise HTTPException(status_code=404, detail="Vacancy agent not found")
-
-    return {
-        "vacancy_id": str(row["vacancy_id"]),
-        "agent_type": row["agent_type"],
-        "is_online": row["is_online"],
-        "created_at": row["created_at"].isoformat(),
-    }
-
-
 @router.get("/vacancies/{vacancy_id}/agents/{agent_type}/status")
 async def get_agent_status(
     vacancy_id: str,
     agent_type: str,
     ctx: AuthContext = Depends(require_workspace),
 ):
-    """Get online/offline status for a vacancy agent."""
+    """Get status for a vacancy agent."""
     vacancy_uuid = parse_uuid(vacancy_id, field="vacancy_id")
     pool = await get_db_pool()
     await _verify_vacancy_workspace(pool, vacancy_uuid, ctx.workspace_id)
-    repo = VacancyAgentRepository(pool)
+    repo = VacancyRepository(pool)
 
-    row = await repo.get(vacancy_uuid, agent_type)
+    row = await repo.get_agent(vacancy_uuid, agent_type)
     if not row:
         raise HTTPException(status_code=404, detail="Vacancy agent not found")
 
     return {
         "vacancy_id": str(row["vacancy_id"]),
         "agent_type": row["agent_type"],
-        "is_online": row["is_online"],
+        "status": row["status"],
         "created_at": row["created_at"].isoformat(),
     }

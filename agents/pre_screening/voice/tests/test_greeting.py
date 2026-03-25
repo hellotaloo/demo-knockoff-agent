@@ -44,7 +44,7 @@ async def test_greeting_happy_path(llm, judge_llm):
             result = await sess.run(user_input="Hallo")
             await result.expect.next_event().is_message(role="assistant").judge(
                 judge_llm,
-                intent="Introduces herself as Liv and explains the purpose of the call",
+                intent="Introduces herself as Anna and explains the purpose of the call",
             )
 
             result = await sess.run(user_input="Ja, stel maar je vragen")

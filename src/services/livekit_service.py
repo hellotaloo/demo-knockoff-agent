@@ -80,6 +80,13 @@ async def fetch_scheduling_config() -> dict:
     }
 
 
+async def fetch_persona_name() -> str:
+    """Fetch persona_name from the pre_screening general config. Defaults to 'Anna'."""
+    settings = await fetch_agent_config("pre_screening")
+    general = settings.get("general", {})
+    return general.get("persona_name", "Anna")
+
+
 class LiveKitService:
     """
     Service for dispatching voice screening calls via LiveKit.
@@ -118,7 +125,7 @@ class LiveKitService:
         existing_booking_date: Optional[str] = None,
         require_consent: bool = False,
         allow_escalation: bool = True,
-        persona_name: str = "Liv",
+        persona_name: str = "Anna",
     ) -> dict:
         """
         Map backend DB questions to pre_screening_voice_agent SessionInput format.
@@ -202,6 +209,7 @@ class LiveKitService:
         voice_config = await fetch_voice_config()
         screening_config = await fetch_pre_screening_config()
         scheduling_config = await fetch_scheduling_config()
+        persona_name = await fetch_persona_name()
 
         session_input = self._build_session_input(
             call_id=room_name,
@@ -214,6 +222,7 @@ class LiveKitService:
             voice_config=voice_config,
             require_consent=screening_config["require_consent"],
             allow_escalation=screening_config["allow_escalation"],
+            persona_name=persona_name,
         )
         session_input["schedule_days_ahead"] = scheduling_config["schedule_days_ahead"]
         session_input["schedule_start_offset"] = scheduling_config["schedule_start_offset"]

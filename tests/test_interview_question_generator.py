@@ -23,7 +23,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from agents.interview_question_generator.agent import generator_agent
+from agents.pre_screening.interview_question_generator.agent import generator_agent
 
 
 # Sample vacancy text for testing (Dutch)

@@ -17,8 +17,8 @@ class PreScreeningRepository:
         """Get pre-screening configuration for a vacancy with agent IDs."""
         return await self.pool.fetchrow(
             """
-            SELECT id, vacancy_id, intro, knockout_failed_action, final_action, status,
-                   created_at, updated_at, published_at, is_online, elevenlabs_agent_id, whatsapp_agent_id,
+            SELECT id, vacancy_id, display_title, intro, knockout_failed_action, final_action, status,
+                   created_at, updated_at, published_at, elevenlabs_agent_id, whatsapp_agent_id,
                    voice_enabled, whatsapp_enabled, cv_enabled
             FROM agents.pre_screenings
             WHERE vacancy_id = $1
@@ -46,7 +46,8 @@ class PreScreeningRepository:
         final_action: str,
         knockout_questions: list[dict],
         qualification_questions: list[dict],
-        approved_ids: list[str]
+        approved_ids: list[str],
+        display_title: str | None = None
     ) -> uuid.UUID:
         """
         Save or update pre-screening configuration with questions.
@@ -62,15 +63,15 @@ class PreScreeningRepository:
                 )
 
                 if existing_id:
-                    # Update existing pre-screening
+                    # Update existing pre-screening (preserve display_title if not provided)
                     await conn.execute(
                         """
                         UPDATE agents.pre_screenings
                         SET intro = $1, knockout_failed_action = $2, final_action = $3,
-                            status = 'active', updated_at = NOW()
-                        WHERE id = $4
+                            display_title = COALESCE($4, display_title), status = 'active', updated_at = NOW()
+                        WHERE id = $5
                         """,
-                        intro, knockout_failed_action, final_action, existing_id
+                        intro, knockout_failed_action, final_action, display_title, existing_id
                     )
                     pre_screening_id = existing_id
 
@@ -83,11 +84,11 @@ class PreScreeningRepository:
                     # Create new pre-screening
                     row = await conn.fetchrow(
                         """
-                        INSERT INTO agents.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, status)
-                        VALUES ($1, $2, $3, $4, 'active')
+                        INSERT INTO agents.pre_screenings (vacancy_id, intro, knockout_failed_action, final_action, display_title, status)
+                        VALUES ($1, $2, $3, $4, $5, 'active')
                         RETURNING id
                         """,
-                        vacancy_id, intro, knockout_failed_action, final_action
+                        vacancy_id, intro, knockout_failed_action, final_action, display_title
                     )
                     pre_screening_id = row["id"]
 
@@ -148,7 +149,6 @@ class PreScreeningRepository:
         published_at: datetime,
         elevenlabs_agent_id: Optional[str],
         whatsapp_agent_id: Optional[str],
-        is_online: bool,
         voice_enabled: bool,
         whatsapp_enabled: bool,
         cv_enabled: bool
@@ -160,14 +160,13 @@ class PreScreeningRepository:
             SET published_at = $1,
                 elevenlabs_agent_id = $2,
                 whatsapp_agent_id = $3,
-                is_online = $4,
-                voice_enabled = $5,
-                whatsapp_enabled = $6,
-                cv_enabled = $7,
+                voice_enabled = $4,
+                whatsapp_enabled = $5,
+                cv_enabled = $6,
                 updated_at = NOW()
-            WHERE id = $8
+            WHERE id = $7
             """,
-            published_at, elevenlabs_agent_id, whatsapp_agent_id, is_online,
+            published_at, elevenlabs_agent_id, whatsapp_agent_id,
             voice_enabled, whatsapp_enabled, cv_enabled, pre_screening_id
         )
 
@@ -189,27 +188,21 @@ class PreScreeningRepository:
                 agent_id, pre_screening_id
             )
 
-    async def update_status_flags(
+    async def update_channel_flags(
         self,
         pre_screening_id: uuid.UUID,
-        is_online: Optional[bool] = None,
         voice_enabled: Optional[bool] = None,
         whatsapp_enabled: Optional[bool] = None,
         cv_enabled: Optional[bool] = None
     ):
         """
-        Update status flags dynamically.
+        Update channel flags dynamically.
 
         Only provided fields will be updated.
         """
         updates = []
         params = []
         param_idx = 1
-
-        if is_online is not None:
-            updates.append(f"is_online = ${param_idx}")
-            params.append(is_online)
-            param_idx += 1
 
         if voice_enabled is not None:
             updates.append(f"voice_enabled = ${param_idx}")
@@ -241,23 +234,16 @@ class PreScreeningRepository:
         """
         await self.pool.execute(query, *params)
 
-    async def get_with_status(self, pre_screening_id: uuid.UUID) -> Optional[asyncpg.Record]:
-        """Get pre-screening with current status flags and agent IDs."""
+    async def get_with_channels(self, pre_screening_id: uuid.UUID) -> Optional[asyncpg.Record]:
+        """Get pre-screening with current channel flags and agent IDs."""
         return await self.pool.fetchrow(
             """
-            SELECT is_online, voice_enabled, whatsapp_enabled, cv_enabled,
+            SELECT voice_enabled, whatsapp_enabled, cv_enabled,
                    elevenlabs_agent_id, whatsapp_agent_id
             FROM agents.pre_screenings
             WHERE id = $1
             """,
             pre_screening_id
-        )
-
-    async def update_online_status(self, pre_screening_id: uuid.UUID, is_online: bool):
-        """Toggle online/offline status."""
-        await self.pool.execute(
-            "UPDATE agents.pre_screenings SET is_online = $1, updated_at = NOW() WHERE id = $2",
-            is_online, pre_screening_id
         )
 
     # -------------------------------------------------------------------------

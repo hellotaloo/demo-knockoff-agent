@@ -53,9 +53,11 @@ TALOO_TARGET_FIELDS = [
     MappingFieldInfo(name="office_address", label="Kantoor adres", type="text", required=False, description="Volledig adres van het kantoor", group="Kantoor"),
     MappingFieldInfo(name="office_source_id", label="Kantoor extern ID", type="text", required=False, description="Uniek ID van het kantoor uit het bronsysteem", group="Kantoor"),
     MappingFieldInfo(name="office_spoken_name", label="Kantoor uitspraaknaam", type="text", required=False, description="Uitspraaknaam van het kantoor (voor voice)", group="Kantoor"),
+    # Links
+    MappingFieldInfo(name="job_url_website", label="Website URL", type="text", required=False, description="URL van de vacature op de eigen website", group="Links"),
     # Synchronisatie
     MappingFieldInfo(name="sync_filter", label="Sync filter", type="boolean", required=False, description="Veld dat bepaalt of de vacature gesynchroniseerd wordt", group="Synchronisatie"),
-    MappingFieldInfo(name="is_online", label="Online pre-screening", type="boolean", required=False, description="true = online pre-screening, false = offline", group="Synchronisatie"),
+    MappingFieldInfo(name="is_online", label="Online in ATS", type="boolean", required=False, description="false = vacature archiveren bij sync", group="Synchronisatie"),
 ]
 
 CONNEXYS_SOURCE_FIELDS = [
@@ -80,6 +82,7 @@ CONNEXYS_SOURCE_FIELDS = [
     SourceFieldInfo(name="job_brand__c", label="Brand", category="vacancy"),
     SourceFieldInfo(name="cbx_itzu_website__c", label="ITZU Website (online/offline)", category="vacancy"),
     SourceFieldInfo(name="sync_to_taloo__c", label="Sync naar Taloo", category="vacancy"),
+    SourceFieldInfo(name="job_url_website__c", label="Website URL", category="vacancy"),
     SourceFieldInfo(name="CreatedDate", label="Aanmaakdatum", category="vacancy"),
     SourceFieldInfo(name="LastModifiedDate", label="Laatste wijziging", category="vacancy"),
     # Owner (recruiter) fields
@@ -115,6 +118,7 @@ CONNEXYS_DEFAULT_MAPPING = {
     "office_address": {"template": "{{job_office__r.office_street__c}} {{job_office__r.office_number__c}}, {{job_office__r.office_postalcode__c}} {{job_office__r.office_city__c}}"},
     "office_source_id": {"template": "{{job_office__r.Id}}"},
     "office_spoken_name": {"template": ""},
+    "job_url_website": {"template": "{{job_url_website__c}}"},
     "sync_filter": {"template": "{{sync_to_taloo__c}}"},
     "is_online": {"template": "{{cbx_itzu_website__c}}"},
 }

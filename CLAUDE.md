@@ -24,9 +24,9 @@ taloo-backend/
 │   ├── document_collection/
 │   │   ├── collection/
 │   │   └── recognition/
-│   ├── interview_question_generator/
 │   ├── pre_screening/
 │   │   ├── interview_analyzer/
+│   │   ├── interview_question_generator/
 │   │   ├── transcript_processor/
 │   │   ├── voice/
 │   │   └── whatsapp/
@@ -111,7 +111,7 @@ Required in `.env` (local development):
 All agents are Google ADK agents using Gemini models.
 
 ### Core Agents
-1. **Interview Generator** (`agents/interview_question_generator/agent.py`) - Generates knockout + qualification questions from vacancy text
+1. **Interview Generator** (`agents/pre_screening/interview_question_generator/agent.py`) - Generates knockout + qualification questions from vacancy text
 2. **Pre-screening WhatsApp Agent** (`agents/pre_screening/whatsapp/agent.py`) - WhatsApp screening conversations (code-controlled flow)
 3. **Voice Agent** (`agents/pre_screening/voice/`) - Self-contained pre-screening v2 microservice
 

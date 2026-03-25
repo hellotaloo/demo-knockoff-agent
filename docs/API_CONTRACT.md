@@ -4,12 +4,16 @@ Complete API reference for the Taloo recruitment screening platform.
 
 ## Changelog
 
+- **2026-03-25** — Added optional `content_yaml` and `variables` fields to `GET /pre-screening/config` and `PATCH /pre-screening/config`. The config endpoint now returns apply popup content alongside settings, and accepts both in a single save call — eliminating the need for separate `PUT /pre-screening/apply-popup-content` requests. Standalone apply popup endpoints remain available for backward compatibility and preview
 - **2026-03-21** — Added workspace member management: super admin support (`@taloo.eu` accounts bypass workspace membership, full access to all workspaces), `GET /admin/workspaces` (super admin lists all workspaces), invitation management endpoints (`GET /workspaces/{id}/invitations`, `DELETE /workspaces/{id}/invitations/{invitation_id}`, `POST /workspaces/invitations/accept`). Added `SUPER_ADMIN` to `WorkspaceRole` enum, `AcceptInvitationRequest` model, `invited_by_name` to `WorkspaceInvitationResponse`. Invitation emails sent via Resend: invitation email with accept link for new users, added-notification email for existing users. Emails gracefully skip when `RESEND_API_KEY` is not configured
 - **2026-03-21** — Added `group` field (string) to `MappingFieldInfo` in `GET /integrations/connections/{id}/mapping-schema`. Groups target fields into logical UI sections: Algemeen, Beschrijving, Locatie, Recruiter, Kantoor, Synchronisatie. Frontend renders groups as section headers in the order they appear in the array. Defaults to `"Algemeen"` if absent
 - **2026-03-20** — Added `office` (`OfficeSummary`) and `job_function` (`JobFunctionSummary`) fields to `VacancyResponse`. Office locations are now synced per-vacancy from Connexys (`job_office__r`) instead of using the workspace default. Added `office_name`, `office_phone`, `office_source_id` to Connexys field mapping. Enhanced `ats.office_locations` table with `email`, `phone`, `source`, `source_id` columns
 - **2026-03-20** — Added data push-back (export to ATS) endpoints: `GET /integrations/connections/{id}/export-mapping-schema` for configuring export field mappings, `POST /integrations/connections/{id}/discover-export-fields` for discovering writable fields on the target Connexys object, `POST /integrations/applications/{id}/push-to-ats` for pushing a single application's screening results, `POST /integrations/vacancies/{id}/push-to-ats` for batch-pushing all unsynced applications. New types: `ExportFieldInfo`, `ExportMappingSchemaResponse`, `PushbackResultResponse`. Export mapping stored in `settings.data_pushback` (same JSONB column as import mapping). Uses `{{field}}` template syntax with Taloo application fields as source
 - **2026-03-19** — Added `POST /integrations/sync` and `GET /integrations/sync/status` endpoints for vacancy import from external ATS integrations. Sync resolves the workspace's active ATS connection automatically (no connection_id needed). Runs as a background task with polling for progress. Uses provider-agnostic architecture: `VacancyImportService` handles mapping/upsert, `ConnexysProvider` handles Salesforce-specific fetching. New type: `SyncProgressResponse`
+- **2026-03-25** — Added apply popup content management endpoints: `GET /pre-screening/apply-popup-content`, `PUT /pre-screening/apply-popup-content`, `POST /pre-screening/apply-popup-content/preview`. Allows per-workspace customization of the candidate apply popup copy (choice screen, phone form, CV form) stored as versioned YAML in `agent_config` with template variables (`{persona_name}`, `{privacy_url}`)
 - **2026-03-19** — Added `GET /auth/login/microsoft` endpoint for Microsoft OAuth login. Mirrors the existing Google OAuth flow — redirects to Microsoft consent page via Supabase Auth. Existing `/auth/callback` handles both providers
+- **2026-03-25** — Added `channels` object (`{voice, whatsapp, cv}`) to `GET /agents/prescreening/vacancies` response. Shows which screening channels are enabled per vacancy. Null when no pre-screening record exists
+- **2026-03-25** — Moved `auto_generate` setting from `settings.general.auto_generate` to `settings.publishing.auto_generate` in agent config. The `GET/PUT /pre-screening/auto-generate` endpoints now read/write from the `publishing` section. Auto-generate is now triggered automatically after ATS vacancy sync for newly imported vacancies. Added scheduled ATS sync background task (every 30 minutes, configurable via `ATS_SYNC_INTERVAL` env var)
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 3). Extended workspace isolation to activities and audit trail: `GET /api/activities/tasks`, `POST /api/activities/tasks/{id}/complete`, `GET /monitoring`. All now require `Authorization` + `X-Workspace-ID` headers. Activities filter workflows by `workspace_id` column (added to `agents.workflows` table). Audit trail filters through vacancy/candidate workspace ownership. Added `GET /clients` endpoint for workspace-scoped client listing with vacancy/candidate counts
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 2). Extended workspace isolation to all data listing endpoints: `GET /vacancies`, `GET /vacancies/stats`, `GET /candidates`, `GET /agents/counts`, `GET /agents/prescreening/vacancies`, `GET /agents/preonboarding/vacancies`, `GET /agents/prescreening/stats`, `GET /agents/preonboarding/stats`. All now require `Authorization` + `X-Workspace-ID` headers and filter data by workspace. Navigation counts (`GET /agents/counts`) no longer hardcodes a workspace UUID — reads from auth context
 - **2026-03-19** — **BREAKING**: Workspace scoping migration (phase 1). All `/integrations/connections/*` endpoints and `/pre-screening/config`, `/pre-screening/auto-generate` endpoints now require `Authorization: Bearer <token>` and `X-Workspace-ID: <uuid>` headers. Requests without these headers will receive 401/400 errors. Connection-by-ID operations now verify the connection belongs to the caller's workspace (returns 404 for cross-workspace access). Removed hardcoded `DEFAULT_WORKSPACE_ID` from integrations router. Added reusable `require_workspace` auth dependency
@@ -1359,6 +1363,7 @@ List all non-archived vacancies with prescreening agent status and stats. Return
         {"key": "completed_count", "label": "Afgerond", "value": 12},
         {"key": "qualified_count", "label": "Gekwalificeerd", "value": 8}
       ],
+      "channels": {"voice": true, "whatsapp": true, "cv": false},
       "last_activity_at": "2025-01-20T09:15:00Z",
       "recruiter": {"id": "uuid", "name": "Sarah De Vos"},
       "client": {"id": "uuid", "name": "Vandemoortele"}
@@ -1369,6 +1374,8 @@ List all non-archived vacancies with prescreening agent status and stats. Return
   "offset": 0
 }
 ```
+
+**`channels`:** Which screening channels are enabled for this vacancy (`voice`, `whatsapp`, `cv`). Null when no pre-screening record exists.
 
 **`agent_status` values:** `new` (no pre-screening), `generated` (draft), `published`
 
@@ -1905,6 +1912,8 @@ interface PreScreeningConfigResponse {
   success_message: string | null;// Custom success message
   require_consent: boolean;      // Ask candidate consent before screening
   allow_escalation: boolean;     // Allow candidates to request a human
+  content_yaml: string | null;   // Apply popup YAML content (included for unified save)
+  variables: object | null;      // Apply popup variables (e.g. { privacy_url: "..." })
 }
 ```
 
@@ -1934,6 +1943,8 @@ interface PreScreeningConfigUpdateRequest {
   success_message?: string;
   require_consent?: boolean;
   allow_escalation?: boolean;
+  content_yaml?: string;          // Apply popup YAML content (saves in one call)
+  variables?: object;             // Apply popup variables (e.g. { privacy_url: "..." })
 }
 ```
 
@@ -1944,11 +1955,12 @@ interface PreScreeningConfigUpdateRequest {
 | Status | Error |
 |--------|-------|
 | 400 | No fields to update |
+| 400 | Ongeldige YAML: ... (when content_yaml has invalid YAML syntax) |
 | 404 | Pre-screening config not found |
 
 ### GET /pre-screening/auto-generate
 
-Get the current auto-generate toggle state. When enabled (default), newly imported vacancies automatically get pre-screening questions generated.
+Get the current auto-generate toggle state. When enabled (default), newly imported vacancies automatically get pre-screening questions generated. Stored in `settings.publishing.auto_generate` in the pre_screening agent config.
 
 **Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
 
@@ -1985,6 +1997,89 @@ Toggle auto-generate for pre-screening on/off.
 | Status | Error |
 |--------|-------|
 | 404 | No workspace found |
+
+---
+
+## Apply Popup Content
+
+Manage the copy/content for the candidate apply popup widget. Content is stored as YAML per workspace with template variables (`{persona_name}`, `{privacy_url}`) resolved at serve-time. Uses the `agent_config` versioned config infrastructure with `config_type = 'apply_popup'`.
+
+### GET /pre-screening/apply-popup-content
+
+Get the current apply popup content configuration.
+
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
+
+**Response (200):**
+
+```json
+{
+  "content_yaml": "choice_screen:\n  subtitle: \"Solliciteer sneller met {persona_name}...\"\n  ...",
+  "variables": {
+    "persona_name": "Anna",
+    "privacy_url": "https://example.com/privacy"
+  },
+  "version": 1
+}
+```
+
+Returns default template with `version: 0` if no custom content has been saved yet.
+
+### PUT /pre-screening/apply-popup-content
+
+Save new apply popup content. Creates a new version. Validates YAML syntax before saving.
+
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
+
+**Request Body:**
+
+```json
+{
+  "content_yaml": "choice_screen:\n  title: \"Custom title\"\n  ...",
+  "variables": {
+    "persona_name": "Lisa",
+    "privacy_url": "https://klant.be/privacy"
+  }
+}
+```
+
+Both fields are optional — omitted fields keep their current value.
+
+**Response (200):** Same as GET response with incremented version.
+
+**Error Responses:**
+
+| Status | Error |
+|--------|-------|
+| 400 | Invalid YAML syntax |
+
+### POST /pre-screening/apply-popup-content/preview
+
+Preview the rendered content with all `{variable}` placeholders substituted.
+
+**Headers:** `Authorization: Bearer <token>`, `X-Workspace-ID: <uuid>` (required)
+
+**Request Body:** Same as PUT (optional fields — uses saved/default values as fallback).
+
+**Response (200):**
+
+```json
+{
+  "rendered": {
+    "choice_screen": {
+      "subtitle": "Solliciteer sneller met Anna, je digitale assistent",
+      "title": "Hoe wil je solliciteren?",
+      "..."
+    },
+    "phone_form": { "..." },
+    "cv_form": { "..." }
+  },
+  "variables": {
+    "persona_name": "Anna",
+    "privacy_url": "https://example.com/privacy"
+  }
+}
+```
 
 ---
 
@@ -2811,7 +2906,7 @@ Creates a LiveKit access token with embedded agent dispatch. When the browser co
 interface PlaygroundStartRequest {
   vacancy_id: string;
   candidate_name?: string;     // Default: "Playground Kandidaat"
-  persona_name?: string;       // Default: "Liv" — voice persona name used in prompts and voicemail (e.g. "Eva", "Sophie")
+  persona_name?: string;       // Default: "Anna" — voice persona name used in prompts and voicemail (e.g. "Anna", "Sophie")
   start_agent?: string;        // Skip to specific step: "greeting" | "screening" | "open_questions" | "scheduling"
   require_consent?: boolean;   // Default: false
   candidate_known?: boolean;   // Default: false — known candidate with existing data

@@ -65,7 +65,6 @@ class WorkflowOrchestrator:
         from src.workflows.vacancy_setup import (
             STEP_CONFIG as VACANCY_SETUP_STEP_CONFIG,
             handle_questions_saved,
-            handle_run_analysis,
             handle_recruiter_approved,
             handle_auto_publish,
             handle_send_published_notification,
@@ -81,7 +80,6 @@ class WorkflowOrchestrator:
 
         # Vacancy setup workflow handlers
         self.handlers[("vacancy_setup", "generating", "questions_saved")] = handle_questions_saved
-        self.handlers[("vacancy_setup", "analyzing", "auto")] = handle_run_analysis
         self.handlers[("vacancy_setup", "awaiting_review", "recruiter_approved")] = handle_recruiter_approved
         self.handlers[("vacancy_setup", "publishing", "auto")] = handle_auto_publish
         self.handlers[("vacancy_setup", "notifying", "auto")] = handle_send_published_notification

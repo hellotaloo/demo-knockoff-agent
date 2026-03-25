@@ -20,7 +20,6 @@ from src.services import (
     VacancyService,
     ApplicationService,
     PreScreeningService,
-    InterviewService,
     DemoService
 )
 
@@ -107,12 +106,6 @@ async def get_pre_screening_service(
     """Get a PreScreeningService instance."""
     return PreScreeningService(pool)
 
-
-async def get_interview_service(
-    session_manager: SessionManager = Depends(get_session_manager)
-) -> InterviewService:
-    """Get an InterviewService instance."""
-    return InterviewService(session_manager)
 
 
 async def get_demo_service(

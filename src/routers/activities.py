@@ -243,7 +243,6 @@ def _get_step_label(step: str) -> str:
         "abandoned": "Afgebroken",
         # Vacancy setup steps
         "generating": "Generating",
-        "analyzing": "Analyzing",
         "awaiting_review": "Awaiting Review",
         "publishing": "Publishing",
     }
@@ -280,7 +279,6 @@ def _get_step_detail(workflow_type: str, step: str, context: dict) -> Optional[s
     elif workflow_type == "vacancy_setup":
         details = {
             "generating": "Interviewvragen genereren",
-            "analyzing": "Vragen analyseren",
             "awaiting_review": "Wacht op goedkeuring recruiter",
             "publishing": "Pre-screening publiceren",
             "complete": None,
@@ -318,7 +316,6 @@ def _get_workflow_steps(workflow_type: str, current_step: str, status: str, cont
         ],
         "vacancy_setup": [
             ("generating", "Vragen genereren"),
-            ("analyzing", "Vacature analyseren"),
             ("awaiting_review", "Wacht op goedkeuring"),
             ("publishing", "Kanalen publiceren"),
             ("complete", "Afgerond"),

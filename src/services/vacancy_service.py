@@ -4,6 +4,7 @@ Vacancy service - handles vacancy listing, details, and statistics.
 import uuid
 from typing import Optional, Tuple
 import asyncpg
+from markdownify import markdownify as md
 from src.repositories import VacancyRepository
 from src.models import VacancyResponse, ChannelsResponse, VacancyAgentResponse, VacancyStatsResponse, DashboardStatsResponse
 from src.models.vacancy import RecruiterSummary, ClientSummary, ApplicantSummary, OfficeSummary, JobFunctionSummary
@@ -41,7 +42,7 @@ class VacancyService:
             if agent_type == "prescreening":
                 agents.append(VacancyAgentResponse(
                     type="prescreening",
-                    status="online" if row["is_online"] else ("offline" if row["has_screening"] else None),
+                    status=row["agent_status"] if row["has_screening"] else None,
                     total_screenings=row["candidates_count"] if row["has_screening"] else None,
                     qualified_count=row["qualified_count"] if row["has_screening"] else None,
                     qualification_rate=(
@@ -64,9 +65,6 @@ class VacancyService:
         """
         Build a VacancyResponse model from a database row.
 
-        Calculates effective channel states and is_online status based on
-        published state and active channels.
-
         Args:
             row: The vacancy database row
             applicant_rows: Optional list of applicant records for this vacancy
@@ -76,9 +74,9 @@ class VacancyService:
         whatsapp_active = row["whatsapp_enabled"] or False
         cv_active = row["cv_enabled"] or False
 
-        # is_online is only true if at least one channel is active
+        # Derive online state: published + at least one channel active
         any_channel_active = voice_active or whatsapp_active or cv_active
-        effective_is_online = row["is_online"] and any_channel_active
+        effective_is_online = (row["agent_status"] == "published") and any_channel_active
 
         # Build recruiter info if present
         recruiter = None
@@ -138,7 +136,7 @@ class VacancyService:
             title=row["title"],
             company=row["company"],
             location=row["location"],
-            description=row["description"],
+            description=md(row["description"]).strip() if row["description"] else None,
             status=row["status"],
             created_at=row["created_at"],
             archived_at=row["archived_at"],

@@ -15,6 +15,7 @@ from src.models.vacancy import (
     RecruiterSummary,
     ClientSummary,
     AgentStatItem,
+    AgentVacancyChannels,
     AgentVacancyResponse,
     AgentDashboardStatsResponse,
 )
@@ -97,12 +98,16 @@ def _build_prescreening_vacancy(row: asyncpg.Record) -> AgentVacancyResponse:
         status=row["status"],
         created_at=row["created_at"],
         agent_status=row["agent_status"],
-        agent_online=row.get("agent_online") or False,
         stats=[
             AgentStatItem(key="candidates_count", label="Kandidaten", value=row["candidates_count"]),
             AgentStatItem(key="completed_count", label="Afgerond", value=row["completed_count"]),
             AgentStatItem(key="qualified_count", label="Gekwalificeerd", value=row["qualified_count"]),
         ],
+        channels=AgentVacancyChannels(
+            voice=row["voice_enabled"],
+            whatsapp=row["whatsapp_enabled"],
+            cv=row["cv_enabled"],
+        ),
         last_activity_at=row.get("last_activity_at"),
         recruiter=_build_recruiter(row),
         client=_build_client(row),
@@ -119,7 +124,6 @@ def _build_preonboarding_vacancy(row: asyncpg.Record) -> AgentVacancyResponse:
         status=row["status"],
         created_at=row["created_at"],
         agent_status=row["agent_status"],
-        agent_online=row.get("agent_online"),
         stats=[
             AgentStatItem(key="active", label="Actief", value=row["dc_active"]),
             AgentStatItem(key="completed", label="Afgerond", value=row["dc_completed"]),
@@ -191,6 +195,7 @@ async def get_navigation_counts(
 
 @router.get("/prescreening/vacancies")
 async def list_prescreening_vacancies(
+    archived: bool = Query(False, description="If true, return archived vacancies instead of active ones"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     ctx: AuthContext = Depends(require_workspace),
@@ -198,15 +203,19 @@ async def list_prescreening_vacancies(
     avail_repo: WorkspaceAgentAvailabilityRepository = Depends(get_availability_repo),
 ):
     """
-    List all non-archived vacancies with prescreening agent status and stats.
+    List vacancies with prescreening agent status and stats.
+
+    Use `?archived=true` to get closed/filled/archived vacancies.
 
     Each vacancy includes an `agent_status` field:
     - **new**: No pre-screening record (questions not generated yet)
+    - **generating**: Questions are being generated
     - **generated**: Has pre-screening record but not published
     - **published**: Pre-screening is published
+    - **archived**: Vacancy or agent archived
     """
     await require_agent_available(ctx.workspace_id, "prescreening", avail_repo)
-    rows, total = await repo.list_prescreening_vacancies(workspace_id=ctx.workspace_id, limit=limit, offset=offset)
+    rows, total = await repo.list_prescreening_vacancies(workspace_id=ctx.workspace_id, archived=archived, limit=limit, offset=offset)
     vacancies = [_build_prescreening_vacancy(row) for row in rows]
 
     return {

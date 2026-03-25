@@ -6,6 +6,9 @@ import logging
 import time
 from datetime import datetime
 import asyncio
+from uuid import UUID
+
+import asyncpg
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from google.adk.events import Event, EventActions
 from sqlalchemy.exc import InterfaceError, OperationalError, IntegrityError
@@ -23,9 +26,10 @@ from src.models.pre_screening import (
     PreScreeningSettingsUpdateRequest,
     AgentConfigResponse,
     AgentConfigUpdateRequest,
+    ApplyPopupContentResponse,
+    ApplyPopupContentUpdateRequest,
 )
 from src.repositories import PreScreeningRepository, AgentConfigRepository, VacancyRepository
-from src.repositories.vacancy_agent_repo import VacancyAgentRepository
 from src.database import get_db_pool
 from src.dependencies import get_session_manager
 
@@ -128,6 +132,7 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, backg
     ]
 
     # Debug: Log what we're receiving
+    logger.info(f"[SAVE PRE-SCREENING] display_title: {config.display_title!r}")
     logger.info(f"[SAVE PRE-SCREENING] Knockout questions: {knockout_questions}")
     logger.info(f"[SAVE PRE-SCREENING] Qualification questions: {qualification_questions}")
 
@@ -140,7 +145,8 @@ async def save_pre_screening(vacancy_id: str, config: PreScreeningRequest, backg
         config.final_action,
         knockout_questions,
         qualification_questions,
-        config.approved_ids
+        config.approved_ids,
+        display_title=config.display_title
     )
 
     # Invalidate cached interview analysis (questions changed)
@@ -305,6 +311,7 @@ async def get_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_
             approved_ids.append(q_id)
 
     interview = {
+        "display_title": ps_row["display_title"],
         "intro": ps_row["intro"] or "",
         "knockout_questions": ko_questions,
         "knockout_failed_action": ps_row["knockout_failed_action"] or "",
@@ -361,6 +368,7 @@ async def get_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_
     return {
         "id": str(ps_row["id"]),
         "vacancy_id": str(ps_row["vacancy_id"]),
+        "display_title": ps_row["display_title"],
         "intro": ps_row["intro"] or "",
         "knockout_questions": [q.model_dump() for q in knockout_questions],
         "knockout_failed_action": ps_row["knockout_failed_action"] or "",
@@ -371,7 +379,6 @@ async def get_pre_screening(vacancy_id: str, ctx: AuthContext = Depends(require_
         "updated_at": ps_row["updated_at"],
         # Publishing fields
         "published_at": ps_row["published_at"],
-        "is_online": ps_row["is_online"] or False,
         "elevenlabs_agent_id": ps_row["elevenlabs_agent_id"],
         "whatsapp_agent_id": ps_row["whatsapp_agent_id"],
         # Session info
@@ -463,6 +470,7 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
             qualification_questions.append(question_data)
 
     config = {
+        "display_title": ps_row["display_title"],
         "intro": ps_row["intro"] or "",
         "knockout_questions": knockout_questions,
         "knockout_failed_action": ps_row["knockout_failed_action"] or "",
@@ -496,34 +504,31 @@ async def publish_pre_screening(vacancy_id: str, request: PublishPreScreeningReq
         published_at,
         elevenlabs_agent_id,
         whatsapp_agent_id,
-        is_online=True,
         voice_enabled=request.enable_voice,
         whatsapp_enabled=request.enable_whatsapp,
         cv_enabled=request.enable_cv
     )
 
-    # Sync is_online to vacancy_agents (canonical source for all agent types)
-    va_repo = VacancyAgentRepository(pool)
-    await va_repo.ensure_registered(uuid.UUID(vacancy_id), "prescreening", is_online=True)
+    # Sync status to vacancy_agents
+    vacancy_repo = VacancyRepository(pool)
+    await vacancy_repo.ensure_agent_registered(uuid.UUID(vacancy_id), "prescreening", status="published")
 
     return {
         "status": "success",
         "published_at": published_at.isoformat(),
         "elevenlabs_agent_id": elevenlabs_agent_id,
         "whatsapp_agent_id": whatsapp_agent_id,
-        "is_online": True,  # Publishing automatically sets online
-        "message": "Pre-screening published and is now online"
+        "message": "Pre-screening published"
     }
 
 
 @router.patch("/vacancies/{vacancy_id}/pre-screening/status")
 async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequest, ctx: AuthContext = Depends(require_workspace)):
     """
-    Update the online/offline status and channel toggles for a pre-screening.
+    Update channel toggles for a pre-screening.
 
     All fields are optional - only provided fields will be updated.
 
-    - is_online: Toggle the overall online/offline status (requires published pre-screening)
     - voice_enabled: Toggle voice channel (creates agent if not exists)
     - whatsapp_enabled: Toggle WhatsApp channel (creates agent if not exists)
     - cv_enabled: Toggle CV analysis channel
@@ -580,6 +585,7 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
                     qualification_questions.append(question_data)
 
             config = {
+                "display_title": ps_row["display_title"],
                 "intro": ps_row["intro"] or "",
                 "knockout_questions": knockout_questions,
                 "knockout_failed_action": ps_row["knockout_failed_action"] or "",
@@ -594,29 +600,21 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
         # Update the agent ID in database
         await ps_repo.update_agent_id(pre_screening_id, "whatsapp", whatsapp_agent_id)
 
-    # Validate is_online requires published pre-screening
-    if request.is_online is not None and not ps_row["published_at"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Pre-screening must be published before changing online status"
-        )
-
     # Check if there are fields to update
-    if (request.is_online is None and request.voice_enabled is None and
+    if (request.voice_enabled is None and
         request.whatsapp_enabled is None and request.cv_enabled is None):
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    # Update status flags
-    await ps_repo.update_status_flags(
+    # Update channel flags on pre_screenings table
+    await ps_repo.update_channel_flags(
         pre_screening_id,
-        is_online=request.is_online,
         voice_enabled=request.voice_enabled,
         whatsapp_enabled=request.whatsapp_enabled,
         cv_enabled=request.cv_enabled
     )
 
-    # Fetch updated values
-    updated_row = await ps_repo.get_with_status(pre_screening_id)
+    # Fetch updated channel values
+    updated_row = await ps_repo.get_with_channels(pre_screening_id)
 
     # Calculate effective channel states
     # Voice uses master agent from ELEVENLABS_AGENT_ID env var, no per-vacancy agent ID needed
@@ -624,41 +622,14 @@ async def update_pre_screening_status(vacancy_id: str, request: StatusUpdateRequ
     whatsapp_active = (updated_row["whatsapp_agent_id"] is not None) and updated_row["whatsapp_enabled"]
     cv_active = updated_row["cv_enabled"] or False
 
-    # Auto-sync is_online based on channel states
-    any_channel_on = voice_active or whatsapp_active or cv_active
-    all_channels_off = not any_channel_on
-    effective_is_online = updated_row["is_online"]
-    auto_status_message = ""
-
-    va_repo = VacancyAgentRepository(pool)
-
-    # Auto-set is_online = TRUE if any channel is enabled and agent was offline
-    if any_channel_on and not updated_row["is_online"] and ps_row["published_at"]:
-        await ps_repo.update_online_status(pre_screening_id, True)
-        await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=True)
-        effective_is_online = True
-        auto_status_message = " (auto-online: channel enabled)"
-
-    # Auto-set is_online = FALSE if all channels are disabled
-    elif all_channels_off and updated_row["is_online"]:
-        await ps_repo.update_online_status(pre_screening_id, False)
-        await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=False)
-        effective_is_online = False
-        auto_status_message = " (auto-offline: no channels enabled)"
-
-    # Explicit is_online toggle
-    elif request.is_online is not None:
-        await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=request.is_online)
-
     return {
         "status": "success",
-        "is_online": effective_is_online,
         "channels": {
             "voice": voice_active,
             "whatsapp": whatsapp_active,
             "cv": cv_active
         },
-        "message": "Pre-screening status updated" + auto_status_message
+        "message": "Channel status updated"
     }
 
 
@@ -728,7 +699,7 @@ async def update_pre_screening_settings(vacancy_id: str, request: PreScreeningSe
 
 # Preferred display order for settings sections ("Algemeen" first)
 _SETTINGS_SECTION_ORDER = [
-    "general", "voice", "planning", "interview", "escalation", "publishing",
+    "general", "generator", "voice", "planning", "interview", "escalation", "publishing",
 ]
 
 
@@ -757,11 +728,22 @@ async def get_pre_screening_config(ctx: AuthContext = Depends(require_workspace)
 
     import json
     settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
+
+    # Include apply popup content in the response
+    popup_row = await repo.get_active(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE)
+    if popup_row:
+        content_yaml, variables = _get_apply_popup_from_record(popup_row)
+    else:
+        content_yaml = _load_default_apply_popup_yaml()
+        variables = _DEFAULT_VARIABLES.copy()
+
     return AgentConfigResponse(
         id=str(row["id"]),
         config_type=row["config_type"],
         version=row["version"],
         settings=_order_settings(settings),
+        content_yaml=content_yaml,
+        variables=variables,
     )
 
 
@@ -785,8 +767,50 @@ async def update_pre_screening_config(request: AgentConfigUpdateRequest, ctx: Au
     if current:
         current_settings = current["settings"] if isinstance(current["settings"], dict) else json.loads(current["settings"])
 
+    # Detect if auto_generate is being toggled on
+    old_auto_generate = current_settings.get("publishing", {}).get("auto_generate", True)
+    new_auto_generate = update_data.get("publishing", {}).get("auto_generate", old_auto_generate)
+
     merged = _order_settings({**current_settings, **update_data})
     row = await repo.save(ctx.workspace_id, "pre_screening", merged)
+
+    # If auto_generate was just toggled on, generate for pending vacancies
+    if new_auto_generate and not old_auto_generate:
+        await _trigger_pending_generations(pool, ctx.workspace_id)
+
+    # Save apply popup content if provided
+    content_yaml = None
+    variables = None
+    if request.content_yaml is not None or request.variables is not None:
+        import yaml
+
+        # Start from current popup or defaults
+        popup_current = await repo.get_active(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE)
+        if popup_current:
+            current_yaml, current_vars = _get_apply_popup_from_record(popup_current)
+        else:
+            current_yaml = _load_default_apply_popup_yaml()
+            current_vars = _DEFAULT_VARIABLES.copy()
+
+        content_yaml = request.content_yaml if request.content_yaml is not None else current_yaml
+        variables = request.variables if request.variables is not None else current_vars
+
+        # Validate YAML syntax
+        try:
+            yaml.safe_load(content_yaml)
+        except yaml.YAMLError as e:
+            raise HTTPException(status_code=400, detail=f"Ongeldige YAML: {e}")
+
+        popup_settings = {"content_yaml": content_yaml, "variables": variables}
+        await repo.save(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE, popup_settings)
+    else:
+        # Return current popup state even when not updating it
+        popup_row = await repo.get_active(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE)
+        if popup_row:
+            content_yaml, variables = _get_apply_popup_from_record(popup_row)
+        else:
+            content_yaml = _load_default_apply_popup_yaml()
+            variables = _DEFAULT_VARIABLES.copy()
 
     settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
     return AgentConfigResponse(
@@ -794,12 +818,47 @@ async def update_pre_screening_config(request: AgentConfigUpdateRequest, ctx: Au
         config_type=row["config_type"],
         version=row["version"],
         settings=_order_settings(settings),
+        content_yaml=content_yaml,
+        variables=variables,
     )
 
 
 # ---------------------------------------------------------------------------
-# Auto-generate toggle
+# Auto-generate toggle (reads from publishing.auto_generate in agent config)
 # ---------------------------------------------------------------------------
+
+
+async def _trigger_pending_generations(pool: asyncpg.Pool, workspace_id: UUID) -> None:
+    """Find vacancies waiting for generation and kick off background generation."""
+    pending = await pool.fetch(
+        """
+        SELECT v.id, v.title, v.description
+        FROM ats.vacancies v
+        LEFT JOIN ats.vacancy_agents va
+            ON va.vacancy_id = v.id AND va.agent_type = 'prescreening'
+        WHERE v.status NOT IN ('closed', 'filled')
+          AND v.workspace_id = $1
+          AND (va.status IS NULL OR va.status = 'new')
+          AND NOT EXISTS (
+              SELECT 1 FROM agents.pre_screenings ps WHERE ps.vacancy_id = v.id
+          )
+        """,
+        workspace_id,
+    )
+    if not pending:
+        return
+
+    import asyncio
+    from src.services.vacancy_import_service import VacancyImportService
+
+    vacancy_list = [
+        {"id": str(row["id"]), "title": row["title"], "description": row["description"]}
+        for row in pending
+    ]
+    service = VacancyImportService(pool)
+    logger.info(f"Auto-generate enabled — triggering generation for {len(vacancy_list)} pending vacancies")
+    asyncio.create_task(service._auto_generate_pre_screenings(workspace_id, vacancy_list))
+
 
 @router.get("/pre-screening/auto-generate")
 async def get_auto_generate(ctx: AuthContext = Depends(require_workspace)):
@@ -809,6 +868,8 @@ async def get_auto_generate(ctx: AuthContext = Depends(require_workspace)):
     When enabled, newly imported vacancies automatically get pre-screening
     questions generated. When disabled, vacancies are imported without
     generating questions (they show "Genereren" button in the UI).
+
+    Stored in the "publishing" section of the pre_screening agent config.
     """
     pool = await get_db_pool()
     repo = AgentConfigRepository(pool)
@@ -819,8 +880,8 @@ async def get_auto_generate(ctx: AuthContext = Depends(require_workspace)):
 
     import json
     settings = row["settings"] if isinstance(row["settings"], dict) else json.loads(row["settings"])
-    general = settings.get("general", {})
-    return {"auto_generate": general.get("auto_generate", True)}
+    publishing = settings.get("publishing", {})
+    return {"auto_generate": publishing.get("auto_generate", True)}
 
 
 @router.put("/pre-screening/auto-generate")
@@ -831,6 +892,11 @@ async def set_auto_generate(enabled: bool, ctx: AuthContext = Depends(require_wo
     When enabled (default), newly imported vacancies automatically get
     pre-screening questions generated. When disabled, vacancies are
     imported but remain in "Genereren" state.
+
+    When toggled ON, also kicks off generation for any vacancies that
+    are currently waiting (agent_status = 'new', no pre-screening yet).
+
+    Stored in the "publishing" section of the pre_screening agent config.
     """
     pool = await get_db_pool()
     repo = AgentConfigRepository(pool)
@@ -841,11 +907,152 @@ async def set_auto_generate(enabled: bool, ctx: AuthContext = Depends(require_wo
     if current:
         current_settings = current["settings"] if isinstance(current["settings"], dict) else json.loads(current["settings"])
 
-    general = current_settings.get("general", {})
-    general["auto_generate"] = enabled
-    current_settings["general"] = general
+    publishing = current_settings.get("publishing", {})
+    publishing["auto_generate"] = enabled
+    current_settings["publishing"] = publishing
 
     await repo.save(ctx.workspace_id, "pre_screening", current_settings)
 
     logger.info(f"Auto-generate toggled to {enabled}")
+
+    if enabled:
+        await _trigger_pending_generations(pool, ctx.workspace_id)
+
     return {"auto_generate": enabled}
+
+
+# ---------------------------------------------------------------------------
+# Apply popup content management
+# ---------------------------------------------------------------------------
+
+_APPLY_POPUP_CONFIG_TYPE = "apply_popup"
+_DEFAULT_VARIABLES = {"privacy_url": "https://example.com/privacy"}
+
+
+def _load_default_apply_popup_yaml() -> str:
+    """Load the default apply popup YAML template from disk."""
+    import pathlib
+    template_path = pathlib.Path(__file__).resolve().parent.parent.parent / "data" / "defaults" / "apply_popup_content.yaml"
+    return template_path.read_text(encoding="utf-8")
+
+
+def _get_apply_popup_from_record(row) -> tuple[str, dict]:
+    """Extract content_yaml and variables from an agent_config record."""
+    import json as _json
+    settings = row["settings"] if isinstance(row["settings"], dict) else _json.loads(row["settings"])
+    content_yaml = settings.get("content_yaml", _load_default_apply_popup_yaml())
+    variables = settings.get("variables", _DEFAULT_VARIABLES.copy())
+    return content_yaml, variables
+
+
+@router.get("/pre-screening/apply-popup-content", response_model=ApplyPopupContentResponse)
+async def get_apply_popup_content(ctx: AuthContext = Depends(require_workspace)):
+    """Get the apply popup content configuration (YAML + variables)."""
+    pool = await get_db_pool()
+    repo = AgentConfigRepository(pool)
+
+    row = await repo.get_active(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE)
+    if not row:
+        return ApplyPopupContentResponse(
+            content_yaml=_load_default_apply_popup_yaml(),
+            variables=_DEFAULT_VARIABLES.copy(),
+            version=0,
+        )
+
+    content_yaml, variables = _get_apply_popup_from_record(row)
+    return ApplyPopupContentResponse(
+        content_yaml=content_yaml,
+        variables=variables,
+        version=row["version"],
+    )
+
+
+@router.put("/pre-screening/apply-popup-content", response_model=ApplyPopupContentResponse)
+async def update_apply_popup_content(
+    request: ApplyPopupContentUpdateRequest,
+    ctx: AuthContext = Depends(require_workspace),
+):
+    """
+    Save new apply popup content. Creates a new version.
+    Validates YAML syntax before saving.
+    """
+    import yaml
+
+    pool = await get_db_pool()
+    repo = AgentConfigRepository(pool)
+
+    # Start from current or defaults
+    current = await repo.get_active(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE)
+    if current:
+        current_yaml, current_vars = _get_apply_popup_from_record(current)
+    else:
+        current_yaml = _load_default_apply_popup_yaml()
+        current_vars = _DEFAULT_VARIABLES.copy()
+
+    new_yaml = request.content_yaml if request.content_yaml is not None else current_yaml
+    new_vars = request.variables if request.variables is not None else current_vars
+
+    # Validate YAML syntax
+    try:
+        yaml.safe_load(new_yaml)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Ongeldige YAML: {e}")
+
+    settings = {"content_yaml": new_yaml, "variables": new_vars}
+    row = await repo.save(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE, settings)
+
+    return ApplyPopupContentResponse(
+        content_yaml=new_yaml,
+        variables=new_vars,
+        version=row["version"],
+    )
+
+
+@router.post("/pre-screening/apply-popup-content/preview")
+async def preview_apply_popup_content(
+    request: ApplyPopupContentUpdateRequest,
+    ctx: AuthContext = Depends(require_workspace),
+):
+    """
+    Preview the apply popup content with variables substituted.
+    Returns the parsed YAML structure with all {variable} placeholders replaced.
+    """
+    import yaml
+
+    pool = await get_db_pool()
+    repo = AgentConfigRepository(pool)
+
+    # Start from current or defaults
+    current = await repo.get_active(ctx.workspace_id, _APPLY_POPUP_CONFIG_TYPE)
+    if current:
+        current_yaml, current_vars = _get_apply_popup_from_record(current)
+    else:
+        current_yaml = _load_default_apply_popup_yaml()
+        current_vars = _DEFAULT_VARIABLES.copy()
+
+    raw_yaml = request.content_yaml if request.content_yaml is not None else current_yaml
+    variables = request.variables if request.variables is not None else current_vars
+
+    # Validate YAML
+    try:
+        yaml.safe_load(raw_yaml)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Ongeldige YAML: {e}")
+
+    # Inject persona_name from general pre-screening config
+    general_config = await repo.get_active(ctx.workspace_id, "pre_screening")
+    if general_config:
+        import json as _json
+        gen_settings = general_config["settings"] if isinstance(general_config["settings"], dict) else _json.loads(general_config["settings"])
+        persona_name = gen_settings.get("general", {}).get("persona_name", "Anna")
+    else:
+        persona_name = "Anna"
+
+    # Substitute variables (popup vars + persona_name from general config)
+    all_vars = {"persona_name": persona_name, **variables}
+    rendered_yaml = raw_yaml
+    for key, value in all_vars.items():
+        rendered_yaml = rendered_yaml.replace(f"{{{key}}}", str(value))
+
+    parsed = yaml.safe_load(rendered_yaml)
+    return {"rendered": parsed, "variables": all_vars}

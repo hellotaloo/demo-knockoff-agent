@@ -23,11 +23,12 @@ class PreScreeningService:
         final_action: str,
         knockout_questions: list[dict],
         qualification_questions: list[dict],
-        approved_ids: list[str]
+        approved_ids: list[str],
+        display_title: str | None = None
     ) -> uuid.UUID:
         """
         Save or update pre-screening configuration.
-        
+
         Returns the pre_screening_id.
         """
         return await self.repo.upsert(
@@ -37,7 +38,8 @@ class PreScreeningService:
             final_action,
             knockout_questions,
             qualification_questions,
-            approved_ids
+            approved_ids,
+            display_title=display_title
         )
     
     async def get_pre_screening(self, vacancy_id: uuid.UUID) -> Optional[dict]:
@@ -58,7 +60,6 @@ class PreScreeningService:
             "created_at": ps_row["created_at"],
             "updated_at": ps_row["updated_at"],
             "published_at": ps_row["published_at"],
-            "is_online": ps_row["is_online"],
             "elevenlabs_agent_id": ps_row["elevenlabs_agent_id"],
             "whatsapp_agent_id": ps_row["whatsapp_agent_id"],
             "voice_enabled": ps_row["voice_enabled"],
@@ -91,24 +92,21 @@ class PreScreeningService:
             published_at,
             elevenlabs_agent_id,
             whatsapp_agent_id,
-            is_online=True,
             voice_enabled=voice_enabled,
             whatsapp_enabled=whatsapp_enabled,
             cv_enabled=cv_enabled
         )
     
-    async def update_status(
+    async def update_channels(
         self,
         pre_screening_id: uuid.UUID,
-        is_online: Optional[bool] = None,
         voice_enabled: Optional[bool] = None,
         whatsapp_enabled: Optional[bool] = None,
         cv_enabled: Optional[bool] = None
     ):
-        """Update pre-screening status flags."""
-        await self.repo.update_status_flags(
+        """Update pre-screening channel flags."""
+        await self.repo.update_channel_flags(
             pre_screening_id,
-            is_online,
             voice_enabled,
             whatsapp_enabled,
             cv_enabled

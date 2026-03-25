@@ -25,7 +25,6 @@ from .livekit_webhook import router as livekit_webhook_router
 from .teams import router as teams_router
 from .architecture import router as architecture_router
 from .interview_analysis import router as interview_analysis_router
-from .ats_simulator import router as ats_simulator_router
 from .playground import router as playground_router
 from .playground_chat import router as playground_chat_router
 from .document_collection_v2 import router as document_collection_v2_router
@@ -63,7 +62,6 @@ __all__ = [
     "teams_router",
     "architecture_router",
     "interview_analysis_router",
-    "ats_simulator_router",
     "playground_router",
     "playground_chat_router",
     "document_collection_v2_router",

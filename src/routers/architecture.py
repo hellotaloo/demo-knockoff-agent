@@ -62,7 +62,7 @@ def _get_nodes() -> list[ArchitectureNode]:
         ("application", "ApplicationService", "src/services/application_service.py", "Application listing and creation"),
         ("vacancy", "VacancyService", "src/services/vacancy_service.py", "Vacancy business logic and stats"),
         ("pre_screening", "PreScreeningService", "src/services/pre_screening_service.py", "Pre-screening configuration"),
-        ("interview", "InterviewService", "src/services/interview_service.py", "Interview generation streaming"),
+        ("interview", "InterviewSessionHandler", "agents/pre_screening/interview_question_generator/session.py", "Interview generation streaming"),
         ("activity", "ActivityService", "src/services/activity_service.py", "Activity logging and timeline"),
         ("candidate_context", "CandidateContextService", "src/services/candidate_context_service.py", "Candidate context aggregation"),
         ("scheduling", "SchedulingService", "src/services/scheduling_service.py", "Interview scheduling"),
@@ -99,7 +99,7 @@ def _get_nodes() -> list[ArchitectureNode]:
         ("activity", "ActivityRepository", "Activity data access"),
         ("scheduled_interview", "ScheduledInterviewRepository", "Scheduled interview data access"),
         ("document_verification", "DocumentVerificationRepository", "Document verification data access"),
-        ("agent_vacancy", "AgentVacancyRepository", "Agent vacancy data access"),
+        ("agent_vacancy", "AgentVacancyRepository", "Agent dashboard vacancy queries"),
         ("user_profile", "UserProfileRepository", "User profile data access"),
         ("workspace", "WorkspaceRepository", "Workspace data access"),
         ("workspace_membership", "WorkspaceMembershipRepository", "Workspace membership data access"),
@@ -116,7 +116,7 @@ def _get_nodes() -> list[ArchitectureNode]:
 
     # Agent Layer
     agents = [
-        ("interview_question_generator", "Interview Question Generator", "interview_question_generator/agent.py", "Generates knockout and qualification questions"),
+        ("interview_question_generator", "Interview Question Generator", "pre_screening/interview_question_generator/agent.py", "Generates knockout and qualification questions"),
         ("pre_screening_transcript_processor", "Transcript Processor", "pre_screening/transcript_processor/agent.py", "Analyzes voice call transcripts"),
         ("pre_screening_whatsapp", "Pre-screening WhatsApp", "pre_screening/whatsapp/agent.py", "WhatsApp screening conversations"),
         ("cv_analyzer", "CV Analyzer", "cv_analyzer/agent.py", "CV analysis and parsing"),

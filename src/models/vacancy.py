@@ -90,7 +90,7 @@ class VacancyResponse(BaseModel):
     start_date: Optional[date] = None
     has_screening: bool = False  # True if pre-screening exists
     published_at: Optional[datetime] = None  # When pre-screening was published (None=draft)
-    is_online: Optional[bool] = None  # None=draft/unpublished, True=online, False=offline
+    is_online: Optional[bool] = None  # Derived: status=published + any channel active
     channels: ChannelsResponse = ChannelsResponse()  # Voice/WhatsApp channel availability
     agents: list[VacancyAgentResponse] = []  # AI agents registered to this vacancy
     # Recruiter ownership
@@ -127,6 +127,13 @@ class AgentStatItem(BaseModel):
     suffix: Optional[str] = None      # e.g. "%" for rates
 
 
+class AgentVacancyChannels(BaseModel):
+    """Enabled screening channels for a vacancy."""
+    voice: bool = False
+    whatsapp: bool = False
+    cv: bool = False
+
+
 class AgentVacancyResponse(BaseModel):
     """Unified vacancy response for all agent overview pages."""
     id: str
@@ -136,8 +143,8 @@ class AgentVacancyResponse(BaseModel):
     status: str                                     # vacancy status (open/closed/filled)
     created_at: datetime
     agent_status: str = "new"                       # "new", "generated", "published", "archived"
-    agent_online: Optional[bool] = None             # from vacancy_agents.is_online
     stats: list[AgentStatItem] = []
+    channels: Optional[AgentVacancyChannels] = None
     last_activity_at: Optional[datetime] = None
     recruiter: Optional[RecruiterSummary] = None
     client: Optional[ClientSummary] = None

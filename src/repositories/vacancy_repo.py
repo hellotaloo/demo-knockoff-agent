@@ -7,6 +7,64 @@ from datetime import date
 from typing import Optional, Tuple
 
 
+# Shared SQL fragments for vacancy detail queries
+_VACANCY_DETAIL_COLUMNS = """
+    v.id, v.title, v.company, v.location, v.description, v.status,
+    v.created_at, v.archived_at, v.source, v.source_id, v.start_date,
+    v.recruiter_id,
+    r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
+    r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
+    v.client_id,
+    c.id as c_id, c.name as c_name, c.location as c_location,
+    c.industry as c_industry, c.logo as c_logo,
+    ol.id as ol_id, ol.name as ol_name, ol.address as ol_address,
+    ol.email as ol_email, ol.phone as ol_phone,
+    jf.id as jf_id, jf.name as jf_name,
+    (ps.id IS NOT NULL) as has_screening,
+    ps.published_at,
+    COALESCE(va_ps.status, 'new') as agent_status,
+    COALESCE(ps.voice_enabled, false) as voice_enabled,
+    COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
+    COALESCE(ps.cv_enabled, false) as cv_enabled,
+    COALESCE(cand_stats.candidacy_count, 0) as candidates_count,
+    COALESCE(app_stats.completed_count, 0) as completed_count,
+    COALESCE(app_stats.qualified_count, 0) as qualified_count,
+    app_stats.avg_score,
+    app_stats.last_activity_at,
+    COALESCE(
+        (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
+        ARRAY[]::text[]
+    ) as agent_types"""
+
+_VACANCY_DETAIL_JOINS = """
+    FROM ats.vacancies v
+    LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
+    LEFT JOIN ats.clients c ON c.id = v.client_id
+    LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
+    LEFT JOIN ats.job_functions jf ON jf.id = v.job_function_id
+    LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
+    LEFT JOIN ats.vacancy_agents va_ps ON va_ps.vacancy_id = v.id AND va_ps.agent_type = 'prescreening'
+    LEFT JOIN LATERAL (
+        SELECT
+            COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
+            COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
+            MAX(COALESCE(completed_at, started_at)) as last_activity_at,
+            (
+                SELECT ROUND(AVG(ans.score)::numeric, 1)
+                FROM agents.pre_screening_answers ans
+                JOIN ats.applications app ON app.id = ans.application_id
+                WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
+            ) as avg_score
+        FROM ats.applications a
+        WHERE a.vacancy_id = v.id
+    ) app_stats ON true
+    LEFT JOIN LATERAL (
+        SELECT COUNT(*) as candidacy_count
+        FROM ats.candidacies cd
+        WHERE cd.vacancy_id = v.id
+    ) cand_stats ON true"""
+
+
 class VacancyRepository:
     """Repository for vacancy database operations."""
 
@@ -27,7 +85,6 @@ class VacancyRepository:
         Returns:
             Tuple of (vacancy rows, total count)
         """
-        # Build query with optional filters
         conditions = []
         params = []
         param_idx = 1
@@ -49,66 +106,12 @@ class VacancyRepository:
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-        # Get total count
         count_query = f"SELECT COUNT(*) FROM ats.vacancies v {where_clause}"
         total = await self.pool.fetchval(count_query, *params)
 
-        # Get vacancies with application stats, recruiter info, and client info
         query = f"""
-            SELECT v.id, v.title, v.company, v.location, v.description, v.status,
-                   v.created_at, v.archived_at, v.source, v.source_id, v.start_date,
-                   v.recruiter_id,
-                   r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
-                   r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
-                   v.client_id,
-                   c.id as c_id, c.name as c_name, c.location as c_location,
-                   c.industry as c_industry, c.logo as c_logo,
-                   ol.id as ol_id, ol.name as ol_name, ol.address as ol_address,
-                   ol.email as ol_email, ol.phone as ol_phone,
-                   jf.id as jf_id, jf.name as jf_name,
-                   (ps.id IS NOT NULL) as has_screening,
-                   ps.published_at,
-                   CASE
-                       WHEN ps.published_at IS NULL THEN NULL
-                       ELSE ps.is_online
-                   END as is_online,
-                   COALESCE(ps.voice_enabled, false) as voice_enabled,
-                   COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
-                   COALESCE(ps.cv_enabled, false) as cv_enabled,
-                   COALESCE(cand_stats.candidacy_count, 0) as candidates_count,
-                   COALESCE(app_stats.completed_count, 0) as completed_count,
-                   COALESCE(app_stats.qualified_count, 0) as qualified_count,
-                   app_stats.avg_score,
-                   app_stats.last_activity_at,
-                   COALESCE(
-                       (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
-                       ARRAY[]::text[]
-                   ) as agent_types
-            FROM ats.vacancies v
-            LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
-            LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
-            LEFT JOIN ats.job_functions jf ON jf.id = v.job_function_id
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
-            LEFT JOIN LATERAL (
-                SELECT
-                    COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                    COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                    MAX(COALESCE(completed_at, started_at)) as last_activity_at,
-                    (
-                        SELECT ROUND(AVG(ans.score)::numeric, 1)
-                        FROM agents.pre_screening_answers ans
-                        JOIN ats.applications app ON app.id = ans.application_id
-                        WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
-                    ) as avg_score
-                FROM ats.applications a
-                WHERE a.vacancy_id = v.id
-            ) app_stats ON true
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) as candidacy_count
-                FROM ats.candidacies cd
-                WHERE cd.vacancy_id = v.id
-            ) cand_stats ON true
+            SELECT {_VACANCY_DETAIL_COLUMNS}
+            {_VACANCY_DETAIL_JOINS}
             {where_clause}
             ORDER BY v.created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
@@ -121,62 +124,9 @@ class VacancyRepository:
 
     async def get_by_id(self, vacancy_id: uuid.UUID) -> Optional[asyncpg.Record]:
         """Get a single vacancy by ID with stats, recruiter info, and client info."""
-        query = """
-            SELECT v.id, v.title, v.company, v.location, v.description, v.status,
-                   v.workspace_id,
-                   v.created_at, v.archived_at, v.source, v.source_id, v.start_date,
-                   v.recruiter_id,
-                   r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
-                   r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
-                   v.client_id,
-                   c.id as c_id, c.name as c_name, c.location as c_location,
-                   c.industry as c_industry, c.logo as c_logo,
-                   ol.id as ol_id, ol.name as ol_name, ol.address as ol_address,
-                   ol.email as ol_email, ol.phone as ol_phone,
-                   jf.id as jf_id, jf.name as jf_name,
-                   (ps.id IS NOT NULL) as has_screening,
-                   ps.published_at,
-                   CASE
-                       WHEN ps.published_at IS NULL THEN NULL
-                       ELSE ps.is_online
-                   END as is_online,
-                   COALESCE(ps.voice_enabled, false) as voice_enabled,
-                   COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
-                   COALESCE(ps.cv_enabled, false) as cv_enabled,
-                   COALESCE(cand_stats.candidacy_count, 0) as candidates_count,
-                   COALESCE(app_stats.completed_count, 0) as completed_count,
-                   COALESCE(app_stats.qualified_count, 0) as qualified_count,
-                   app_stats.avg_score,
-                   app_stats.last_activity_at,
-                   COALESCE(
-                       (SELECT array_agg(va.agent_type) FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id),
-                       ARRAY[]::text[]
-                   ) as agent_types
-            FROM ats.vacancies v
-            LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
-            LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN ats.office_locations ol ON ol.id = v.office_location_id
-            LEFT JOIN ats.job_functions jf ON jf.id = v.job_function_id
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
-            LEFT JOIN LATERAL (
-                SELECT
-                    COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                    COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                    MAX(COALESCE(completed_at, started_at)) as last_activity_at,
-                    (
-                        SELECT ROUND(AVG(ans.score)::numeric, 1)
-                        FROM agents.pre_screening_answers ans
-                        JOIN ats.applications app ON app.id = ans.application_id
-                        WHERE app.vacancy_id = v.id AND ans.score IS NOT NULL
-                    ) as avg_score
-                FROM ats.applications a
-                WHERE a.vacancy_id = v.id
-            ) app_stats ON true
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) as candidacy_count
-                FROM ats.candidacies cd
-                WHERE cd.vacancy_id = v.id
-            ) cand_stats ON true
+        query = f"""
+            SELECT v.workspace_id, {_VACANCY_DETAIL_COLUMNS}
+            {_VACANCY_DETAIL_JOINS}
             WHERE v.id = $1
         """
 
@@ -233,34 +183,26 @@ class VacancyRepository:
 
     async def get_dashboard_stats(self, workspace_id: Optional[uuid.UUID] = None) -> Optional[asyncpg.Record]:
         """Get dashboard-level aggregate statistics across all vacancies."""
+        ws_join = ""
+        ws_filter = ""
+        params = []
         if workspace_id:
-            stats_query = """
-                SELECT
-                    COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE a.started_at >= NOW() - INTERVAL '7 days') as this_week,
-                    COUNT(*) FILTER (WHERE a.status = 'completed') as completed_count,
-                    COUNT(*) FILTER (WHERE a.qualified = true) as qualified_count,
-                    COUNT(*) FILTER (WHERE a.channel = 'voice') as voice_count,
-                    COUNT(*) FILTER (WHERE a.channel = 'whatsapp') as whatsapp_count,
-                    COUNT(*) FILTER (WHERE a.channel = 'cv') as cv_count
-                FROM ats.applications a
-                JOIN ats.vacancies v ON v.id = a.vacancy_id
-                WHERE v.workspace_id = $1
-            """
-            return await self.pool.fetchrow(stats_query, workspace_id)
-        else:
-            stats_query = """
-                SELECT
-                    COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE started_at >= NOW() - INTERVAL '7 days') as this_week,
-                    COUNT(*) FILTER (WHERE status = 'completed') as completed_count,
-                    COUNT(*) FILTER (WHERE qualified = true) as qualified_count,
-                    COUNT(*) FILTER (WHERE channel = 'voice') as voice_count,
-                    COUNT(*) FILTER (WHERE channel = 'whatsapp') as whatsapp_count,
-                    COUNT(*) FILTER (WHERE channel = 'cv') as cv_count
-                FROM ats.applications
-            """
-            return await self.pool.fetchrow(stats_query)
+            ws_join = " JOIN ats.vacancies v ON v.id = a.vacancy_id"
+            ws_filter = " WHERE v.workspace_id = $1"
+            params.append(workspace_id)
+
+        query = f"""
+            SELECT
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE a.started_at >= NOW() - INTERVAL '7 days') as this_week,
+                COUNT(*) FILTER (WHERE a.status = 'completed') as completed_count,
+                COUNT(*) FILTER (WHERE a.qualified = true) as qualified_count,
+                COUNT(*) FILTER (WHERE a.channel = 'voice') as voice_count,
+                COUNT(*) FILTER (WHERE a.channel = 'whatsapp') as whatsapp_count,
+                COUNT(*) FILTER (WHERE a.channel = 'cv') as cv_count
+            FROM ats.applications a{ws_join}{ws_filter}
+        """
+        return await self.pool.fetchrow(query, *params)
 
     async def get_applicants_by_vacancy_ids(
         self, vacancy_ids: list[uuid.UUID]
@@ -303,3 +245,51 @@ class VacancyRepository:
             result[row["vacancy_id"]].append(row)
 
         return result
+
+    # -------------------------------------------------------------------------
+    # Vacancy agent registration (ats.vacancy_agents)
+    # -------------------------------------------------------------------------
+
+    async def get_agent(
+        self, vacancy_id: uuid.UUID, agent_type: str
+    ) -> Optional[asyncpg.Record]:
+        """Get a vacancy agent registration."""
+        return await self.pool.fetchrow(
+            """
+            SELECT id, vacancy_id, agent_type, status, created_at
+            FROM ats.vacancy_agents
+            WHERE vacancy_id = $1 AND agent_type = $2
+            """,
+            vacancy_id, agent_type,
+        )
+
+    async def ensure_agent_registered(
+        self, vacancy_id: uuid.UUID, agent_type: str,
+        status: str = "new",
+        conn: Optional[asyncpg.Connection] = None,
+    ) -> asyncpg.Record:
+        """Insert or update a vacancy agent registration."""
+        executor = conn or self.pool
+        return await executor.fetchrow(
+            """
+            INSERT INTO ats.vacancy_agents (vacancy_id, agent_type, status)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (vacancy_id, agent_type) DO UPDATE SET status = $3
+            RETURNING id, vacancy_id, agent_type, status, created_at
+            """,
+            vacancy_id, agent_type, status,
+        )
+
+    async def set_agent_status(
+        self, vacancy_id: uuid.UUID, agent_type: str, status: str,
+    ) -> Optional[asyncpg.Record]:
+        """Update the lifecycle status for a vacancy agent."""
+        return await self.pool.fetchrow(
+            """
+            UPDATE ats.vacancy_agents
+            SET status = $1
+            WHERE vacancy_id = $2 AND agent_type = $3
+            RETURNING id, vacancy_id, agent_type, status, created_at
+            """,
+            status, vacancy_id, agent_type,
+        )

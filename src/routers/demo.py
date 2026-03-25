@@ -3,9 +3,7 @@ Demo Data Management router.
 
 Handles seeding and resetting demo data for development and testing.
 Demo data is loaded from fixtures/ directory - edit JSON files there.
-ATS-sourced data (recruiters, clients, vacancies) is imported via the ATS simulator.
 """
-import asyncio
 import uuid
 import logging
 from datetime import datetime, timedelta, date
@@ -16,7 +14,6 @@ import json
 from src.config import ENVIRONMENT
 from src.database import get_db_pool
 from src.services import DemoService
-from src.services.ats_import_service import ATSImportService, get_import_progress, clear_import_progress
 from src.services.workflow_service import WorkflowService
 from src.repositories import ConversationRepository, ApplicationRepository
 
@@ -49,7 +46,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
     created_skills = 0
     created_activities = 0
 
-    # Query any existing vacancies/recruiters/clients (from a prior ATS import)
+    # Query any existing vacancies/recruiters/clients
     async with pool.acquire() as conn:
         vacancy_rows = await conn.fetch(
             "SELECT id, title FROM ats.vacancies WHERE workspace_id = $1 ORDER BY created_at",
@@ -233,7 +230,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 
                 created_activities += 1
 
-    # Candidacies are seeded after ATS import (in ATSImportService._seed_candidacies_from_fixtures)
+    # Seed candidacies from fixture data
     # because vacancies don't exist yet at this point.
 
     # ---- Seed default office location and assign to all vacancies ----
@@ -261,7 +258,7 @@ async def seed_demo_data(activities: bool = Query(True, description="Include act
 
     return {
         "status": "success",
-        "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities. Use POST /demo/import-ats to import vacancies from ATS.",
+        "message": f"Seed: {len(created_candidates)} candidates, {created_skills} skills, {len(created_applications)} applications, {len(created_pre_screenings)} pre-screenings, {created_activities} activities. Use integrations sync to import vacancies.",
         "candidates_count": len(created_candidates),
         "skills_count": created_skills,
         "vacancies": created_vacancies,
@@ -281,7 +278,6 @@ async def reset_demo_data(
     if ENVIRONMENT == "production":
         raise HTTPException(status_code=404, detail="Not found")
 
-    clear_import_progress()
     pool = await get_db_pool()
 
     async with pool.acquire() as conn:
@@ -371,6 +367,16 @@ async def reset_demo_data(
             except Exception:
                 pass  # Table may not exist yet
 
+            # Clear last_synced_at so next sync does a full import
+            try:
+                await conn.execute("""
+                    UPDATE system.integration_connections
+                    SET settings = settings::jsonb - 'last_synced_at'
+                    WHERE settings::jsonb ? 'last_synced_at'
+                """)
+            except Exception:
+                pass  # Table may not exist yet
+
 
     result = {
         "status": "success",
@@ -455,54 +461,3 @@ async def reset_demo_data(
             result["message"] += f", {created_workflows} workflow activities"
 
     return result
-
-
-@router.post("/demo/import-ats")
-async def trigger_ats_import(
-    module: str = Query("pre_screening", description="Module to set up: 'pre_screening' or 'document_collection'"),
-):
-    """
-    Start an ATS import as a background task.
-
-    Imports recruiters, clients, and vacancies from the ATS simulator,
-    then sets up the selected module for each vacancy:
-    - pre_screening: generates pre-screening questions (default)
-    - document_collection: creates document collection configs
-
-    Poll GET /demo/import-ats/status for progress.
-    """
-    if ENVIRONMENT == "production":
-        raise HTTPException(status_code=404, detail="Not found")
-
-    if module not in ("pre_screening", "document_collection"):
-        return {"status": "error", "message": f"Onbekende module: {module}. Gebruik 'pre_screening' of 'document_collection'."}
-
-    # Don't start a new import if one is already running
-    progress = get_import_progress()
-    if progress and progress.get("status") in ("importing", "generating"):
-        return {"status": "already_running", "message": "Import is already in progress"}
-
-    pool = await get_db_pool()
-    import_service = ATSImportService(pool)
-
-    # Fire and forget — runs in the background
-    if module == "document_collection":
-        asyncio.create_task(import_service.import_and_setup_documents(DEFAULT_WORKSPACE_ID))
-    else:
-        asyncio.create_task(import_service.import_and_generate(DEFAULT_WORKSPACE_ID))
-
-    return {"status": "started", "message": "Import gestart. Poll GET /demo/import-ats/status voor voortgang."}
-
-
-@router.get("/demo/import-ats/status")
-async def get_ats_import_status():
-    """
-    Poll for ATS import progress.
-
-    Returns the current state of the import, including per-vacancy generation status.
-    Frontend should poll this every 3 seconds.
-    """
-    progress = get_import_progress()
-    if progress is None:
-        return {"status": "idle", "message": "Geen import actief"}
-    return progress

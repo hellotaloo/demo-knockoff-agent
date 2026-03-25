@@ -15,47 +15,59 @@ class AgentVacancyRepository:
     async def list_prescreening_vacancies(
         self,
         workspace_id: Optional[UUID] = None,
+        archived: bool = False,
         limit: int = 50,
         offset: int = 0
     ) -> Tuple[list[asyncpg.Record], int]:
         """
-        List all non-archived vacancies with prescreening agent status and stats.
+        List vacancies with prescreening agent status and stats.
+
+        When archived=False (default): active vacancies only.
+        When archived=True: closed/filled vacancies or archived agents.
 
         Returns agent_status per vacancy:
         - new: No pre_screening record
+        - generating: Questions being generated
         - generated: Has pre_screening but not published
         - published: Pre_screening is published
+        - archived: Vacancy or agent archived
         """
-        ws_filter = ""
+        conditions = []
         params = []
         param_idx = 1
 
         if workspace_id:
-            ws_filter = f" AND v.workspace_id = ${param_idx}"
+            conditions.append(f"v.workspace_id = ${param_idx}")
             params.append(workspace_id)
             param_idx += 1
+
+        if archived:
+            conditions.append("(v.status IN ('closed', 'filled') OR va_ps.status = 'archived')")
+        else:
+            conditions.append("v.status NOT IN ('closed', 'filled')")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}"
 
         count_query = f"""
             SELECT COUNT(*)
             FROM ats.vacancies v
-            WHERE v.status NOT IN ('closed', 'filled'){ws_filter}
+            LEFT JOIN ats.vacancy_agents va_ps ON va_ps.vacancy_id = v.id AND va_ps.agent_type = 'prescreening'
+            {where_clause}
         """
         total = await self.pool.fetchval(count_query, *params)
 
         query = f"""
             SELECT
                 v.id, v.title, v.company, v.location, v.status, v.created_at,
-                CASE
-                    WHEN ps.id IS NULL THEN 'new'
-                    WHEN ps.published_at IS NULL THEN 'generated'
-                    ELSE 'published'
-                END as agent_status,
-                COALESCE(va_ps.is_online, ps.is_online, false) as agent_online,
+                COALESCE(va_ps.status, 'new') as agent_status,
                 v.recruiter_id, v.client_id,
                 r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                 r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
                 c.id as c_id, c.name as c_name, c.location as c_location,
                 c.industry as c_industry, c.logo as c_logo,
+                COALESCE(ps.voice_enabled, false) as voice_enabled,
+                COALESCE(ps.whatsapp_enabled, false) as whatsapp_enabled,
+                COALESCE(ps.cv_enabled, false) as cv_enabled,
                 COALESCE(app_stats.candidates_count, 0) as candidates_count,
                 COALESCE(app_stats.completed_count, 0) as completed_count,
                 COALESCE(app_stats.qualified_count, 0) as qualified_count,
@@ -63,8 +75,8 @@ class AgentVacancyRepository:
             FROM ats.vacancies v
             LEFT JOIN ats.recruiters r ON r.id = v.recruiter_id
             LEFT JOIN ats.clients c ON c.id = v.client_id
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN ats.vacancy_agents va_ps ON va_ps.vacancy_id = v.id AND va_ps.agent_type = 'prescreening'
+            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) as candidates_count,
@@ -74,7 +86,7 @@ class AgentVacancyRepository:
                 FROM ats.applications a
                 WHERE a.vacancy_id = v.id
             ) app_stats ON true
-            WHERE v.status NOT IN ('closed', 'filled'){ws_filter}
+            {where_clause}
             ORDER BY v.created_at DESC
             LIMIT ${param_idx} OFFSET ${param_idx + 1}
         """
@@ -119,7 +131,6 @@ class AgentVacancyRepository:
                     WHEN va_dc.id IS NULL THEN 'new'
                     ELSE 'generated'
                 END as agent_status,
-                va_dc.is_online as agent_online,
                 v.recruiter_id, v.client_id,
                 r.id as r_id, r.name as r_name, r.email as r_email, r.phone as r_phone,
                 r.team as r_team, r.role as r_role, r.avatar_url as r_avatar_url,
@@ -202,16 +213,17 @@ class AgentVacancyRepository:
 
         query = f"""
             SELECT
-                -- Pre-screening counts
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NULL) as prescreening_new,
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL AND ps.published_at IS NULL) as prescreening_generated,
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND ps.id IS NOT NULL AND ps.published_at IS NOT NULL) as prescreening_published,
-                COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as prescreening_archived,
-                -- Pre-onboarding counts (based on document_collection agent registration)
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND NOT EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')) as preonboarding_new,
-                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND EXISTS (SELECT 1 FROM ats.vacancy_agents va WHERE va.vacancy_id = v.id AND va.agent_type = 'document_collection')) as preonboarding_generated,
+                -- Pre-screening counts (from vacancy_agents.status)
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND COALESCE(va_ps.status, 'new') = 'new') as prescreening_new,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND va_ps.status IN ('generating', 'generated')) as prescreening_generated,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND va_ps.status = 'published') as prescreening_published,
+                COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled') OR va_ps.status = 'archived') as prescreening_archived,
+                -- Pre-onboarding counts (from vacancy_agents.status)
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND va_dc.id IS NULL) as preonboarding_new,
+                COUNT(*) FILTER (WHERE v.status NOT IN ('closed', 'filled') AND va_dc.id IS NOT NULL) as preonboarding_generated,
                 COUNT(*) FILTER (WHERE v.status IN ('closed', 'filled')) as preonboarding_archived
             FROM ats.vacancies v
-            LEFT JOIN agents.pre_screenings ps ON ps.vacancy_id = v.id{ws_filter}
+            LEFT JOIN ats.vacancy_agents va_ps ON va_ps.vacancy_id = v.id AND va_ps.agent_type = 'prescreening'
+            LEFT JOIN ats.vacancy_agents va_dc ON va_dc.vacancy_id = v.id AND va_dc.agent_type = 'document_collection'{ws_filter}
         """
         return await self.pool.fetchrow(query, *params)

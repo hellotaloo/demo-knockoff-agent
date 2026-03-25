@@ -1,0 +1,41 @@
+# Solliciteer popup content
+# Variabelen: {persona_name}, {privacy_url}
+
+choice_screen:
+  subtitle: "Solliciteer sneller met {persona_name}, je digitale assistent"
+  title: "Hoe wil je solliciteren?"
+  description: "Sneller: laat je nummer achter en {persona_name}, onze digitale assistent, belt je **meteen** op. Daarna kan je binnen **3 dagen** met een recruiter spreken."
+
+  anna_option:
+    badge: "Aanrader"
+    title: "Sneller met {persona_name}"
+    description: "{persona_name} belt je meteen op voor een kort gesprek."
+    button: "Solliciteer met {persona_name}"
+
+  cv_option:
+    title: "Klassiek met cv"
+    description: "Upload je cv en solliciteer zoals je gewend bent."
+    button: "Solliciteer met cv"
+
+phone_form:
+  subtitle: "Sneller solliciteren met {persona_name}, je digitale assistent"
+  title: "Laat je gegevens achter"
+  contact_label: "Hoe mogen we je contacteren?"
+  contact_options:
+    - "Telefoon"
+    - "WhatsApp"
+  privacy_text: "Ik ga akkoord met de [privacy policy]({privacy_url})*"
+  submit_button: "Laat {persona_name} bellen"
+  secondary_button: "Toch met cv"
+  footer: "{persona_name}, onze digitale assistent, contacteert je meteen via telefoon."
+
+cv_form:
+  subtitle: "Klassiek solliciteren met cv"
+  title: "Upload je cv"
+  upload_label: "CV bestand"
+  upload_placeholder: "Upload je CV (PDF, DOC, DOCX)"
+  email_label: "E-mailadres"
+  email_placeholder: "jouw@email.com"
+  privacy_text: "Ik ga akkoord met de [privacy policy]({privacy_url})*"
+  submit_button: "Solliciteer met cv"
+  secondary_button: "Toch met {persona_name}"

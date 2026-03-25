@@ -6,7 +6,7 @@ from tasks.knockout import KnockoutTask
 
 
 class ScreeningAgent(BaseAgent):
-    def __init__(self, job_title: str, allow_escalation: bool = True, persona_name: str = "Liv") -> None:
+    def __init__(self, job_title: str, allow_escalation: bool = True, persona_name: str = "Anna") -> None:
         super().__init__(
             instructions=screening_prompt(job_title, allow_escalation=allow_escalation, persona_name=persona_name),
             turn_detection=None,  # knockout questions are yes/no, no semantic turn detection needed

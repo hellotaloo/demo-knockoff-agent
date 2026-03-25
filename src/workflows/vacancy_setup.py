@@ -2,11 +2,10 @@
 Vacancy Setup Workflow Handlers
 
 Automates the pipeline from question generation to publication:
-  generating → analyzing → (awaiting_review | publishing) → notifying → complete
+  generating → (awaiting_review | publishing) → notifying → complete
 
 Events:
 - questions_saved: Fired when recruiter saves pre-screening questions
-- auto (analyzing): Runs interview analysis agent
 - recruiter_approved: Recruiter clicks approve on Teams notification
 - auto (publishing): Auto-publishes all 3 channels
 - auto (notifying): Sends Teams notification with full question list
@@ -67,11 +66,6 @@ STEP_CONFIG = {
         "timeout_seconds": 5 * 60,          # 5 min - question generation
         "stuck_threshold_seconds": 3 * 60,
     },
-    "analyzing": {
-        "timeout_seconds": 2 * 60,          # 2 min - analysis agent
-        "stuck_threshold_seconds": 60,
-        "auto_delay_seconds": 0,             # Immediate
-    },
     "awaiting_review": {
         "timeout_seconds": 24 * 3600,        # 24h SLA for recruiter review
         "stuck_threshold_seconds": 12 * 3600,
@@ -121,8 +115,10 @@ async def handle_questions_saved(
     Handle questions_saved event - recruiter saved pre-screening questions.
 
     Payload: {pre_screening_id, vacancy_id}
-    Transitions to: analyzing
+    Transitions to: awaiting_review (if require_review) or publishing
     """
+    from src.database import get_db_pool
+
     pre_screening_id = payload.get("pre_screening_id")
     vacancy_id = payload.get("vacancy_id")
 
@@ -136,123 +132,36 @@ async def handle_questions_saved(
         "vacancy_id": vacancy_id,
     })
 
-    return {"next_step": "analyzing"}
+    # Update agent status to 'generated'
+    from src.database import get_db_pool as _get_pool
+    from src.repositories import VacancyRepository
+    _pool = await _get_pool()
+    _vacancy_repo = VacancyRepository(_pool)
+    await _vacancy_repo.set_agent_status(uuid.UUID(vacancy_id), "prescreening", "generated")
 
-
-async def handle_run_analysis(
-    orchestrator: "WorkflowOrchestrator",
-    workflow: dict,
-    payload: dict,
-) -> dict:
-    """
-    Auto-triggered: run interview analysis agent.
-
-    Loads questions and vacancy from DB, runs analysis, decides next step:
-    - verdict == "poor" → awaiting_review (Teams notification)
-    - context has require_review → awaiting_review (Teams notification)
-    - otherwise → publishing
-    """
-    from agents.pre_screening.interview_analyzer import analyze_interview
-    from src.database import get_db_pool
-    from src.repositories.pre_screening_repo import PreScreeningRepository
-    from src.repositories.vacancy_repo import VacancyRepository
-
+    # Check if recruiter review is required
     context = workflow["context"]
-    vacancy_id = context.get("vacancy_id")
-    pre_screening_id = context.get("pre_screening_id")
-
-    if not vacancy_id or not pre_screening_id:
-        logger.error(f"Workflow {workflow['id']}: missing vacancy_id or pre_screening_id in context")
-        return {"next_step": "complete", "new_status": "completed", "error": "missing_context"}
-
-    pool = await get_db_pool()
-    ps_repo = PreScreeningRepository(pool)
-    vacancy_repo = VacancyRepository(pool)
-
-    # Load vacancy info
-    vacancy_row = await vacancy_repo.get_basic_info(uuid.UUID(vacancy_id))
-    vacancy_title = vacancy_row["title"] if vacancy_row else "Onbekende vacature"
-    vacancy_description = (vacancy_row["description"] or "") if vacancy_row else ""
-
-    # Load questions with ko_N/qual_N ID mapping
-    ps_uuid = uuid.UUID(pre_screening_id)
-    question_rows = await ps_repo.get_questions(ps_uuid)
-
-    if not question_rows:
-        logger.warning(f"Workflow {workflow['id']}: no questions found, skipping analysis")
-        return {"next_step": "publishing"}
-
-    questions = []
-    ko_counter = 1
-    qual_counter = 1
-    for q in question_rows:
-        if q["question_type"] == "knockout":
-            q_id = f"ko_{ko_counter}"
-            ko_counter += 1
-            q_type = "knockout"
-        else:
-            q_id = f"qual_{qual_counter}"
-            qual_counter += 1
-            q_type = "qualifying"
-        questions.append({"id": q_id, "text": q["question_text"], "type": q_type})
-
-    # Run analysis agent
-    logger.info(f"Workflow {workflow['id']}: running analysis on {len(questions)} questions")
-
-    try:
-        result = await analyze_interview(
-            questions=questions,
-            vacancy_title=vacancy_title,
-            vacancy_description=vacancy_description,
-        )
-    except Exception as e:
-        logger.error(f"Workflow {workflow['id']}: analysis agent failed: {e}")
-        # Don't block the pipeline on analysis failure - proceed to publishing
-        await orchestrator.update_context(workflow["id"], {
-            "analysis_error": str(e),
-        })
-        return {"next_step": "publishing"}
-
-    # Save analysis result to DB
-    try:
-        await ps_repo.save_analysis_result(ps_uuid, result)
-        logger.info(f"Workflow {workflow['id']}: analysis result saved")
-    except Exception as e:
-        logger.warning(f"Workflow {workflow['id']}: failed to save analysis result: {e}")
-
-    # Extract verdict info
-    summary = result.get("summary", {})
-    verdict = summary.get("verdict", "good")
-    one_liner = summary.get("oneLiner", "")
-    completion_rate = summary.get("completionRate", 0)
-
-    await orchestrator.update_context(workflow["id"], {
-        "verdict": verdict,
-        "oneLiner": one_liner,
-        "completionRate": completion_rate,
-    })
-
-    # Decision: does this need recruiter review?
-    # Check workflow context first, then fall back to agent config setting
-    # Resolve workspace_id from the vacancy for tenant-scoped config
-    ws_row = await pool.fetchrow("SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_uuid)
-    workspace_id = ws_row["workspace_id"] if ws_row else None
-
     require_review = context.get("require_review", False)
-    if not require_review and workspace_id:
-        require_review = await _get_config_setting("publishing.require_review", workspace_id, default=False)
 
-    if verdict == "poor":
-        logger.info(f"Workflow {workflow['id']}: verdict=poor → awaiting_review")
-        await _send_review_teams_notification(workflow, context, result, is_poor=True)
-        return {"next_step": "awaiting_review"}
+    if not require_review:
+        pool = await get_db_pool()
+        vacancy_uuid = uuid.UUID(vacancy_id)
+        ws_row = await pool.fetchrow("SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_uuid)
+        workspace_id = ws_row["workspace_id"] if ws_row else None
+
+        if workspace_id:
+            require_review = await _get_config_setting("publishing.require_review", workspace_id, default=False)
 
     if require_review:
         logger.info(f"Workflow {workflow['id']}: require_review=True → awaiting_review")
-        await _send_review_teams_notification(workflow, context, result, is_poor=False)
+        await _send_review_teams_notification(workflow, {
+            **context,
+            "pre_screening_id": pre_screening_id,
+            "vacancy_id": vacancy_id,
+        })
         return {"next_step": "awaiting_review"}
 
-    logger.info(f"Workflow {workflow['id']}: verdict={verdict} → publishing")
+    logger.info(f"Workflow {workflow['id']}: require_review=False → publishing")
     return {"next_step": "publishing"}
 
 
@@ -314,11 +223,14 @@ async def handle_auto_publish(
     ws_row = await pool.fetchrow("SELECT workspace_id FROM ats.vacancies WHERE id = $1", vacancy_uuid)
     workspace_id = ws_row["workspace_id"] if ws_row else None
 
-    # Get default channels from agent config
+    # Get default channels from agent config (publishing section, with fallback to general for backwards compat)
     default_channels_default = {"voice": True, "whatsapp": True, "cv": True}
+    default_channels = None
     if workspace_id:
-        default_channels = await _get_config_setting("publishing.default_channels", workspace_id, default=default_channels_default)
-    else:
+        default_channels = await _get_config_setting("publishing.default_channels", workspace_id, default=None)
+        if default_channels is None:
+            default_channels = await _get_config_setting("general.default_channels", workspace_id, default=None)
+    if default_channels is None:
         default_channels = default_channels_default
     voice_enabled = default_channels.get("voice", True)
     whatsapp_enabled = default_channels.get("whatsapp", True)
@@ -335,16 +247,15 @@ async def handle_auto_publish(
         published_at,
         elevenlabs_agent_id=None,  # Voice uses master agent from env
         whatsapp_agent_id=whatsapp_agent_id,
-        is_online=True,
         voice_enabled=voice_enabled,
         whatsapp_enabled=whatsapp_enabled,
         cv_enabled=cv_enabled,
     )
 
     # Register prescreening agent in vacancy_agents table
-    from src.repositories.vacancy_agent_repo import VacancyAgentRepository
-    va_repo = VacancyAgentRepository(pool)
-    await va_repo.ensure_registered(vacancy_uuid, "prescreening", is_online=True)
+    from src.repositories import VacancyRepository as _VacancyRepository
+    va_repo = _VacancyRepository(pool)
+    await va_repo.ensure_agent_registered(vacancy_uuid, "prescreening", status="published")
 
     await orchestrator.update_context(workflow["id"], {
         "published_at": published_at.isoformat(),
@@ -357,45 +268,67 @@ async def handle_auto_publish(
 
 
 # =============================================================================
-# TEAMS NOTIFICATION
+# REVIEW NOTIFICATION
 # =============================================================================
 
 async def _send_review_teams_notification(
     workflow: dict,
     context: dict,
-    analysis_result: dict,
-    is_poor: bool,
 ) -> bool:
     """
     Send Adaptive Card to Teams asking recruiter to review the pre-screening.
 
-    Card includes:
-    - Vacancy title, verdict, oneLiner
-    - completionRate stat
-    - Approve action button
-    - Link to pre-screening page
+    Card includes vacancy title, approve action button, and link to pre-screening page.
     """
     from src.services.teams_service import get_teams_service
 
     vacancy_title = context.get("vacancy_title", "Onbekende vacature")
     vacancy_id = context.get("vacancy_id", "")
-    summary = analysis_result.get("summary", {})
-    verdict = summary.get("verdict", "unknown")
-    verdict_headline = summary.get("verdictHeadline", "")
-    one_liner = summary.get("oneLiner", "")
-    completion_rate = summary.get("completionRate", 0)
 
-    # Build card
-    card = _build_review_card(
-        workflow_id=workflow["id"],
-        vacancy_title=vacancy_title,
-        vacancy_id=vacancy_id,
-        verdict=verdict,
-        verdict_headline=verdict_headline,
-        one_liner=one_liner,
-        completion_rate=completion_rate,
-        is_poor=is_poor,
-    )
+    review_url = f"{FRONTEND_URL}/pre-screening/detail/{vacancy_id}?mode=dashboard"
+
+    card = {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": [
+            {
+                "type": "TextBlock",
+                "text": "📋 Pre-screening klaar voor review",
+                "weight": "Bolder",
+                "size": "Large",
+            },
+            {
+                "type": "TextBlock",
+                "text": f"De interviewvragen voor **{vacancy_title}** zijn gegenereerd en klaar voor beoordeling.",
+                "wrap": True,
+                "spacing": "Small",
+            },
+            {
+                "type": "FactSet",
+                "facts": [
+                    {"title": "💼 Vacature", "value": vacancy_title},
+                ],
+                "spacing": "Medium",
+            },
+        ],
+        "actions": [
+            {
+                "type": "Action.OpenUrl",
+                "title": "📄 Bekijk pre-screening",
+                "url": review_url,
+            },
+            {
+                "type": "Action.Submit",
+                "title": "✅ Goedkeuren & publiceren",
+                "data": {
+                    "action": "approve_vacancy_setup",
+                    "workflow_id": workflow["id"],
+                    "vacancy_id": vacancy_id,
+                },
+            },
+        ],
+    }
 
     try:
         teams = get_teams_service()
@@ -408,98 +341,7 @@ async def _send_review_teams_notification(
         return True
     except Exception as e:
         logger.error(f"Workflow {workflow['id']}: failed to send Teams notification: {e}")
-        logger.info(
-            f"📢 Teams notification (failed to send):\n"
-            f"  💼 {vacancy_title}\n"
-            f"  📊 Verdict: {verdict}\n"
-            f"  📝 {one_liner}"
-        )
         return False
-
-
-def _build_review_card(
-    workflow_id: str,
-    vacancy_title: str,
-    vacancy_id: str,
-    verdict: str,
-    verdict_headline: str,
-    one_liner: str,
-    completion_rate: int,
-    is_poor: bool,
-) -> dict:
-    """Build an Adaptive Card for the recruiter review notification."""
-    # Title styling based on severity
-    if is_poor:
-        title_text = "⚠️ Pre-screening vereist review"
-        title_color = "Attention"
-        subtitle = "De analyse heeft problemen gevonden met de interviewvragen."
-    else:
-        title_text = "📋 Pre-screening klaar voor review"
-        title_color = "Default"
-        subtitle = "De interviewvragen zijn geanalyseerd en klaar voor beoordeling."
-
-    # Frontend URL for the pre-screening page
-    review_url = f"{FRONTEND_URL}/pre-screening/detail/{vacancy_id}?mode=dashboard"
-
-    card = {
-        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-        "type": "AdaptiveCard",
-        "version": "1.4",
-        "body": [
-            {
-                "type": "TextBlock",
-                "text": title_text,
-                "weight": "Bolder",
-                "size": "Large",
-                "color": title_color,
-            },
-            {
-                "type": "TextBlock",
-                "text": subtitle,
-                "wrap": True,
-                "spacing": "Small",
-            },
-            {
-                "type": "FactSet",
-                "facts": [
-                    {"title": "💼 Vacature", "value": vacancy_title},
-                    {"title": "📊 Verdict", "value": verdict_headline or verdict},
-                    {"title": "📈 Verwachte voltooiing", "value": f"{completion_rate}%"},
-                ],
-                "spacing": "Medium",
-            },
-        ],
-        "actions": [],
-    }
-
-    # Add one-liner summary
-    if one_liner:
-        card["body"].append({
-            "type": "TextBlock",
-            "text": f"📝 {one_liner}",
-            "wrap": True,
-            "spacing": "Medium",
-        })
-
-    # Action: Open pre-screening page in browser
-    card["actions"].append({
-        "type": "Action.OpenUrl",
-        "title": "📄 Bekijk pre-screening",
-        "url": review_url,
-    })
-
-    # Action: Approve and publish (sends invoke back to webhook)
-    card["actions"].append({
-        "type": "Action.Submit",
-        "title": "✅ Goedkeuren & publiceren",
-        "data": {
-            "action": "approve_vacancy_setup",
-            "workflow_id": workflow_id,
-            "vacancy_id": vacancy_id,
-        },
-    })
-
-    return card
 
 
 # =============================================================================
