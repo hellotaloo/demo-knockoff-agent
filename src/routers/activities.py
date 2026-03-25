@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 from src.auth.dependencies import AuthContext, require_workspace
 from src.database import get_db_pool
 from src.services.workflow_service import WorkflowService
-from src.workflows.pre_screening import STEP_CONFIG as PRE_SCREENING_STEP_CONFIG
-from src.workflows.vacancy_setup import STEP_CONFIG as VACANCY_SETUP_STEP_CONFIG
+from agents.pre_screening.workflows import STEP_CONFIG as PRE_SCREENING_STEP_CONFIG
+from agents.pre_screening.interview_question_generator.workflows import STEP_CONFIG as VACANCY_SETUP_STEP_CONFIG
 
 # Step configs per workflow type (mirrors orchestrator)
 WORKFLOW_STEP_CONFIGS = {
